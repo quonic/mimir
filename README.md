@@ -7,6 +7,8 @@ harness in Odin that works first with Ollama.
 
 Mimir takes its name from Mímir, the Norse figure associated with wisdom and counsel.
 
+<img width="944" height="582" alt="Screenshot_20260720_175632" src="https://github.com/user-attachments/assets/ae69833a-9e4e-4b84-a245-2ff2fec8dcbb" />
+
 ## Prerequisites
 
 - [Odin](https://odin-lang.org/)
