@@ -1,6 +1,6 @@
 # Mimir
 
-A terminal harness for agentic coding, written in Odin.
+A flicker free terminal harness for agentic coding, written in Odin.
 
 I started this to primarily learn how an agent harness works, and secondarily make a
 harness in Odin that works first with Ollama.
