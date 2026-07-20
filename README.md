@@ -14,6 +14,12 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 - [Odin](https://odin-lang.org/)
 - [Ollama](https://ollama.com/) running locally with at least one model available
 
+## Supported Platforms
+
+- Linux
+- macOS might work, but is untested. Please report any issues if you try it.
+- Windows might work, but is untested. Please report any issues if you try it.
+
 ## Quick Start
 
 1. Start Ollama and download a model:
