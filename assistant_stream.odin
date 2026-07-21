@@ -304,11 +304,9 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 
 app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
 	if stream.partial != "" {
-		delete(stream.partial)
 		stream.partial = ""
 	}
 	if stream.finishReason != "" {
-		delete(stream.finishReason)
 		stream.finishReason = ""
 	}
 }
