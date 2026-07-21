@@ -119,6 +119,25 @@ test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tool_call_queue_reinitializes_with_stream_allocator :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	app_clear_assistant_stream_tool_calls(&state.stream)
+	assert(len(state.stream.toolCalls) == 0, "expected empty reinitialized tool-call queue")
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("list_directory", context.allocator),
+			arguments = strings.clone(`{"directory_path":"."}`, context.allocator),
+		},
+	)
+	app_clear_assistant_stream_tool_calls(&state.stream)
+	assert(len(state.stream.toolCalls) == 0, "expected tool-call queue cleanup")
+	_ = t
+}
+
+@(test)
 test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

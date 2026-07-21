@@ -19,6 +19,7 @@ read_file_tool_proc := proc(file_path: string, start_line: string, end_line: str
 	if err != nil {
 		return fmt.aprintf("Error reading file: %s", err)
 	}
+	defer delete(data, context.allocator)
 	start_line_int, ok = strconv.parse_int(start_line)
 	if !ok {
 		return fmt.aprintf("Error parsing start_line: %s", start_line)
@@ -28,7 +29,7 @@ read_file_tool_proc := proc(file_path: string, start_line: string, end_line: str
 		return fmt.aprintf("Error parsing end_line: %s", end_line)
 	}
 	if start_line_int == 0 && end_line_int == 0 {
-		return string(data)
+		return strings.clone(string(data), context.allocator)
 	}
 	// If start_line or end_line are specified, extract the relevant lines
 	lines := strings.split(string(data), "\n")
@@ -154,14 +155,16 @@ list_directory_tool_proc := proc(directory_path: string) -> string {
 	if err != nil {
 		return fmt.aprintf("list_directory_tool: Error reading directory: %s", err)
 	}
-	json_data, marshal_err := json.marshal(file_infos)
+	defer os.file_info_slice_delete(file_infos, context.allocator)
+	json_data, marshal_err := json.marshal(file_infos, allocator = context.allocator)
 	if marshal_err != nil {
 		return fmt.aprintf(
 			"list_directory_tool: Error converting results to JSON: %s",
 			marshal_err,
 		)
 	}
-	return string(json_data)
+	defer delete(json_data, context.allocator)
+	return strings.clone(string(json_data), context.allocator)
 }
 
 get_file_info_tool_proc := proc(file_path: string) -> string {
@@ -169,9 +172,11 @@ get_file_info_tool_proc := proc(file_path: string) -> string {
 	if err != nil {
 		return fmt.aprintf("get_file_info_tool: Error reading file info: %s", err)
 	}
-	json_data, marshal_err := json.marshal(file_info)
+	defer os.file_info_slice_delete(file_info, context.allocator)
+	json_data, marshal_err := json.marshal(file_info, allocator = context.allocator)
 	if marshal_err != nil {
 		return fmt.aprintf("get_file_info_tool: Error converting results to JSON: %s", marshal_err)
 	}
-	return string(json_data)
+	defer delete(json_data, context.allocator)
+	return strings.clone(string(json_data), context.allocator)
 }

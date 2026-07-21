@@ -536,6 +536,7 @@ app_clear_assistant_stream_tool_calls :: proc(stream: ^Assistant_Stream_State) {
 		ai.tool_call_destroy(&call, stream.bufferAllocator)
 	}
 	delete(stream.toolCalls)
+	stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, stream.bufferAllocator)
 }
 
 app_clear_assistant_stream_conversation :: proc(stream: ^Assistant_Stream_State) {

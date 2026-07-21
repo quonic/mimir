@@ -185,3 +185,16 @@ test_tool_dispatcher_executes_write_allowed_by_persistent_grant :: proc(t: ^test
 	assert(os.exists(allowedPath), "expected persistent grant to create scoped file")
 	_ = t
 }
+
+@(test)
+test_list_directory_tool_returns_owned_result :: proc(t: ^testing.T) {
+	directory, err := os.make_directory_temp("", "mimir-list-directory-*", context.allocator)
+	assert(err == nil, "expected temporary directory")
+	defer os.remove_all(directory)
+	defer delete(directory, context.allocator)
+
+	output := list_directory_tool_proc(directory)
+	defer delete(output, context.allocator)
+	assert(output != "", "expected directory listing output")
+	_ = t
+}
