@@ -100,6 +100,31 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model = "test-model",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools = []Tool_Definition {{
+			name = "read_file",
+			description = "Read a project file",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+		}},
+	}
+	wire := build_openai_chat_request(request)
+	assert(len(wire.tools) == 1, "expected OpenAI request tool")
+	assert(wire.tools[0].type == "function", "expected OpenAI function tool")
+	assert(wire.tools[0].function.name == "read_file", "expected OpenAI tool name")
+
+	payload := `{"model":"gpt-test","choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"file_path\\":\\"main.odin\\"}"}}]},"finish_reason":"tool_calls"}]}`
+	response, err := parse_openai_chat_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected OpenAI tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed OpenAI tool call")
+	assert(response.toolCalls[0].name == "read_file", "expected parsed OpenAI tool name")
+	_ = t
+}
+
+@(test)
 test_tool_call_clone_and_response_destroy :: proc(t: ^testing.T) {
 	call := Tool_Call {
 		id        = "call-1",
@@ -208,6 +233,30 @@ test_parse_anthropic_response :: proc(t: ^testing.T) {
 	assert(err == .None, "expected valid Anthropic response payload to parse")
 	assert(response.content == "hello", "expected parsed Anthropic content to match payload")
 	assert(response.finishReason == "end_turn", "expected Anthropic stop reason to be preserved")
+	_ = t
+}
+
+@(test)
+test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model = "claude-test",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools = []Tool_Definition {{
+			name = "read_file",
+			description = "Read a project file",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+		}},
+	}
+	wire := build_anthropic_request(request)
+	assert(len(wire.tools) == 1, "expected Anthropic request tool")
+	assert(wire.tools[0].name == "read_file", "expected Anthropic tool name")
+
+	payload := `{"model":"claude-test","content":[{"type":"tool_use","id":"tool-1","name":"read_file","input":{"file_path":"main.odin"}}],"stop_reason":"tool_use"}`
+	response, err := parse_anthropic_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected Anthropic tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed Anthropic tool call")
+	assert(response.toolCalls[0].arguments != "", "expected serialized Anthropic arguments")
 	_ = t
 }
 

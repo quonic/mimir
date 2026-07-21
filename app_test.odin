@@ -53,6 +53,18 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_tool_definitions_skip_ollama :: proc(t: ^testing.T) {
+	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
+	defer delete(ollamaTools)
+	assert(len(ollamaTools) == 0, "expected Ollama to remain text-only")
+
+	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
+	defer delete(openAITools)
+	assert(len(openAITools) == 6, "expected OpenAI to receive all built-in tools")
+	_ = t
+}
+
+@(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

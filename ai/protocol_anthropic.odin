@@ -4,8 +4,17 @@ import json "core:encoding/json"
 import "core:strings"
 
 Anthropic_Content_Block :: struct {
-	type: string,
-	text: string,
+	type:  string,
+	text:  string,
+	id:    string,
+	name:  string,
+	input: json.Value,
+}
+
+Anthropic_Tool :: struct {
+	name:         string,
+	description:  string,
+	input_schema: json.Value,
 }
 
 Anthropic_Message :: struct {
@@ -18,6 +27,7 @@ Anthropic_Request :: struct {
 	messages:   []Anthropic_Message,
 	max_tokens: int,
 	stream:     bool,
+	tools:      []Anthropic_Tool,
 }
 
 Anthropic_Response :: struct {
@@ -78,6 +88,7 @@ build_anthropic_request :: proc(
 		messages   = make([]Anthropic_Message, len(request.messages), allocator),
 		max_tokens = maxTokens,
 		stream     = false,
+		tools      = make([]Anthropic_Tool, len(request.tools), allocator),
 	}
 
 	for msg, idx in request.messages {
@@ -89,6 +100,17 @@ build_anthropic_request :: proc(
 		wire.messages[idx] = Anthropic_Message {
 			role    = role,
 			content = msg.content,
+		}
+	}
+	for tool, idx in request.tools {
+		inputSchema, parseErr := json.parse_string(tool.parametersJSON, allocator = allocator)
+		if parseErr != .None {
+			inputSchema = json.Null(nil)
+		}
+		wire.tools[idx] = Anthropic_Tool {
+			name = tool.name,
+			description = tool.description,
+			input_schema = inputSchema,
 		}
 	}
 
@@ -114,18 +136,39 @@ parse_anthropic_response :: proc(
 		return Chat_Response{}, .Invalid_Response
 	}
 
+	response := Chat_Response {
+		model = strings.clone(wire.model, allocator),
+		finishReason = strings.clone(wire.stop_reason, allocator),
+		toolCalls = make([dynamic]Tool_Call, 0, len(wire.content), allocator),
+	}
 	for block in wire.content {
-		if block.type == "text" {
-			return Chat_Response {
-					content = strings.clone(block.text, allocator),
-					model = strings.clone(wire.model, allocator),
-					finishReason = strings.clone(wire.stop_reason, allocator),
+		if block.type == "text" && response.content == "" {
+			response.content = strings.clone(block.text, allocator)
+		} else if block.type == "tool_use" {
+			if block.id == "" || block.name == "" {
+				chat_response_destroy(&response, allocator)
+				return Chat_Response{}, .Invalid_Response
+			}
+			arguments, unparseErr := json.unparse(block.input, allocator = allocator)
+			if unparseErr != nil {
+				chat_response_destroy(&response, allocator)
+				return Chat_Response{}, .Invalid_Response
+			}
+			append(
+				&response.toolCalls,
+				Tool_Call {
+					id = strings.clone(block.id, allocator),
+					name = strings.clone(block.name, allocator),
+					arguments = arguments,
 				},
-				.None
+			)
 		}
 	}
-
-	return Chat_Response{}, .Invalid_Response
+	if response.content == "" && len(response.toolCalls) == 0 {
+		chat_response_destroy(&response, allocator)
+		return Chat_Response{}, .Invalid_Response
+	}
+	return response, .None
 }
 
 parse_anthropic_error_message :: proc(body: string, allocator := context.allocator) -> string {

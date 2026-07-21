@@ -22,10 +22,21 @@ Assistant_Stream_State :: struct {
 }
 
 Assistant_Stream_Worker :: struct {
-	stream:   ^Assistant_Stream_State,
-	client:   ai.Client,
-	request:  ai.Chat_Request,
-	messages: [dynamic]ai.Message,
+	stream:          ^Assistant_Stream_State,
+	client:          ai.Client,
+	request:         ai.Chat_Request,
+	messages:        [dynamic]ai.Message,
+	toolDefinitions: [dynamic]ai.Tool_Definition,
+}
+
+app_tool_definitions_for_provider :: proc(
+	providerType: ai.Interface_Type,
+	allocator := context.allocator,
+) -> [dynamic]ai.Tool_Definition {
+	if providerType == .Ollama || providerType == .None {
+		return make([dynamic]ai.Tool_Definition, 0, 0, allocator)
+	}
+	return builtin_ai_tool_definitions(allocator)
 }
 
 app_assistant_stream_active :: proc(state: ^App_State) -> bool {
@@ -79,9 +90,11 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	workerData.stream = &state.stream
 	workerData.client = client
 	workerData.messages = messages
+	workerData.toolDefinitions = app_tool_definitions_for_provider(provider.type, context.allocator)
 	workerData.request = ai.Chat_Request {
 		model       = strings.clone(model, context.allocator),
 		messages    = workerData.messages[:],
+		tools       = workerData.toolDefinitions[:],
 		temperature = 0.2,
 		maxTokens   = 4096,
 	}
@@ -327,6 +340,7 @@ app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
 		delete(worker.request.model)
 	}
+	delete(worker.toolDefinitions)
 }
 
 assistant_stream_error_text :: proc(err: ai.AI_Error) -> string {
