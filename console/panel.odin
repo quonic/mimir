@@ -40,6 +40,7 @@ panel_title_region :: proc(panel: Panel) -> Region {
 
 draw_panel_sequence :: proc(panel: Panel) -> string {
 	batch := batch_init(context.temp_allocator)
+	defer batch_destroy(&batch)
 	batch_draw_panel(&batch, panel)
 	return batch_sequence(&batch)
 }

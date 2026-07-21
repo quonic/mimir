@@ -160,6 +160,56 @@ test_parse_slash_command :: proc(t: ^testing.T) {
 
 	cancel := parse_slash_command("/cancel")
 	assert(cancel.kind == .Stop, "expected /cancel to map to Stop command")
+
+	clear := parse_slash_command("/clear")
+	assert(clear.kind == .Clear, "expected /clear to map to Clear command")
+	_ = t
+}
+
+@(test)
+test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
+	home, tempErr := os.make_directory_temp("", "mimir-app-history-*", context.temp_allocator)
+	assert(tempErr == nil, "expected temporary home directory")
+	defer os.remove_all(home)
+
+	workingDirectory, workingDirectoryErr := os.get_working_directory(context.temp_allocator)
+	assert(workingDirectoryErr == nil, "expected current working directory")
+	history := [1]string{"saved input"}
+	assert(
+		save_input_history_to_file(home, workingDirectory, history[:]) == .None,
+		"expected persistent history to save",
+	)
+
+	state := app_init_with_home(home, false, context.temp_allocator)
+	defer app_destroy(&state)
+	state.mode = .Chat
+	assert(
+		len(state.inputHistory) == 1,
+		"expected persistent history to load during initialization",
+	)
+	assert(state.inputHistory[0] == "saved input", "expected loaded input history entry")
+
+	app_record_input_history(&state, "new input")
+	loaded, loadErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
+	defer {
+		for &entry in loaded {
+			entry = ""
+		}
+		delete(loaded)
+	}
+	assert(loadErr == .None, "expected new input to persist immediately")
+	assert(len(loaded) == 2, "expected recorded input in persistent history")
+	append_history(&state, .User, "chat history")
+	state.historyScrollOffset = 1
+
+	input_buffer_push_text(&state.input, "/clear")
+	app_submit_input(&state)
+	assert(len(state.inputHistory) == 0, "expected clear command to reset in-memory history")
+	assert(len(state.history) == 0, "expected clear command to reset panel history")
+	assert(state.historyScrollOffset == 0, "expected clear command to reset panel scroll position")
+	assert(state.status == "Input history cleared", "expected clear command success status")
+	_, missingErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
+	assert(missingErr == .Not_Found, "expected clear command to remove persistent history")
 	_ = t
 }
 
@@ -172,9 +222,12 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	app_submit_input(&state)
 	assert(state.mode == .Config, "expected /config to switch app mode")
 	assert(state.status == "Config: arrows/Tab, Enter, Esc", "expected /config modal status")
+	assert(len(state.inputHistory) == 0, "expected commands to stay out of input history")
 
 	input_buffer_push_text(&state.input, "hello")
 	app_submit_input(&state)
+	assert(len(state.inputHistory) == 1, "expected chat input to enter input history")
+	assert(state.inputHistory[0] == "hello", "expected chat input history entry")
 	assert(len(state.history) >= 3, "expected chat submit to append history entries")
 	assert(state.history[len(state.history) - 2].role == .User, "expected user history entry")
 	assert(
@@ -189,6 +242,7 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	input_buffer_push_text(&state.input, "/exit")
 	app_submit_input(&state)
 	assert(state.shouldQuit, "expected /exit to request app shutdown")
+	assert(len(state.inputHistory) == 1, "expected exit command to stay out of input history")
 	_ = t
 }
 
@@ -408,27 +462,30 @@ test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "/help")
+	input_buffer_push_text(&state.input, "first entry")
 	app_submit_input(&state)
-	input_buffer_push_text(&state.input, "/models")
+	input_buffer_push_text(&state.input, "second entry")
 	app_submit_input(&state)
 	input_buffer_push_text(&state.input, "draft")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected up arrow to recall newest history")
-	assert(input_buffer_string(&state.input) == "/models", "expected newest history entry")
-	assert(input_buffer_cursor_position(&state.input) == len("/models"), "expected cursor at end")
+	assert(input_buffer_string(&state.input) == "second entry", "expected newest history entry")
+	assert(
+		input_buffer_cursor_position(&state.input) == len("second entry"),
+		"expected cursor at end",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected second up arrow to recall older history")
-	assert(input_buffer_string(&state.input) == "/help", "expected older history entry")
+	assert(input_buffer_string(&state.input) == "first entry", "expected older history entry")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'B'), "expected down arrow to recall newer history")
-	assert(input_buffer_string(&state.input) == "/models", "expected newer history entry")
+	assert(input_buffer_string(&state.input) == "second entry", "expected newer history entry")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")

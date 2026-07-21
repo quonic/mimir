@@ -83,6 +83,7 @@ render_app_frame_sequence :: proc(
 	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
+	defer console.batch_destroy(&batch)
 
 	console.batch_write_sequence(&batch, console.clear_screen_home_sequence())
 	console.batch_draw_panel(
@@ -122,6 +123,7 @@ render_app_input_panel_sequence :: proc(
 	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
+	defer console.batch_destroy(&batch)
 
 	console.batch_draw_panel(
 		&batch,
@@ -144,6 +146,7 @@ render_app_history_panel_sequence :: proc(
 	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
+	defer console.batch_destroy(&batch)
 
 	console.batch_draw_panel(
 		&batch,

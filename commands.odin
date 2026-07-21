@@ -8,6 +8,7 @@ Slash_Command :: enum int {
 	Models,
 	Skills,
 	Stop,
+	Clear,
 	Unknown,
 }
 
@@ -58,6 +59,8 @@ slash_command_kind :: proc(name: string) -> Slash_Command {
 		return .Skills
 	case "stop", "cancel":
 		return .Stop
+	case "clear":
+		return .Clear
 	case:
 		return .Unknown
 	}
