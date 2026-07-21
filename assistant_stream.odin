@@ -7,6 +7,8 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 
+MAX_TOOL_CONTINUATIONS :: 8
+
 Assistant_Stream_State :: struct {
 	mutex:           sync.Mutex,
 	bufferAllocator: mem.Allocator,
@@ -21,6 +23,8 @@ Assistant_Stream_State :: struct {
 	cancelRequested: bool,
 	canceled:        bool,
 	toolCalls:       [dynamic]ai.Tool_Call,
+	conversation:    [dynamic]ai.Message,
+	continuationCount: int,
 }
 
 AI_Tool_Call_Arguments :: struct {
@@ -43,7 +47,6 @@ Assistant_Stream_Worker :: struct {
 	stream:          ^Assistant_Stream_State,
 	client:          ai.Client,
 	request:         ai.Chat_Request,
-	messages:        [dynamic]ai.Message,
 	toolDefinitions: [dynamic]ai.Tool_Definition,
 }
 
@@ -94,9 +97,10 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 		return
 	}
 
-	messages := app_build_ai_messages(state.history[:], context.allocator)
-	if len(messages) == 0 {
-		delete(messages)
+	if len(state.stream.conversation) == 0 {
+		state.stream.conversation = app_build_ai_messages(state.history[:], context.allocator)
+	}
+	if len(state.stream.conversation) == 0 {
 		app_append_assistant_stream_error(state, "No chat messages to send")
 		return
 	}
@@ -107,14 +111,13 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	workerData := new(Assistant_Stream_Worker)
 	workerData.stream = &state.stream
 	workerData.client = client
-	workerData.messages = messages
 	workerData.toolDefinitions = app_tool_definitions_for_provider(
 		provider.type,
 		context.allocator,
 	)
 	workerData.request = ai.Chat_Request {
 		model       = strings.clone(model, context.allocator),
-		messages    = workerData.messages[:],
+		messages    = state.stream.conversation[:],
 		tools       = workerData.toolDefinitions[:],
 		temperature = 0.2,
 		maxTokens   = 4096,
@@ -175,8 +178,14 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 		dirty = app_sync_assistant_history_entry(state) || dirty
 		state.historyRenderOnly = false
 		state.stream.active = false
+		hasToolCalls := app_record_stream_tool_turn(state)
 		app_clear_assistant_stream_buffers(&state.stream)
-		dirty = app_process_pending_stream_tool_calls(state) || true
+		if hasToolCalls {
+			dirty = app_process_pending_stream_tool_calls(state) || true
+		} else {
+			app_clear_assistant_stream_conversation(&state.stream)
+			dirty = true
+		}
 	}
 
 	return dirty
@@ -198,6 +207,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	if !state.stream.active {
 		app_clear_assistant_stream_buffers(&state.stream)
 		app_clear_assistant_stream_tool_calls(&state.stream)
+		app_clear_assistant_stream_conversation(&state.stream)
 		return
 	}
 
@@ -215,6 +225,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	state.stream.active = false
 	app_clear_assistant_stream_buffers(&state.stream)
 	app_clear_assistant_stream_tool_calls(&state.stream)
+	app_clear_assistant_stream_conversation(&state.stream)
 }
 
 assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
@@ -322,7 +333,9 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 	call, callOK := app_tool_call_from_ai(queuedCall, state.dispatcher.allocator)
 	if !callOK {
 		append_history(state, .Tool, "Tool call arguments are invalid.")
+		app_append_tool_result(state, queuedCall.id, "Tool call arguments are invalid.", true)
 		state.status = "Tool call rejected"
+		app_start_tool_continuation_if_ready(state)
 		return true
 	}
 	defer tool_call_destroy(&call, state.dispatcher.allocator)
@@ -331,17 +344,23 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 	switch decision {
 	case .Approval_Required:
 		if !app_show_approval(state, call) {
-			append_history(state, .Tool, "Tool call requires approval.")
+			output := "Tool call requires approval."
+			append_history(state, .Tool, output)
+			app_append_tool_result(state, call.callID, output, true)
 			state.status = "Tool call rejected"
+			app_start_tool_continuation_if_ready(state)
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
 		output := tool_dispatch_execute(&state.dispatcher, call)
 		append_history(state, .Tool, output)
+		app_append_tool_result(state, call.callID, output, false)
 		state.status = "Tool call completed"
 	case .Denied:
 		append_history(state, .Tool, "Permission denied.")
+		app_append_tool_result(state, call.callID, "Permission denied.", true)
 		state.status = "Tool call denied"
 	}
+	app_start_tool_continuation_if_ready(state)
 	return true
 }
 
@@ -367,6 +386,7 @@ app_tool_call_from_ai :: proc(
 	}
 
 	call := Tool_Call {
+		callID           = strings.clone(aiCall.id, allocator),
 		id               = strings.clone(aiCall.name, allocator),
 		filePath         = strings.clone(arguments.file_path, allocator),
 		directoryPath    = strings.clone(arguments.directory_path, allocator),
@@ -386,6 +406,65 @@ app_tool_call_from_ai :: proc(
 		append(&call.environment, strings.clone(entry, allocator))
 	}
 	return call, true
+}
+
+app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {
+	if len(state.stream.toolCalls) == 0 {
+		return false
+	}
+
+	message := ai.Message {
+		role = .Assistant,
+		content = strings.clone(state.stream.partial, state.stream.bufferAllocator),
+		toolCalls = make(
+			[]ai.Tool_Call,
+			len(state.stream.toolCalls),
+			state.stream.bufferAllocator,
+		),
+	}
+	for call, index in state.stream.toolCalls {
+		message.toolCalls[index] = ai.tool_call_clone(call, state.stream.bufferAllocator)
+	}
+	append(&state.stream.conversation, message)
+	return true
+}
+
+app_append_tool_result :: proc(
+	state: ^App_State,
+	toolCallID: string,
+	content: string,
+	isError: bool,
+) {
+	if toolCallID == "" || len(state.stream.conversation) == 0 {
+		return
+	}
+	message := ai.Message {
+		role = .Tool,
+		toolResults = make([]ai.Tool_Result, 1, state.stream.bufferAllocator),
+	}
+	message.toolResults[0] = ai.Tool_Result {
+		toolCallID = strings.clone(toolCallID, state.stream.bufferAllocator),
+		content = strings.clone(content, state.stream.bufferAllocator),
+		isError = isError,
+	}
+	append(&state.stream.conversation, message)
+}
+
+app_start_tool_continuation_if_ready :: proc(state: ^App_State) {
+	if state.stream.active || state.mode != .Chat || len(state.stream.conversation) == 0 {
+		return
+	}
+	if len(state.stream.toolCalls) > 0 {
+		return
+	}
+	if state.stream.continuationCount >= MAX_TOOL_CONTINUATIONS {
+		append_history(state, .Tool, "Tool continuation limit reached.")
+		state.status = "Tool continuation limit reached"
+		app_clear_assistant_stream_conversation(&state.stream)
+		return
+	}
+	state.stream.continuationCount += 1
+	app_start_assistant_stream(state)
 }
 
 app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, bool) {
@@ -459,11 +538,15 @@ app_clear_assistant_stream_tool_calls :: proc(stream: ^Assistant_Stream_State) {
 	delete(stream.toolCalls)
 }
 
-app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
-	for message in worker.messages {
-		delete(message.content)
+app_clear_assistant_stream_conversation :: proc(stream: ^Assistant_Stream_State) {
+	for &message in stream.conversation {
+		ai.message_destroy(&message, stream.bufferAllocator)
 	}
-	delete(worker.messages)
+	delete(stream.conversation)
+	stream.continuationCount = 0
+}
+
+app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
 		delete(worker.request.model)
 	}

@@ -4,6 +4,7 @@ import "core:mem"
 import "core:strings"
 
 Tool_Call :: struct {
+	callID:           string,
 	id:               string,
 	filePath:         string,
 	directoryPath:    string,
@@ -35,6 +36,7 @@ Tool_Dispatch_Result :: struct {
 
 tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
 	clone := Tool_Call {
+		callID           = strings.clone(call.callID, allocator),
 		id               = strings.clone(call.id, allocator),
 		filePath         = strings.clone(call.filePath, allocator),
 		directoryPath    = strings.clone(call.directoryPath, allocator),
@@ -57,6 +59,7 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 }
 
 tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
+	delete(call.callID, allocator)
 	delete(call.id, allocator)
 	delete(call.filePath, allocator)
 	delete(call.directoryPath, allocator)

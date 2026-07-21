@@ -123,6 +123,45 @@ tool_result_destroy :: proc(result: ^Tool_Result, allocator := context.allocator
 	result^ = {}
 }
 
+tool_result_clone :: proc(result: Tool_Result, allocator := context.allocator) -> Tool_Result {
+	return Tool_Result {
+		toolCallID = strings.clone(result.toolCallID, allocator),
+		content = strings.clone(result.content, allocator),
+		isError = result.isError,
+	}
+}
+
+message_clone :: proc(message: Message, allocator := context.allocator) -> Message {
+	clone := Message {
+		role = message.role,
+		content = strings.clone(message.content, allocator),
+		toolCalls = make([]Tool_Call, len(message.toolCalls), allocator),
+		toolResults = make([]Tool_Result, len(message.toolResults), allocator),
+	}
+	for call, index in message.toolCalls {
+		clone.toolCalls[index] = tool_call_clone(call, allocator)
+	}
+	for result, index in message.toolResults {
+		clone.toolResults[index] = tool_result_clone(result, allocator)
+	}
+	return clone
+}
+
+message_destroy :: proc(message: ^Message, allocator := context.allocator) {
+	if message.content != "" {
+		delete(message.content, allocator)
+	}
+	for &call in message.toolCalls {
+		tool_call_destroy(&call, allocator)
+	}
+	delete(message.toolCalls, allocator)
+	for &result in message.toolResults {
+		tool_result_destroy(&result, allocator)
+	}
+	delete(message.toolResults, allocator)
+	message^ = {}
+}
+
 chat_response_destroy :: proc(response: ^Chat_Response, allocator := context.allocator) {
 	if response.content != "" {
 		delete(response.content, allocator)

@@ -732,9 +732,13 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	}
 
 	if choice == .Deny {
+		output := "Permission denied."
+		append_history(state, .Tool, output)
+		app_append_tool_result(state, state.approval.call.callID, output, true)
 		state.status = "Tool call denied"
 		state.mode = .Chat
 		app_clear_approval(state)
+		app_start_tool_continuation_if_ready(state)
 		return
 	}
 
@@ -772,9 +776,11 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	output := tool_dispatch_execute_approved(&state.dispatcher, state.approval.call)
 	append_history(state, .Tool, output)
+	app_append_tool_result(state, state.approval.call.callID, output, false)
 	state.status = "Tool call completed"
 	state.mode = .Chat
 	app_clear_approval(state)
+	app_start_tool_continuation_if_ready(state)
 }
 
 app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
@@ -1083,6 +1089,7 @@ app_submit_input :: proc(state: ^App_State) {
 		return
 	}
 
+	app_clear_assistant_stream_conversation(&state.stream)
 	append_history(state, .User, text)
 	app_start_assistant_stream(state)
 }

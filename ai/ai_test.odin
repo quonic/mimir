@@ -1,6 +1,7 @@
 package ai
 
 import http "../http"
+import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -131,6 +132,42 @@ test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	assert(err == .None, "expected OpenAI tool call response")
 	assert(len(response.toolCalls) == 1, "expected parsed OpenAI tool call")
 	assert(response.toolCalls[0].name == "read_file", "expected parsed OpenAI tool name")
+	_ = t
+}
+
+@(test)
+test_openai_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model = "test-model",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {{
+					id = "call-1",
+					name = "read_file",
+					arguments = `{"file_path":"main.odin"}`,
+				}},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result {{
+					toolCallID = "call-1",
+					content = "package main",
+				}},
+			},
+		},
+	}
+	wire := build_openai_chat_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(wire.messages[0].role == "assistant", "expected assistant tool-call message")
+	assert(len(wire.messages[0].tool_calls) == 1, "expected serialized tool call")
+	assert(
+		wire.messages[0].tool_calls[0].function.name == "read_file",
+		"expected serialized tool name",
+	)
+	assert(wire.messages[1].role == "tool", "expected OpenAI tool result role")
+	assert(wire.messages[1].tool_call_id == "call-1", "expected result call ID")
+	assert(wire.messages[1].content == "package main", "expected tool result content")
 	_ = t
 }
 
@@ -269,6 +306,43 @@ test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	assert(err == .None, "expected Anthropic tool call response")
 	assert(len(response.toolCalls) == 1, "expected parsed Anthropic tool call")
 	assert(response.toolCalls[0].arguments != "", "expected serialized Anthropic arguments")
+	_ = t
+}
+
+@(test)
+test_anthropic_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model = "claude-test",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {{
+					id = "tool-1",
+					name = "read_file",
+					arguments = `{"file_path":"main.odin"}`,
+				}},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result {{
+					toolCallID = "tool-1",
+					content = "package main",
+				}},
+			},
+		},
+	}
+	wire := build_anthropic_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(wire.messages[0].role == "assistant", "expected Anthropic assistant role")
+	assert(wire.messages[1].role == "user", "expected Anthropic tool result user role")
+	toolUseJSON, toolUseErr := json.unparse(wire.messages[0].content)
+	assert(toolUseErr == nil, "expected Anthropic tool-use blocks to serialize")
+	assert(strings.contains(toolUseJSON, `"tool_use"`), "expected tool_use block")
+	assert(strings.contains(toolUseJSON, `"file_path"`), "expected raw tool input")
+	toolResultJSON, toolResultErr := json.unparse(wire.messages[1].content)
+	assert(toolResultErr == nil, "expected Anthropic tool-result blocks to serialize")
+	assert(strings.contains(toolResultJSON, `"tool_result"`), "expected tool_result block")
+	assert(strings.contains(toolResultJSON, `"tool-1"`), "expected tool result call ID")
 	_ = t
 }
 

@@ -100,6 +100,49 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(
+		&state.stream.conversation,
+		ai.Message{role = .Assistant, content = strings.clone("Calling tool", context.allocator)},
+	)
+
+	app_append_tool_result(&state, "call-1", "package main", false)
+	assert(len(state.stream.conversation) == 2, "expected tool result conversation entry")
+	resultMessage := state.stream.conversation[1]
+	assert(resultMessage.role == .Tool, "expected tool result message role")
+	assert(len(resultMessage.toolResults) == 1, "expected one typed tool result")
+	assert(resultMessage.toolResults[0].toolCallID == "call-1", "expected call ID")
+	assert(resultMessage.toolResults[0].content == "package main", "expected tool output")
+	_ = t
+}
+
+@(test)
+test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.stream.partial = strings.clone("I will inspect the file.", context.allocator)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(`{"file_path":"main.odin"}`, context.allocator),
+		},
+	)
+
+	assert(app_record_stream_tool_turn(&state), "expected streamed tool turn to record")
+	assert(len(state.stream.conversation) == 1, "expected assistant conversation entry")
+	message := state.stream.conversation[0]
+	assert(message.role == .Assistant, "expected assistant tool-call message")
+	assert(message.content == "I will inspect the file.", "expected streamed assistant text")
+	assert(len(message.toolCalls) == 1, "expected retained tool call")
+	assert(message.toolCalls[0].id == "call-1", "expected retained tool call ID")
+	_ = t
+}
+
+@(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

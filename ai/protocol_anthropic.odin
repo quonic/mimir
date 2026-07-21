@@ -19,7 +19,7 @@ Anthropic_Tool :: struct {
 
 Anthropic_Message :: struct {
 	role:    string,
-	content: string,
+	content: json.Value,
 }
 
 Anthropic_Request :: struct {
@@ -108,11 +108,13 @@ build_anthropic_request :: proc(
 		role := message_role_to_string(msg.role)
 		if role == "system" {
 			role = "user"
+		} else if role == "tool" {
+			role = "user"
 		}
 
 		wire.messages[idx] = Anthropic_Message {
 			role    = role,
-			content = msg.content,
+			content = anthropic_message_content(msg, allocator),
 		}
 	}
 	for tool, idx in request.tools {
@@ -128,6 +130,51 @@ build_anthropic_request :: proc(
 	}
 
 	return wire
+}
+
+anthropic_message_content :: proc(msg: Message, allocator := context.temp_allocator) -> json.Value {
+	if msg.role != .Assistant && msg.role != .Tool {
+		return json.String(msg.content)
+	}
+
+	blockCount := len(msg.toolCalls) if msg.role == .Assistant else len(msg.toolResults)
+	if blockCount == 0 {
+		return json.String(msg.content)
+	}
+
+	blocks := make([dynamic]json.Value, 0, blockCount + 1, allocator)
+	if msg.content != "" {
+		textBlock := make(map[string]json.Value, allocator)
+		textBlock["type"] = json.String("text")
+		textBlock["text"] = json.String(msg.content)
+		append(&blocks, json.Object(textBlock))
+	}
+	if msg.role == .Assistant {
+		for call in msg.toolCalls {
+			input, parseErr := json.parse_string(call.arguments, allocator = allocator)
+			if parseErr != .None {
+				input = json.Null(nil)
+			}
+			toolUseBlock := make(map[string]json.Value, allocator)
+			toolUseBlock["type"] = json.String("tool_use")
+			toolUseBlock["id"] = json.String(call.id)
+			toolUseBlock["name"] = json.String(call.name)
+			toolUseBlock["input"] = input
+			append(&blocks, json.Object(toolUseBlock))
+		}
+	} else {
+		for result in msg.toolResults {
+			toolResultBlock := make(map[string]json.Value, allocator)
+			toolResultBlock["type"] = json.String("tool_result")
+			toolResultBlock["tool_use_id"] = json.String(result.toolCallID)
+			toolResultBlock["content"] = json.String(result.content)
+			if result.isError {
+				toolResultBlock["is_error"] = json.Boolean(true)
+			}
+			append(&blocks, json.Object(toolResultBlock))
+		}
+	}
+	return json.Array(blocks)
 }
 
 build_anthropic_stream_request :: proc(request: Chat_Request) -> Anthropic_Request {

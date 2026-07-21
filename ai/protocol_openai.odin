@@ -4,8 +4,10 @@ import json "core:encoding/json"
 import "core:strings"
 
 OpenAI_Message :: struct {
-	role:    string,
-	content: string,
+	role:         string,
+	content:      string,
+	tool_call_id: string,
+	tool_calls:   []OpenAI_Tool_Call,
 }
 
 OpenAI_Function :: struct {
@@ -43,7 +45,7 @@ OpenAI_Stream_Tool_State :: struct {
 
 OpenAI_Chat_Request :: struct {
 	model:       string,
-	messages:    []OpenAI_Message,
+	messages:    [dynamic]OpenAI_Message,
 	temperature: f32,
 	max_tokens:  int,
 	stream:      bool,
@@ -106,18 +108,44 @@ build_openai_chat_request :: proc(
 ) -> OpenAI_Chat_Request {
 	wire := OpenAI_Chat_Request {
 		model       = request.model,
-		messages    = make([]OpenAI_Message, len(request.messages), allocator),
+		messages    = make([dynamic]OpenAI_Message, 0, len(request.messages), allocator),
 		temperature = request.temperature,
 		max_tokens  = request.maxTokens,
 		stream      = false,
 		tools       = make([]OpenAI_Tool, len(request.tools), allocator),
 	}
 
-	for msg, idx in request.messages {
-		wire.messages[idx] = OpenAI_Message {
-			role    = message_role_to_string(msg.role),
-			content = msg.content,
+	for msg in request.messages {
+		if msg.role == .Tool {
+			for result in msg.toolResults {
+				append(
+					&wire.messages,
+					OpenAI_Message {
+						role = "tool",
+						content = result.content,
+						tool_call_id = result.toolCallID,
+					},
+				)
+			}
+			continue
 		}
+
+		wireMessage := OpenAI_Message {
+			role = message_role_to_string(msg.role),
+			content = msg.content,
+			tool_calls = make([]OpenAI_Tool_Call, len(msg.toolCalls), allocator),
+		}
+		for call, idx in msg.toolCalls {
+			wireMessage.tool_calls[idx] = OpenAI_Tool_Call {
+				id = call.id,
+				type = "function",
+				function = OpenAI_Tool_Call_Function {
+					name = call.name,
+					arguments = call.arguments,
+				},
+			}
+		}
+		append(&wire.messages, wireMessage)
 	}
 	for tool, idx in request.tools {
 		parameters, parseErr := json.parse_string(tool.parametersJSON, allocator = allocator)
