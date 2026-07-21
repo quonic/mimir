@@ -217,6 +217,63 @@ test_build_ollama_chat_request :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_ollama_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "qwen3",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
+	}
+	wire := build_ollama_chat_request(request)
+	assert(len(wire.tools) == 1, "expected Ollama request tool")
+	assert(wire.tools[0].type == "function", "expected Ollama function tool")
+	assert(wire.tools[0].function.name == "read_file", "expected Ollama tool name")
+
+	payload := `{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"file_path":"main.odin"}}}]},"done":true,"done_reason":"stop"}`
+	response, err := parse_ollama_chat_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected Ollama tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed Ollama tool call")
+	assert(response.toolCalls[0].id == "ollama-0", "expected synthetic Ollama call ID")
+	assert(response.toolCalls[0].name == "read_file", "expected parsed Ollama tool name")
+	_ = t
+}
+
+@(test)
+test_ollama_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "qwen3",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {
+					{id = "ollama-0", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result{{toolCallID = "ollama-0", content = "package main"}},
+			},
+		},
+	}
+	wire := build_ollama_chat_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(len(wire.messages[0].tool_calls) == 1, "expected Ollama tool-call history")
+	assert(
+		wire.messages[0].tool_calls[0].function.name == "read_file",
+		"expected Ollama tool-call name",
+	)
+	assert(wire.messages[1].role == "tool", "expected Ollama tool-result role")
+	assert(wire.messages[1].content == "package main", "expected Ollama tool result")
+	_ = t
+}
+
+@(test)
 test_build_anthropic_stream_request :: proc(t: ^testing.T) {
 	request := Chat_Request {
 		model     = "claude-sonnet-4",
@@ -499,6 +556,32 @@ test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	assert(testOllamaStreamState.model == "llama3.2", "expected Ollama stream model")
 	assert(testOllamaStreamState.finishReason == "stop", "expected Ollama finish reason")
 	assert(testOllamaStreamState.done, "expected Ollama stream to mark done")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOllamaStreamState)
+	defer reset_test_stream_state(&testOllamaStreamState)
+
+	toolState: Ollama_Stream_Tool_State
+	payload :=
+		`{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"file_path":"main.odin"}}}]},"done":true,"done_reason":"stop"}` +
+		"\n"
+	err := parse_json_lines_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_ollama_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_ollama_stream_event,
+	)
+
+	assert(err == .None, "expected Ollama tool-call stream to parse")
+	assert(len(testOllamaStreamState.toolCalls) == 1, "expected one streamed tool call")
+	assert(testOllamaStreamState.toolCalls[0].id == "ollama-0", "expected synthetic ID")
+	assert(testOllamaStreamState.toolCalls[0].name == "read_file", "expected tool name")
+	assert(testOllamaStreamState.done, "expected Ollama tool stream to finish")
 	_ = t
 }
 

@@ -405,12 +405,15 @@ send_ollama_chat_completion_stream :: proc(
 		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
 		append(&extraHeaders, [2]string{"authorization", authorization})
 	}
+	toolState: Ollama_Stream_Tool_State
+	streamCallbackState := callbackState
+	streamCallbackState.parserData = rawptr(&toolState)
 
 	body, status, errKind := do_json_post_stream(
 		target,
 		wire,
 		extraHeaders[:],
-		callbackState,
+		streamCallbackState,
 		parse_ollama_stream_event,
 		parse_json_lines_stream_chunk,
 	)

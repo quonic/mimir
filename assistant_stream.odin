@@ -54,7 +54,7 @@ app_tool_definitions_for_provider :: proc(
 	providerType: ai.Interface_Type,
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
-	if providerType == .Ollama || providerType == .None {
+	if providerType == .None {
 		return make([dynamic]ai.Tool_Definition, 0, 0, allocator)
 	}
 	return builtin_ai_tool_definitions(allocator)
