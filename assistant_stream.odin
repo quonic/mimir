@@ -360,8 +360,7 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 			outputOwned = true
 		}
 		defer app_destroy_tool_output_if_owned(output, outputOwned, state.dispatcher.allocator)
-		append_history(state, .Tool, output)
-		app_append_tool_result(state, call.callID, output, false)
+		app_record_tool_execution_result(state, call.callID, output)
 		state.status = "Tool call completed"
 	case .Denied:
 		append_history(state, .Tool, "Permission denied.")
@@ -370,6 +369,28 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 	}
 	app_start_tool_continuation_if_ready(state)
 	return true
+}
+
+app_record_tool_execution_result :: proc(state: ^App_State, toolCallID: string, output: string) {
+	isError := app_tool_output_is_error(output)
+	if isError {
+		append_history(state, .Tool, output)
+	}
+	app_append_tool_result(state, toolCallID, output, isError)
+}
+
+app_tool_output_is_error :: proc(output: string) -> bool {
+	return(
+		strings.starts_with(output, "Error ") ||
+		strings.contains(output, ": Error ") ||
+		strings.contains(output, ": Unsupported ") ||
+		strings.contains(output, ": Command exited ") ||
+		strings.starts_with(output, "File already exists.") ||
+		strings.starts_with(output, "Invalid value for overwrite:") ||
+		output == "MCP tool dispatch is not implemented." ||
+		output == "Permission denied." ||
+		output == "Permission approval required." \
+	)
 }
 
 app_tool_call_from_ai :: proc(

@@ -777,8 +777,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	}
 
 	output := tool_dispatch_execute_approved(&state.dispatcher, state.approval.call)
-	append_history(state, .Tool, output)
-	app_append_tool_result(state, state.approval.call.callID, output, false)
+	app_record_tool_execution_result(state, state.approval.call.callID, output)
 	state.status = "Tool call completed"
 	state.mode = .Chat
 	app_clear_approval(state)

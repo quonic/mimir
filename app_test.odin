@@ -129,6 +129,77 @@ test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_hides_successful_tool_output_from_history :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.mode = .Config
+	append(
+		&state.stream.conversation,
+		ai.Message {
+			role = .Assistant,
+			content = strings.clone("Reading app.odin", context.allocator),
+		},
+	)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(
+				`{"file_path":"app.odin","start_line":"0","end_line":"0"}`,
+				context.allocator,
+			),
+		},
+	)
+
+	assert(
+		app_process_pending_stream_tool_calls(&state),
+		"expected read-only tool call to process",
+	)
+	assert(len(state.history) == 1, "expected successful tool output to remain out of history")
+	assert(len(state.stream.conversation) == 2, "expected tool result to remain in continuation")
+	result := state.stream.conversation[1].toolResults[0]
+	assert(result.content != "", "expected retained tool output")
+	assert(!result.isError, "expected successful tool result")
+	_ = t
+}
+
+@(test)
+test_app_shows_tool_errors_in_history :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.mode = .Config
+	append(
+		&state.stream.conversation,
+		ai.Message {
+			role = .Assistant,
+			content = strings.clone("Reading a file", context.allocator),
+		},
+	)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(
+				`{"file_path":"missing.odin","start_line":"0","end_line":"0"}`,
+				context.allocator,
+			),
+		},
+	)
+
+	assert(
+		app_process_pending_stream_tool_calls(&state),
+		"expected read-only tool call to process",
+	)
+	assert(len(state.history) == 2, "expected tool error to appear in history")
+	assert(state.history[1].role == .Tool, "expected visible tool error entry")
+	result := state.stream.conversation[1].toolResults[0]
+	assert(result.isError, "expected failed tool result")
+	_ = t
+}
+
+@(test)
 test_app_stream_conversation_uses_app_allocator :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
