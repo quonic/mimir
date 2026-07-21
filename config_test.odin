@@ -161,8 +161,8 @@ test_save_load_and_clear_input_history :: proc(t: ^testing.T) {
 
 	loadedA, loadErrA := load_input_history_from_file(home, projectA, context.temp_allocator)
 	defer {
-		for entry in loadedA {
-			delete(entry)
+		for &entry in loadedA {
+			entry = ""
 		}
 		delete(loadedA)
 	}
@@ -176,8 +176,8 @@ test_save_load_and_clear_input_history :: proc(t: ^testing.T) {
 
 	loadedB, loadErrB := load_input_history_from_file(home, projectB, context.temp_allocator)
 	defer {
-		for entry in loadedB {
-			delete(entry)
+		for &entry in loadedB {
+			entry = ""
 		}
 		delete(loadedB)
 	}

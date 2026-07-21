@@ -192,8 +192,8 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	app_record_input_history(&state, "new input")
 	loaded, loadErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
 	defer {
-		for entry in loaded {
-			delete(entry)
+		for &entry in loaded {
+			entry = ""
 		}
 		delete(loaded)
 	}

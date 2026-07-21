@@ -781,8 +781,8 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 }
 
 app_clear_input_history :: proc(state: ^App_State) {
-	for entry in state.inputHistory {
-		delete(entry)
+	for &entry in state.inputHistory {
+		entry = ""
 	}
 	clear(&state.inputHistory)
 	app_reset_input_history_browse(state)
