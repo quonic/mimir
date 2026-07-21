@@ -801,6 +801,13 @@ app_clear_input_history :: proc(state: ^App_State) {
 	}
 	clear(&state.inputHistory)
 	app_reset_input_history_browse(state)
+	app_destroy_assistant_stream(state)
+	for &entry in state.history {
+		delete(entry.content)
+		entry = {}
+	}
+	clear(&state.history)
+	state.historyScrollOffset = 0
 
 	if state.configHome == "" || state.workingDirectory == "" {
 		state.status = "Input history cleared"

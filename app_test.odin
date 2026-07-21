@@ -199,10 +199,14 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	}
 	assert(loadErr == .None, "expected new input to persist immediately")
 	assert(len(loaded) == 2, "expected recorded input in persistent history")
+	append_history(&state, .User, "chat history")
+	state.historyScrollOffset = 1
 
 	input_buffer_push_text(&state.input, "/clear")
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 0, "expected clear command to reset in-memory history")
+	assert(len(state.history) == 0, "expected clear command to reset panel history")
+	assert(state.historyScrollOffset == 0, "expected clear command to reset panel scroll position")
 	assert(state.status == "Input history cleared", "expected clear command success status")
 	_, missingErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
 	assert(missingErr == .Not_Found, "expected clear command to remove persistent history")
