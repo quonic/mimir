@@ -105,10 +105,83 @@ render_app_frame_sequence :: proc(
 		render_models_modal(&batch, layout.historyPanel, state)
 	} else if state.mode == .Config {
 		render_config_modal(&batch, layout.historyPanel, state)
+	} else if state.mode == .Approval {
+		render_approval_modal(&batch, layout.historyPanel, state)
 	}
 	render_status(&batch, layout.statusBar, state)
 
 	return console.batch_sequence(&batch)
+}
+
+render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, state: ^App_State) {
+	modal := config_modal_region(parent)
+	panel := console.Panel {
+		region        = modal,
+		title         = " Tool Permission ",
+		fill_interior = true,
+	}
+	console.batch_draw_panel(batch, panel)
+	interior := console.panel_interior(panel)
+	width := console.region_width(interior)
+	if width <= 0 {
+		return
+	}
+
+	row := interior.top_row
+	write_clipped_line(batch, row, interior.left_column, width, "Approve this tool call?")
+	row += 2
+	if state.approval.preparedOwned {
+		action := state.approval.prepared.action
+		write_clipped_line(
+			batch,
+			row,
+			interior.left_column,
+			width,
+			approval_effect_label(action.effect),
+		)
+		row += 1
+		switch action.effect {
+		case .Read, .Write:
+			write_clipped_line(batch, row, interior.left_column, width, action.targetPath)
+		case .Execute:
+			write_clipped_line(batch, row, interior.left_column, width, action.shell)
+			row += 1
+			write_clipped_line(batch, row, interior.left_column, width, action.command)
+			row += 1
+			write_clipped_line(batch, row, interior.left_column, width, action.workingDirectory)
+		case .Remote:
+			write_clipped_line(batch, row, interior.left_column, width, action.mcpServer)
+		}
+		row += 2
+	}
+
+	labels := [4]string{"Allow once", "Allow session", "Allow always", "Deny"}
+	for label, index in labels {
+		if row > interior.bottom_row {
+			break
+		}
+		prefix := "  "
+		if int(state.approval.choice) == index {
+			prefix = "> "
+		}
+		line := strings.concatenate({prefix, label}, context.temp_allocator)
+		write_clipped_line(batch, row, interior.left_column, width, line)
+		row += 1
+	}
+}
+
+approval_effect_label :: proc(effect: Permission_Effect) -> string {
+	switch effect {
+	case .Read:
+		return "Read"
+	case .Write:
+		return "Write"
+	case .Execute:
+		return "Run command"
+	case .Remote:
+		return "Remote tool"
+	}
+	return "Tool"
 }
 
 render_app_input_panel_sequence :: proc(

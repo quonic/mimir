@@ -3,6 +3,7 @@ package ai
 import http "../http"
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 Test_Stream_State :: struct {
@@ -95,6 +96,30 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 
 	streamWire := build_openai_chat_stream_request(request)
 	assert(streamWire.stream, "expected OpenAI stream payload to enable streaming")
+	_ = t
+}
+
+@(test)
+test_tool_call_clone_and_response_destroy :: proc(t: ^testing.T) {
+	call := Tool_Call {
+		id        = "call-1",
+		name      = "read_file",
+		arguments = `{"file_path":"main.odin"}`,
+	}
+	clone := tool_call_clone(call, context.allocator)
+	defer tool_call_destroy(&clone, context.allocator)
+	assert(clone.id == "call-1", "expected cloned tool call ID")
+	assert(clone.name == "read_file", "expected cloned tool call name")
+	assert(clone.arguments == call.arguments, "expected cloned tool call arguments")
+
+	response := Chat_Response {
+		content   = strings.clone("", context.allocator),
+		model     = strings.clone("test", context.allocator),
+		toolCalls = make([dynamic]Tool_Call, 0, 1, context.allocator),
+	}
+	append(&response.toolCalls, tool_call_clone(call, context.allocator))
+	chat_response_destroy(&response, context.allocator)
+	assert(len(response.toolCalls) == 0, "expected response destroy to clear tool calls")
 	_ = t
 }
 

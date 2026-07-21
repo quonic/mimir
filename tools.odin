@@ -1,5 +1,7 @@
 package main
 
+import "ai"
+
 Tool_Definition :: struct {
 	id:          string,
 	parameters:  [dynamic]Tool_Parameter,
@@ -15,6 +17,61 @@ Tool_Parameter :: struct {
 
 Tool_Registry :: struct {
 	definitions: [dynamic]Tool_Definition,
+}
+
+builtin_ai_tool_definitions :: proc(
+	allocator := context.allocator,
+) -> [dynamic]ai.Tool_Definition {
+	definitions := make([dynamic]ai.Tool_Definition, 0, 6, allocator)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "read_file",
+			description = "Read a file in the active project",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"start_line":{"type":"string"},"end_line":{"type":"string"}},"required":["file_path"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "write_file",
+			description = "Write a file in the active project",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"string","enum":["true","false"]}},"required":["file_path","content"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "run_command",
+			description = "Run a shell command in the active project",
+			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"},"capture_output":{"type":"boolean"},"env_vars":{"type":"array","items":{"type":"string"}},"shell":{"type":"string"}},"required":["command","shell"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "list_available_shells",
+			description = "List available shells",
+			parametersJSON = `{"type":"object","properties":{}}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "list_directory",
+			description = "List a directory in the active project",
+			parametersJSON = `{"type":"object","properties":{"directory_path":{"type":"string"}},"required":["directory_path"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "get_file_info",
+			description = "Get metadata for a file in the active project",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
+		},
+	)
+	return definitions
 }
 
 builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {

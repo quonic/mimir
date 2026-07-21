@@ -27,6 +27,63 @@ Tool_Dispatcher :: struct {
 	allocator:        mem.Allocator,
 }
 
+Tool_Dispatch_Result :: struct {
+	decision: Permission_Decision,
+	action:   Permission_Action,
+	actionOK: bool,
+}
+
+tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
+	clone := Tool_Call {
+		id               = strings.clone(call.id, allocator),
+		filePath         = strings.clone(call.filePath, allocator),
+		directoryPath    = strings.clone(call.directoryPath, allocator),
+		startLine        = strings.clone(call.startLine, allocator),
+		endLine          = strings.clone(call.endLine, allocator),
+		content          = strings.clone(call.content, allocator),
+		overwrite        = strings.clone(call.overwrite, allocator),
+		command          = strings.clone(call.command, allocator),
+		workingDirectory = strings.clone(call.workingDirectory, allocator),
+		timeout          = call.timeout,
+		captureOutput    = call.captureOutput,
+		shell            = strings.clone(call.shell, allocator),
+		mcpServer        = strings.clone(call.mcpServer, allocator),
+		environment      = make([dynamic]string, 0, len(call.environment), allocator),
+	}
+	for entry in call.environment {
+		append(&clone.environment, strings.clone(entry, allocator))
+	}
+	return clone
+}
+
+tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
+	delete(call.id, allocator)
+	delete(call.filePath, allocator)
+	delete(call.directoryPath, allocator)
+	delete(call.startLine, allocator)
+	delete(call.endLine, allocator)
+	delete(call.content, allocator)
+	delete(call.overwrite, allocator)
+	delete(call.command, allocator)
+	delete(call.workingDirectory, allocator)
+	delete(call.shell, allocator)
+	delete(call.mcpServer, allocator)
+	for entry in call.environment {
+		delete(entry, allocator)
+	}
+	delete(call.environment)
+}
+
+tool_dispatch_result_destroy :: proc(
+	result: ^Tool_Dispatch_Result,
+	allocator := context.allocator,
+) {
+	if result.actionOK {
+		permission_action_destroy(&result.action, allocator)
+	}
+	result^ = {}
+}
+
 tool_dispatcher_init :: proc(
 	projectRoot: string,
 	persistentGrants: []Permission_Grant,
@@ -101,6 +158,9 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Read
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
+	case "list_available_shells":
+		action.effect = .Read
+		action.targetPath = dispatcher.projectRoot
 	case "list_directory":
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
@@ -166,36 +226,91 @@ tool_dispatch_build_action :: proc(
 	return action, true
 }
 
+tool_dispatch_prepare :: proc(
+	dispatcher: ^Tool_Dispatcher,
+	call: Tool_Call,
+) -> Tool_Dispatch_Result {
+	action, actionOK := tool_dispatch_build_action(dispatcher, call)
+	if !actionOK {
+		return Tool_Dispatch_Result{decision = .Denied}
+	}
+	return Tool_Dispatch_Result {
+		decision = permission_action_decision(
+			action,
+			dispatcher.persistentGrants,
+			dispatcher.sessionGrants[:],
+		),
+		action = action,
+		actionOK = true,
+	}
+}
+
 tool_dispatch_decide :: proc(
 	dispatcher: ^Tool_Dispatcher,
 	call: Tool_Call,
 ) -> Permission_Decision {
-	action, actionOK := tool_dispatch_build_action(dispatcher, call)
-	if !actionOK {
-		return .Denied
-	}
-	defer permission_action_destroy(&action, dispatcher.allocator)
-	return permission_action_decision(
-		action,
-		dispatcher.persistentGrants,
-		dispatcher.sessionGrants[:],
-	)
+	result := tool_dispatch_prepare(dispatcher, call)
+	defer tool_dispatch_result_destroy(&result, dispatcher.allocator)
+	return result.decision
 }
 
-tool_dispatch_execute :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> string {
-	decision := tool_dispatch_decide(dispatcher, call)
-	switch decision {
+tool_dispatch_grant_from_action :: proc(
+	action: Permission_Action,
+	allocator := context.allocator,
+) -> (
+	Permission_Grant,
+	bool,
+) {
+	grant := Permission_Grant {
+		projectRoot = strings.clone(action.projectRoot, allocator),
+	}
+	switch action.effect {
+	case .Write:
+		lastSlash := -1
+		for index := 0; index < len(action.targetPath); index += 1 {
+			if action.targetPath[index] == '/' {
+				lastSlash = index
+			}
+		}
+		if lastSlash <= 0 {
+			permission_grant_destroy(&grant, allocator)
+			return Permission_Grant{}, false
+		}
+		grant.kind = .Directory_Subtree
+		grant.directory = strings.clone(action.targetPath[:lastSlash], allocator)
+	case .Execute:
+		if action.hasCustomEnvironment || action.workingDirectory != action.projectRoot {
+			permission_grant_destroy(&grant, allocator)
+			return Permission_Grant{}, false
+		}
+		grant.kind = .Command_Prefix
+		grant.command = strings.clone(action.command, allocator)
+		grant.shell = strings.clone(action.shell, allocator)
+	case .Remote:
+		grant.kind = .MCP_Server
+		grant.mcpServer = strings.clone(action.mcpServer, allocator)
+	case .Read:
+		permission_grant_destroy(&grant, allocator)
+		return Permission_Grant{}, false
+	}
+	return grant, true
+}
+
+tool_dispatch_execute_approved :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> string {
+	prepared := tool_dispatch_prepare(dispatcher, call)
+	defer tool_dispatch_result_destroy(&prepared, dispatcher.allocator)
+	switch prepared.decision {
 	case .Denied:
 		return "Permission denied."
-	case .Approval_Required:
-		return "Permission approval required."
-	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
-	// The decision has canonicalized and confined the tool inputs to the project.
+	case .Approval_Required, .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
+	// The caller has either received policy approval or explicitly authorized this call once.
 	case:
 		return "Permission denied."
 	}
 
 	switch call.id {
+	case "list_available_shells":
+		return list_available_shells_tool_proc()
 	case "read_file":
 		path, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
@@ -266,4 +381,16 @@ tool_dispatch_execute :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> 
 		return "MCP tool dispatch is not implemented."
 	}
 	return "Permission denied."
+}
+
+tool_dispatch_execute :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> string {
+	prepared := tool_dispatch_prepare(dispatcher, call)
+	defer tool_dispatch_result_destroy(&prepared, dispatcher.allocator)
+	if prepared.decision == .Denied {
+		return "Permission denied."
+	}
+	if prepared.decision == .Approval_Required {
+		return "Permission approval required."
+	}
+	return tool_dispatch_execute_approved(dispatcher, call)
 }

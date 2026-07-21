@@ -33,6 +33,26 @@ test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		"expected write call to open approval modal",
+	)
+	assert(state.mode == .Approval, "expected approval mode")
+	assert(state.approval.choice == .Allow_Once, "expected once approval selected initially")
+	assert(app_handle_approval_input(&state, 'j'), "expected approval choice movement")
+	assert(state.approval.choice == .Allow_Session, "expected session approval selected")
+	assert(!app_handle_approval_input(&state, 0x1b), "expected escape sequence start")
+	assert(app_handle_approval_input(&state, 'x'), "expected escape to deny approval")
+	assert(state.mode == .Chat, "expected denial to restore chat mode")
+	assert(state.status == "Tool call denied", "expected escape denial status")
+	_ = t
+}
+
+@(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
