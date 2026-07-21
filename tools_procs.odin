@@ -51,9 +51,9 @@ write_file_tool_proc := proc(file_path: string, content: string, overwrite: stri
 	} else if overwrite == "true" {
 		// If overwrite is true, delete the existing file
 		if _, err := os.stat(file_path, context.allocator); err == nil {
-			err := os.remove(file_path)
-			if err != nil {
-				return fmt.aprintf("Error overwriting file: %s", err)
+			rm_err := os.remove(file_path)
+			if rm_err != nil {
+				return fmt.aprintf("Error overwriting file: %s", rm_err)
 			}
 		}
 	} else {
