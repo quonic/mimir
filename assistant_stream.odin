@@ -564,7 +564,7 @@ assistant_stream_append_partial :: proc(stream: ^Assistant_Stream_State, content
 
 app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
-	case "read_file", "list_directory", "get_file_info", "list_available_shells":
+	case "read_file", "list_directory", "get_file_info", "list_available_shells", "run_command":
 		return true
 	}
 	return false

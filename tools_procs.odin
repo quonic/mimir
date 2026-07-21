@@ -81,8 +81,16 @@ run_command_tool_proc := proc(
 		proc_desc.working_dir = working_directory
 	}
 	proc_desc.env, _ = os.environ(context.allocator)
+	defer {
+		for environmentEntry in proc_desc.env {
+			delete(environmentEntry, context.allocator)
+		}
+		delete(proc_desc.env, context.allocator)
+	}
 
 	state, stdout, stderr, err := os.process_exec(proc_desc, context.allocator)
+	defer delete(stdout, context.allocator)
+	defer delete(stderr, context.allocator)
 	if err != nil {
 		return fmt.aprintf("run_command_tool: Error executing command: %s", err)
 	}

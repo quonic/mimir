@@ -153,6 +153,21 @@ test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_releases_retained_failed_command_output :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(&state.stream.conversation, ai.Message{role = .Assistant})
+
+	output := run_command_tool_proc("ip add")
+	app_append_tool_result(&state, "call-1", output, true)
+	delete(output, context.allocator)
+
+	app_clear_assistant_stream_conversation(&state.stream)
+	assert(len(state.stream.conversation) == 0, "expected retained command output to clear")
+	_ = t
+}
+
+@(test)
 test_app_hides_successful_tool_output_from_history :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
