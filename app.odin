@@ -400,6 +400,7 @@ run_app :: proc() {
 		} else if inputDirty {
 			render_app_input_panel(&state)
 		}
+		free_all(context.temp_allocator)
 	}
 }
 
