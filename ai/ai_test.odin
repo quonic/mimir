@@ -102,13 +102,15 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 @(test)
 test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	request := Chat_Request {
-		model = "test-model",
+		model    = "test-model",
 		messages = []Message{{role = .User, content = "Inspect the project"}},
-		tools = []Tool_Definition {{
-			name = "read_file",
-			description = "Read a project file",
-			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
-		}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
 	}
 	wire := build_openai_chat_request(request)
 	assert(len(wire.tools) == 1, "expected OpenAI request tool")
@@ -239,13 +241,15 @@ test_parse_anthropic_response :: proc(t: ^testing.T) {
 @(test)
 test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	request := Chat_Request {
-		model = "claude-test",
+		model    = "claude-test",
 		messages = []Message{{role = .User, content = "Inspect the project"}},
-		tools = []Tool_Definition {{
-			name = "read_file",
-			description = "Read a project file",
-			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
-		}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
 	}
 	wire := build_anthropic_request(request)
 	assert(len(wire.tools) == 1, "expected Anthropic request tool")

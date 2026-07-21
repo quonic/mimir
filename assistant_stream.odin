@@ -90,7 +90,10 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	workerData.stream = &state.stream
 	workerData.client = client
 	workerData.messages = messages
-	workerData.toolDefinitions = app_tool_definitions_for_provider(provider.type, context.allocator)
+	workerData.toolDefinitions = app_tool_definitions_for_provider(
+		provider.type,
+		context.allocator,
+	)
 	workerData.request = ai.Chat_Request {
 		model       = strings.clone(model, context.allocator),
 		messages    = workerData.messages[:],

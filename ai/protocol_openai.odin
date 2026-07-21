@@ -40,8 +40,8 @@ OpenAI_Chat_Request :: struct {
 }
 
 OpenAI_Choice_Message :: struct {
-	role:    string,
-	content: string,
+	role:       string,
+	content:    string,
 	tool_calls: []OpenAI_Tool_Call,
 }
 
@@ -150,10 +150,10 @@ parse_openai_chat_response :: proc(
 
 	choice := wire.choices[0]
 	response := Chat_Response {
-			content = strings.clone(choice.message.content, allocator),
-			model = strings.clone(wire.model, allocator),
-			finishReason = strings.clone(choice.finish_reason, allocator),
-			toolCalls = make([dynamic]Tool_Call, 0, len(choice.message.tool_calls), allocator),
+		content      = strings.clone(choice.message.content, allocator),
+		model        = strings.clone(wire.model, allocator),
+		finishReason = strings.clone(choice.finish_reason, allocator),
+		toolCalls    = make([dynamic]Tool_Call, 0, len(choice.message.tool_calls), allocator),
 	}
 	for call in choice.message.tool_calls {
 		if call.id == "" || call.function.name == "" || call.function.arguments == "" {

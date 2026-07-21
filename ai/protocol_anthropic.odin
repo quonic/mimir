@@ -108,8 +108,8 @@ build_anthropic_request :: proc(
 			inputSchema = json.Null(nil)
 		}
 		wire.tools[idx] = Anthropic_Tool {
-			name = tool.name,
-			description = tool.description,
+			name         = tool.name,
+			description  = tool.description,
 			input_schema = inputSchema,
 		}
 	}
@@ -137,9 +137,9 @@ parse_anthropic_response :: proc(
 	}
 
 	response := Chat_Response {
-		model = strings.clone(wire.model, allocator),
+		model        = strings.clone(wire.model, allocator),
 		finishReason = strings.clone(wire.stop_reason, allocator),
-		toolCalls = make([dynamic]Tool_Call, 0, len(wire.content), allocator),
+		toolCalls    = make([dynamic]Tool_Call, 0, len(wire.content), allocator),
 	}
 	for block in wire.content {
 		if block.type == "text" && response.content == "" {
