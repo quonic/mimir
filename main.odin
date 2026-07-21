@@ -37,22 +37,25 @@ debug_trace_assertion_failure_proc :: proc(prefix, message: string, loc := #call
 }
 
 main :: proc() {
+	when ODIN_DEBUG {
+		// Initialize the global trace context and set up the assertion failure handler
+		trace.init(&global_trace_ctx)
+		defer trace.destroy(&global_trace_ctx)
+		context.assertion_failure_proc = debug_trace_assertion_failure_proc
 
-	// Initialize the global trace context and set up the assertion failure handler
-	trace.init(&global_trace_ctx)
-	defer trace.destroy(&global_trace_ctx)
-	context.assertion_failure_proc = debug_trace_assertion_failure_proc
-
-	// Set up a tracking allocator to detect memory leaks
-	track: mem.Tracking_Allocator
-	mem.tracking_allocator_init(&track, context.allocator)
-	defer mem.tracking_allocator_destroy(&track)
-	context.allocator = mem.tracking_allocator(&track)
+		// Set up a tracking allocator to detect memory leaks
+		track: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&track, context.allocator)
+		defer mem.tracking_allocator_destroy(&track)
+		context.allocator = mem.tracking_allocator(&track)
+	}
 
 	run_app()
 
-	// Print any memory leaks detected by the tracking allocator
-	for _, leak in track.allocation_map {
-		fmt.printf("%v leaked %m\n", leak.location, leak.size)
+	when ODIN_DEBUG {
+		// Print any memory leaks detected by the tracking allocator
+		for _, leak in track.allocation_map {
+			fmt.printf("%v leaked %m\n", leak.location, leak.size)
+		}
 	}
 }
