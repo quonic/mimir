@@ -8,6 +8,7 @@ import "core:testing"
 
 Test_Stream_State :: struct {
 	parts:        [dynamic]string,
+	toolCalls:    [dynamic]Tool_Call,
 	model:        string,
 	finishReason: string,
 	done:         bool,
@@ -21,6 +22,10 @@ testStopStreamState: Test_Stream_State
 
 reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	delete(state.parts)
+	for &call in state.toolCalls {
+		tool_call_destroy(&call)
+	}
+	delete(state.toolCalls)
 	state^ = Test_Stream_State{}
 }
 
@@ -54,6 +59,9 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 	state.calls += 1
 	if delta.content != "" {
 		append(&state.parts, delta.content)
+	}
+	if delta.hasToolCall {
+		append(&state.toolCalls, tool_call_clone(delta.toolCall))
 	}
 	if delta.model != "" {
 		state.model = delta.model
@@ -307,6 +315,37 @@ test_parse_openai_stream_reasoning_delta :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_parse_openai_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOpenAIStreamState)
+	defer reset_test_stream_state(&testOpenAIStreamState)
+
+	toolState: OpenAI_Stream_Tool_State
+	defer openai_stream_tool_state_destroy(&toolState)
+	payload :=
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\\\"file_path\\\\\":\"}}]}}]}\n\n" +
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\\\"main.odin\\\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	err := parse_sse_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_openai_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_openai_stream_event,
+	)
+
+	assert(err == .None, "expected OpenAI tool-call stream to parse")
+	assert(len(testOpenAIStreamState.toolCalls) == 1, "expected one completed tool call")
+	assert(testOpenAIStreamState.toolCalls[0].id == "call-1", "expected tool call ID")
+	assert(testOpenAIStreamState.toolCalls[0].name == "read_file", "expected tool call name")
+	assert(
+		testOpenAIStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
+		"expected concatenated tool call arguments",
+	)
+	_ = t
+}
+
+@(test)
 test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 	reset_test_stream_state(&testAnthropicStreamState)
 	defer reset_test_stream_state(&testAnthropicStreamState)
@@ -335,6 +374,42 @@ test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 	assert(testAnthropicStreamState.model == "claude-test", "expected Anthropic stream model")
 	assert(testAnthropicStreamState.finishReason == "end_turn", "expected Anthropic finish reason")
 	assert(testAnthropicStreamState.done, "expected Anthropic stream to mark done")
+	_ = t
+}
+
+@(test)
+test_parse_anthropic_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testAnthropicStreamState)
+	defer reset_test_stream_state(&testAnthropicStreamState)
+
+	toolState: Anthropic_Stream_Tool_State
+	defer anthropic_stream_tool_state_destroy(&toolState)
+	payload :=
+		"event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"read_file\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\":\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"main.odin\\\"}\"}}\n\n" +
+		"event: content_block_stop\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+	err := parse_sse_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_anthropic_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_anthropic_stream_event,
+	)
+
+	assert(err == .None, "expected Anthropic tool-use stream to parse")
+	assert(len(testAnthropicStreamState.toolCalls) == 1, "expected one completed tool call")
+	assert(testAnthropicStreamState.toolCalls[0].id == "tool-1", "expected tool call ID")
+	assert(testAnthropicStreamState.toolCalls[0].name == "read_file", "expected tool call name")
+	assert(
+		testAnthropicStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
+		"expected concatenated tool arguments",
+	)
 	_ = t
 }
 

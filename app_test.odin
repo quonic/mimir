@@ -65,6 +65,41 @@ test_app_tool_definitions_skip_ollama :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("run_command", context.allocator),
+			arguments = strings.clone(`{"command":"pwd","shell":"/bin/sh"}`, context.allocator),
+		},
+	)
+
+	assert(app_process_pending_stream_tool_calls(&state), "expected queued tool call to process")
+	assert(state.mode == .Approval, "expected execute tool call to require approval")
+	assert(len(state.stream.toolCalls) == 0, "expected queued tool call to be consumed")
+	_ = t
+}
+
+@(test)
+test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-1",
+		name      = "write_file",
+		arguments = `{"file_path":"notes.txt","content":"hello","overwrite":"true"}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected JSON arguments to decode")
+	assert(call.id == "write_file", "expected decoded tool ID")
+	assert(call.filePath == "notes.txt", "expected decoded file path")
+	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

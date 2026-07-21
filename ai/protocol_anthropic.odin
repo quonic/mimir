@@ -37,8 +37,18 @@ Anthropic_Response :: struct {
 }
 
 Anthropic_Stream_Content_Delta :: struct {
-	type: string,
-	text: string,
+	type:         string,
+	text:         string,
+	partial_json: string,
+}
+
+Anthropic_Stream_Tool_Accumulator :: struct {
+	call:   Tool_Call,
+	active: bool,
+}
+
+Anthropic_Stream_Tool_State :: struct {
+	calls: [dynamic]Anthropic_Stream_Tool_Accumulator,
 }
 
 Anthropic_Stream_Message_Delta :: struct {
@@ -46,13 +56,16 @@ Anthropic_Stream_Message_Delta :: struct {
 }
 
 Anthropic_Stream_Response :: struct {
-	type:    string,
-	delta:   struct {
-		type:        string,
-		text:        string,
-		stop_reason: string,
+	type:          string,
+	index:         int,
+	content_block: Anthropic_Content_Block,
+	delta:         struct {
+		type:         string,
+		text:         string,
+		partial_json: string,
+		stop_reason:  string,
 	},
-	message: struct {
+	message:       struct {
 		model: string,
 	},
 }
@@ -211,6 +224,27 @@ parse_anthropic_stream_event :: proc(
 				),
 				.None
 		}
+	case "content_block_start":
+		if wire.content_block.type != "tool_use" {
+			return false, .None
+		}
+		if wire.index < 0 || wire.content_block.id == "" || wire.content_block.name == "" {
+			return false, .Invalid_Response
+		}
+		toolState := cast(^Anthropic_Stream_Tool_State)callbackState.parserData
+		if toolState == nil {
+			return false, .Invalid_Response
+		}
+		for len(toolState.calls) <= wire.index {
+			append(&toolState.calls, Anthropic_Stream_Tool_Accumulator{})
+		}
+		accumulator := &toolState.calls[wire.index]
+		if accumulator.active {
+			return false, .Invalid_Response
+		}
+		accumulator.call.id = strings.clone(wire.content_block.id)
+		accumulator.call.name = strings.clone(wire.content_block.name)
+		accumulator.active = true
 	case "content_block_delta":
 		if wire.delta.type == "text_delta" && wire.delta.text != "" {
 			return !chat_stream_callback_call(
@@ -219,6 +253,51 @@ parse_anthropic_stream_event :: proc(
 				),
 				.None
 		}
+		if wire.delta.type == "input_json_delta" {
+			toolState := cast(^Anthropic_Stream_Tool_State)callbackState.parserData
+			if toolState == nil || wire.index < 0 || wire.index >= len(toolState.calls) {
+				return false, .Invalid_Response
+			}
+			accumulator := &toolState.calls[wire.index]
+			if !accumulator.active {
+				return false, .Invalid_Response
+			}
+			if wire.delta.partial_json != "" {
+				arguments := strings.concatenate(
+					{accumulator.call.arguments, wire.delta.partial_json},
+				)
+				if accumulator.call.arguments != "" {
+					delete(accumulator.call.arguments)
+				}
+				accumulator.call.arguments = arguments
+			}
+		}
+	case "content_block_stop":
+		toolState := cast(^Anthropic_Stream_Tool_State)callbackState.parserData
+		if toolState == nil || wire.index < 0 || wire.index >= len(toolState.calls) {
+			return false, .None
+		}
+		accumulator := &toolState.calls[wire.index]
+		if !accumulator.active {
+			return false, .None
+		}
+		if accumulator.call.arguments == "" {
+			accumulator.call.arguments = strings.clone("{}")
+		}
+		_, parseErr := json.parse_string(accumulator.call.arguments)
+		if parseErr != .None {
+			return false, .Invalid_Response
+		}
+		accumulator.active = false
+		return !chat_stream_callback_call(
+				callbackState,
+				Chat_Stream_Delta {
+					toolCall = accumulator.call,
+					hasToolCall = true,
+					toolCallDone = true,
+				},
+			),
+			.None
 	case "message_delta":
 		if wire.delta.stop_reason != "" {
 			return !chat_stream_callback_call(
@@ -232,6 +311,14 @@ parse_anthropic_stream_event :: proc(
 	}
 
 	return false, .None
+}
+
+anthropic_stream_tool_state_destroy :: proc(state: ^Anthropic_Stream_Tool_State) {
+	for &accumulator in state.calls {
+		tool_call_destroy(&accumulator.call)
+	}
+	delete(state.calls)
+	state^ = {}
 }
 
 parse_anthropic_models_response :: proc(

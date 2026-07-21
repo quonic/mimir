@@ -30,6 +30,17 @@ OpenAI_Tool_Call :: struct {
 	function: OpenAI_Tool_Call_Function,
 }
 
+OpenAI_Stream_Tool_Call :: struct {
+	index:    int,
+	id:       string,
+	type:     string,
+	function: OpenAI_Tool_Call_Function,
+}
+
+OpenAI_Stream_Tool_State :: struct {
+	calls: [dynamic]Tool_Call,
+}
+
 OpenAI_Chat_Request :: struct {
 	model:       string,
 	messages:    []OpenAI_Message,
@@ -56,9 +67,10 @@ OpenAI_Chat_Response :: struct {
 }
 
 OpenAI_Stream_Delta_Message :: struct {
-	role:      string,
-	content:   string,
-	reasoning: string,
+	role:       string,
+	content:    string,
+	reasoning:  string,
+	tool_calls: []OpenAI_Stream_Tool_Call,
 }
 
 OpenAI_Stream_Choice :: struct {
@@ -212,6 +224,58 @@ parse_openai_stream_event :: proc(
 	}
 
 	choice := wire.choices[0]
+	toolState := cast(^OpenAI_Stream_Tool_State)callbackState.parserData
+	if len(choice.delta.tool_calls) > 0 {
+		if toolState == nil {
+			return false, .Invalid_Response
+		}
+		for call in choice.delta.tool_calls {
+			if call.index < 0 {
+				return false, .Invalid_Response
+			}
+			for len(toolState.calls) <= call.index {
+				append(&toolState.calls, Tool_Call{})
+			}
+			accumulated := &toolState.calls[call.index]
+			if call.id != "" {
+				if accumulated.id != "" {
+					delete(accumulated.id)
+				}
+				accumulated.id = strings.clone(call.id)
+			}
+			if call.function.name != "" {
+				if accumulated.name != "" {
+					delete(accumulated.name)
+				}
+				accumulated.name = strings.clone(call.function.name)
+			}
+			if call.function.arguments != "" {
+				arguments := strings.concatenate({accumulated.arguments, call.function.arguments})
+				if accumulated.arguments != "" {
+					delete(accumulated.arguments)
+				}
+				accumulated.arguments = arguments
+			}
+		}
+	}
+
+	if choice.finish_reason == "tool_calls" {
+		if toolState == nil || len(toolState.calls) == 0 {
+			return false, .Invalid_Response
+		}
+		for call in toolState.calls {
+			if call.id == "" || call.name == "" || call.arguments == "" {
+				return false, .Invalid_Response
+			}
+			if !chat_stream_callback_call(
+				callbackState,
+				Chat_Stream_Delta{toolCall = call, hasToolCall = true, toolCallDone = true},
+			) {
+				return true, .None
+			}
+		}
+	}
+
 	content := choice.delta.content
 	if content == "" {
 		content = choice.delta.reasoning
@@ -231,6 +295,14 @@ parse_openai_stream_event :: proc(
 			},
 		),
 		.None
+}
+
+openai_stream_tool_state_destroy :: proc(state: ^OpenAI_Stream_Tool_State) {
+	for &call in state.calls {
+		tool_call_destroy(&call)
+	}
+	delete(state.calls)
+	state^ = {}
 }
 
 parse_openai_models_response :: proc(

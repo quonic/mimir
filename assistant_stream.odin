@@ -1,6 +1,7 @@
 package main
 
 import "ai"
+import "core:encoding/json"
 import "core:mem"
 import "core:strings"
 import "core:sync"
@@ -19,6 +20,23 @@ Assistant_Stream_State :: struct {
 	finished:        bool,
 	cancelRequested: bool,
 	canceled:        bool,
+	toolCalls:       [dynamic]ai.Tool_Call,
+}
+
+AI_Tool_Call_Arguments :: struct {
+	file_path:         string,
+	directory_path:    string,
+	start_line:        string,
+	end_line:          string,
+	content:           string,
+	overwrite:         string,
+	command:           string,
+	working_directory: string,
+	timeout:           int,
+	capture_output:    bool,
+	env_vars:          []string,
+	shell:             string,
+	mcp_server:        string,
 }
 
 Assistant_Stream_Worker :: struct {
@@ -114,7 +132,7 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 
 app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 	if !state.stream.active {
-		return false
+		return app_process_pending_stream_tool_calls(state)
 	}
 
 	dirty := app_sync_assistant_history_entry(state)
@@ -158,7 +176,7 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 		state.historyRenderOnly = false
 		state.stream.active = false
 		app_clear_assistant_stream_buffers(&state.stream)
-		dirty = true
+		dirty = app_process_pending_stream_tool_calls(state) || true
 	}
 
 	return dirty
@@ -179,6 +197,7 @@ app_cancel_assistant_stream :: proc(state: ^App_State) {
 app_destroy_assistant_stream :: proc(state: ^App_State) {
 	if !state.stream.active {
 		app_clear_assistant_stream_buffers(&state.stream)
+		app_clear_assistant_stream_tool_calls(&state.stream)
 		return
 	}
 
@@ -195,6 +214,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	}
 	state.stream.active = false
 	app_clear_assistant_stream_buffers(&state.stream)
+	app_clear_assistant_stream_tool_calls(&state.stream)
 }
 
 assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
@@ -242,6 +262,10 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 			stream.finishReason = strings.clone(delta.finishReason, stream.bufferAllocator)
 		}
 
+		if delta.hasToolCall {
+			append(&stream.toolCalls, ai.tool_call_clone(delta.toolCall, stream.bufferAllocator))
+		}
+
 		if delta.done && stream.cancelRequested {
 			stream.canceled = true
 		}
@@ -270,6 +294,98 @@ app_build_ai_messages :: proc(
 		)
 	}
 	return messages
+}
+
+app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
+	if state.mode == .Approval || !state.dispatcherReady {
+		return false
+	}
+
+	queuedCall: ai.Tool_Call
+	hasQueuedCall := false
+	if sync.mutex_guard(&state.stream.mutex) {
+		if len(state.stream.toolCalls) > 0 {
+			queuedCall = ai.tool_call_clone(
+				state.stream.toolCalls[0],
+				state.stream.bufferAllocator,
+			)
+			ai.tool_call_destroy(&state.stream.toolCalls[0], state.stream.bufferAllocator)
+			ordered_remove(&state.stream.toolCalls, 0)
+			hasQueuedCall = true
+		}
+	}
+	if !hasQueuedCall {
+		return false
+	}
+	defer ai.tool_call_destroy(&queuedCall, state.stream.bufferAllocator)
+
+	call, callOK := app_tool_call_from_ai(queuedCall, state.dispatcher.allocator)
+	if !callOK {
+		append_history(state, .Tool, "Tool call arguments are invalid.")
+		state.status = "Tool call rejected"
+		return true
+	}
+	defer tool_call_destroy(&call, state.dispatcher.allocator)
+
+	decision := tool_dispatch_decide(&state.dispatcher, call)
+	switch decision {
+	case .Approval_Required:
+		if !app_show_approval(state, call) {
+			append_history(state, .Tool, "Tool call requires approval.")
+			state.status = "Tool call rejected"
+		}
+	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
+		output := tool_dispatch_execute(&state.dispatcher, call)
+		append_history(state, .Tool, output)
+		state.status = "Tool call completed"
+	case .Denied:
+		append_history(state, .Tool, "Permission denied.")
+		state.status = "Tool call denied"
+	}
+	return true
+}
+
+app_tool_call_from_ai :: proc(
+	aiCall: ai.Tool_Call,
+	allocator := context.allocator,
+) -> (
+	Tool_Call,
+	bool,
+) {
+	if aiCall.name == "" || aiCall.arguments == "" {
+		return Tool_Call{}, false
+	}
+
+	arguments: AI_Tool_Call_Arguments
+	decodeErr := json.unmarshal_string(
+		aiCall.arguments,
+		&arguments,
+		allocator = context.temp_allocator,
+	)
+	if decodeErr != nil {
+		return Tool_Call{}, false
+	}
+
+	call := Tool_Call {
+		id               = strings.clone(aiCall.name, allocator),
+		filePath         = strings.clone(arguments.file_path, allocator),
+		directoryPath    = strings.clone(arguments.directory_path, allocator),
+		startLine        = strings.clone(arguments.start_line, allocator),
+		endLine          = strings.clone(arguments.end_line, allocator),
+		content          = strings.clone(arguments.content, allocator),
+		overwrite        = strings.clone(arguments.overwrite, allocator),
+		command          = strings.clone(arguments.command, allocator),
+		workingDirectory = strings.clone(arguments.working_directory, allocator),
+		timeout          = arguments.timeout,
+		captureOutput    = arguments.capture_output,
+		shell            = strings.clone(arguments.shell, allocator),
+		mcpServer        = strings.clone(arguments.mcp_server, allocator),
+		environment      = make([dynamic]string, 0, len(arguments.env_vars), allocator),
+	}
+	for entry in arguments.env_vars {
+		append(&call.environment, strings.clone(entry, allocator))
+	}
+	return call, true
 }
 
 app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, bool) {
@@ -317,6 +433,7 @@ app_append_assistant_stream_error :: proc(state: ^App_State, message: string) {
 
 app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 	app_clear_assistant_stream_buffers(stream)
+	app_clear_assistant_stream_tool_calls(stream)
 	stream.assistantIndex = -1
 	stream.err = .None
 	stream.finished = false
@@ -333,6 +450,13 @@ app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
 		delete(stream.finishReason, stream.bufferAllocator)
 		stream.finishReason = ""
 	}
+}
+
+app_clear_assistant_stream_tool_calls :: proc(stream: ^Assistant_Stream_State) {
+	for &call in stream.toolCalls {
+		ai.tool_call_destroy(&call, stream.bufferAllocator)
+	}
+	delete(stream.toolCalls)
 }
 
 app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
