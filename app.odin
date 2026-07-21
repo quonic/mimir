@@ -632,14 +632,16 @@ app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
 		return false
 	}
 
-	prepared := tool_dispatch_prepare(&state.dispatcher, call)
+	approvalCall := tool_call_clone(call, state.dispatcher.allocator)
+	prepared := tool_dispatch_prepare(&state.dispatcher, approvalCall)
 	if prepared.decision != .Approval_Required || !prepared.actionOK {
 		tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
+		tool_call_destroy(&approvalCall, state.dispatcher.allocator)
 		return false
 	}
 
 	app_clear_approval(state)
-	state.approval.call = tool_call_clone(call, state.dispatcher.allocator)
+	state.approval.call = approvalCall
 	state.approval.callOwned = true
 	state.approval.prepared = prepared
 	state.approval.preparedOwned = true

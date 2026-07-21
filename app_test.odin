@@ -63,6 +63,30 @@ test_approval_display_text_escapes_terminal_controls :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-1",
+			name = "run_command",
+			arguments = `{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
+		},
+		context.allocator,
+	)
+	assert(callOK, "expected command tool call to decode")
+	assert(app_show_approval(&state, call), "expected command call to open approval modal")
+	tool_call_destroy(&call, context.allocator)
+
+	sequence := render_app_frame_sequence(&state, 18, 80, context.temp_allocator)
+	assert(
+		contains_string(sequence, `echo "Test Shell command"`),
+		"expected approval modal to display retained command text",
+	)
+	_ = t
+}
+
+@(test)
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
