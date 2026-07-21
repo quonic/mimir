@@ -131,18 +131,15 @@ build_openai_chat_request :: proc(
 		}
 
 		wireMessage := OpenAI_Message {
-			role = message_role_to_string(msg.role),
-			content = msg.content,
+			role       = message_role_to_string(msg.role),
+			content    = msg.content,
 			tool_calls = make([]OpenAI_Tool_Call, len(msg.toolCalls), allocator),
 		}
 		for call, idx in msg.toolCalls {
 			wireMessage.tool_calls[idx] = OpenAI_Tool_Call {
 				id = call.id,
 				type = "function",
-				function = OpenAI_Tool_Call_Function {
-					name = call.name,
-					arguments = call.arguments,
-				},
+				function = OpenAI_Tool_Call_Function{name = call.name, arguments = call.arguments},
 			}
 		}
 		append(&wire.messages, wireMessage)

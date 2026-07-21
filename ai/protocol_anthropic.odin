@@ -132,7 +132,10 @@ build_anthropic_request :: proc(
 	return wire
 }
 
-anthropic_message_content :: proc(msg: Message, allocator := context.temp_allocator) -> json.Value {
+anthropic_message_content :: proc(
+	msg: Message,
+	allocator := context.temp_allocator,
+) -> json.Value {
 	if msg.role != .Assistant && msg.role != .Tool {
 		return json.String(msg.content)
 	}

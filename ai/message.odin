@@ -133,9 +133,9 @@ tool_result_clone :: proc(result: Tool_Result, allocator := context.allocator) -
 
 message_clone :: proc(message: Message, allocator := context.allocator) -> Message {
 	clone := Message {
-		role = message.role,
-		content = strings.clone(message.content, allocator),
-		toolCalls = make([]Tool_Call, len(message.toolCalls), allocator),
+		role        = message.role,
+		content     = strings.clone(message.content, allocator),
+		toolCalls   = make([]Tool_Call, len(message.toolCalls), allocator),
 		toolResults = make([]Tool_Result, len(message.toolResults), allocator),
 	}
 	for call, index in message.toolCalls {

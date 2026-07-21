@@ -138,22 +138,17 @@ test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 @(test)
 test_openai_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 	request := Chat_Request {
-		model = "test-model",
+		model    = "test-model",
 		messages = []Message {
 			{
 				role = .Assistant,
-				toolCalls = []Tool_Call {{
-					id = "call-1",
-					name = "read_file",
-					arguments = `{"file_path":"main.odin"}`,
-				}},
+				toolCalls = []Tool_Call {
+					{id = "call-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
 			},
 			{
 				role = .Tool,
-				toolResults = []Tool_Result {{
-					toolCallID = "call-1",
-					content = "package main",
-				}},
+				toolResults = []Tool_Result{{toolCallID = "call-1", content = "package main"}},
 			},
 		},
 	}
@@ -312,22 +307,17 @@ test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 @(test)
 test_anthropic_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 	request := Chat_Request {
-		model = "claude-test",
+		model    = "claude-test",
 		messages = []Message {
 			{
 				role = .Assistant,
-				toolCalls = []Tool_Call {{
-					id = "tool-1",
-					name = "read_file",
-					arguments = `{"file_path":"main.odin"}`,
-				}},
+				toolCalls = []Tool_Call {
+					{id = "tool-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
 			},
 			{
 				role = .Tool,
-				toolResults = []Tool_Result {{
-					toolCallID = "tool-1",
-					content = "package main",
-				}},
+				toolResults = []Tool_Result{{toolCallID = "tool-1", content = "package main"}},
 			},
 		},
 	}

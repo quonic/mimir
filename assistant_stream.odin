@@ -10,20 +10,20 @@ import "core:thread"
 MAX_TOOL_CONTINUATIONS :: 8
 
 Assistant_Stream_State :: struct {
-	mutex:           sync.Mutex,
-	bufferAllocator: mem.Allocator,
-	worker:          ^thread.Thread,
-	workerData:      ^Assistant_Stream_Worker,
-	assistantIndex:  int,
-	partial:         string,
-	finishReason:    string,
-	err:             ai.AI_Error,
-	active:          bool,
-	finished:        bool,
-	cancelRequested: bool,
-	canceled:        bool,
-	toolCalls:       [dynamic]ai.Tool_Call,
-	conversation:    [dynamic]ai.Message,
+	mutex:             sync.Mutex,
+	bufferAllocator:   mem.Allocator,
+	worker:            ^thread.Thread,
+	workerData:        ^Assistant_Stream_Worker,
+	assistantIndex:    int,
+	partial:           string,
+	finishReason:      string,
+	err:               ai.AI_Error,
+	active:            bool,
+	finished:          bool,
+	cancelRequested:   bool,
+	canceled:          bool,
+	toolCalls:         [dynamic]ai.Tool_Call,
+	conversation:      [dynamic]ai.Message,
 	continuationCount: int,
 }
 
@@ -414,8 +414,8 @@ app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {
 	}
 
 	message := ai.Message {
-		role = .Assistant,
-		content = strings.clone(state.stream.partial, state.stream.bufferAllocator),
+		role      = .Assistant,
+		content   = strings.clone(state.stream.partial, state.stream.bufferAllocator),
 		toolCalls = make(
 			[]ai.Tool_Call,
 			len(state.stream.toolCalls),
@@ -439,13 +439,13 @@ app_append_tool_result :: proc(
 		return
 	}
 	message := ai.Message {
-		role = .Tool,
+		role        = .Tool,
 		toolResults = make([]ai.Tool_Result, 1, state.stream.bufferAllocator),
 	}
 	message.toolResults[0] = ai.Tool_Result {
 		toolCallID = strings.clone(toolCallID, state.stream.bufferAllocator),
-		content = strings.clone(content, state.stream.bufferAllocator),
-		isError = isError,
+		content    = strings.clone(content, state.stream.bufferAllocator),
+		isError    = isError,
 	}
 	append(&state.stream.conversation, message)
 }
