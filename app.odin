@@ -191,6 +191,7 @@ app_init_with_home :: proc(
 	state: App_State
 	state.mode = .Chat
 	state.stream.bufferAllocator = allocator
+	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.input = input_buffer_init(allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)

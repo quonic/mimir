@@ -38,7 +38,6 @@ read_file_tool_proc := proc(file_path: string, start_line: string, end_line: str
 		end_line_int = len(lines)
 	}
 	joined_lines := strings.join(lines[start_line_int:end_line_int], "\n")
-	defer delete(joined_lines, context.allocator)
 	return joined_lines
 
 }
@@ -169,23 +168,18 @@ list_directory_tool_proc := proc(directory_path: string) -> string {
 		)
 	}
 	defer delete(json_data, context.allocator)
-	cloned_json := strings.clone(string(json_data), context.allocator)
-	defer delete(cloned_json, context.allocator)
-	return cloned_json
+	return strings.clone(string(json_data), context.allocator)
 }
 
 get_file_info_tool_proc := proc(file_path: string) -> string {
-	file_info, err := os.read_directory_by_path(file_path, 1, context.allocator)
+	file_info, err := os.stat(file_path, context.allocator)
 	if err != nil {
 		return fmt.aprintf("get_file_info_tool: Error reading file info: %s", err)
 	}
-	defer os.file_info_slice_delete(file_info, context.allocator)
 	json_data, marshal_err := json.marshal(file_info, allocator = context.allocator)
 	if marshal_err != nil {
 		return fmt.aprintf("get_file_info_tool: Error converting results to JSON: %s", marshal_err)
 	}
 	defer delete(json_data, context.allocator)
-	cloned_json := strings.clone(string(json_data), context.allocator)
-	defer delete(cloned_json, context.allocator)
-	return cloned_json
+	return strings.clone(string(json_data), context.allocator)
 }

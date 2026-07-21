@@ -8,23 +8,25 @@ import "core:sync"
 import "core:thread"
 
 MAX_TOOL_CONTINUATIONS :: 8
+MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 
 Assistant_Stream_State :: struct {
-	mutex:             sync.Mutex,
-	bufferAllocator:   mem.Allocator,
-	worker:            ^thread.Thread,
-	workerData:        ^Assistant_Stream_Worker,
-	assistantIndex:    int,
-	partial:           string,
-	finishReason:      string,
-	err:               ai.AI_Error,
-	active:            bool,
-	finished:          bool,
-	cancelRequested:   bool,
-	canceled:          bool,
-	toolCalls:         [dynamic]ai.Tool_Call,
-	conversation:      [dynamic]ai.Message,
-	continuationCount: int,
+	mutex:                   sync.Mutex,
+	bufferAllocator:         mem.Allocator,
+	worker:                  ^thread.Thread,
+	workerData:              ^Assistant_Stream_Worker,
+	assistantIndex:          int,
+	partialBuffer:           [dynamic]byte,
+	lastSyncedPartialLength: int,
+	finishReason:            string,
+	err:                     ai.AI_Error,
+	active:                  bool,
+	finished:                bool,
+	cancelRequested:         bool,
+	canceled:                bool,
+	toolCalls:               [dynamic]ai.Tool_Call,
+	conversation:            [dynamic]ai.Message,
+	continuationCount:       int,
 }
 
 AI_Tool_Call_Arguments :: struct {
@@ -162,16 +164,10 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 				state.status = "Assistant stream canceled"
 			case state.stream.err != .None:
 				errorText := assistant_stream_error_text(state.stream.err)
-				if state.stream.partial == "" {
-					state.stream.partial = strings.clone(errorText, state.stream.bufferAllocator)
-				} else {
-					combined := strings.concatenate(
-						{state.stream.partial, "\n\n", errorText},
-						state.stream.bufferAllocator,
-					)
-					delete(state.stream.partial, state.stream.bufferAllocator)
-					state.stream.partial = combined
+				if len(state.stream.partialBuffer) > 0 {
+					assistant_stream_append_partial(&state.stream, "\n\n")
 				}
+				assistant_stream_append_partial(&state.stream, errorText)
 				state.status = "Assistant stream failed"
 			case:
 				state.status = "Assistant response complete"
@@ -259,14 +255,7 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 		}
 
 		if delta.content != "" {
-			combined := strings.concatenate(
-				{stream.partial, delta.content},
-				stream.bufferAllocator,
-			)
-			if stream.partial != "" {
-				delete(stream.partial, stream.bufferAllocator)
-			}
-			stream.partial = combined
+			assistant_stream_append_partial(stream, delta.content)
 		}
 
 		if delta.finishReason != "" {
@@ -355,6 +344,22 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
 		output := tool_dispatch_execute(&state.dispatcher, call)
+		outputOwned := app_tool_output_is_owned(call.id)
+		if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
+			truncatedOutput := strings.concatenate(
+				{
+					output[:MAX_RETAINED_TOOL_OUTPUT_BYTES],
+					"\n\n[Tool output truncated after 64 KiB.]",
+				},
+				state.dispatcher.allocator,
+			)
+			if outputOwned {
+				delete(output, state.dispatcher.allocator)
+			}
+			output = truncatedOutput
+			outputOwned = true
+		}
+		defer app_destroy_tool_output_if_owned(output, outputOwned, state.dispatcher.allocator)
 		append_history(state, .Tool, output)
 		app_append_tool_result(state, call.callID, output, false)
 		state.status = "Tool call completed"
@@ -418,7 +423,10 @@ app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {
 
 	message := ai.Message {
 		role      = .Assistant,
-		content   = strings.clone(state.stream.partial, state.stream.bufferAllocator),
+		content   = strings.clone(
+			string(state.stream.partialBuffer[:]),
+			state.stream.bufferAllocator,
+		),
 		toolCalls = make(
 			[]ai.Tool_Call,
 			len(state.stream.toolCalls),
@@ -491,7 +499,11 @@ app_sync_assistant_history_entry :: proc(state: ^App_State) -> bool {
 
 	partial := ""
 	if sync.mutex_guard(&state.stream.mutex) {
-		partial = strings.clone(state.stream.partial, context.temp_allocator)
+		if len(state.stream.partialBuffer) == state.stream.lastSyncedPartialLength {
+			return false
+		}
+		partial = strings.clone(string(state.stream.partialBuffer[:]), context.temp_allocator)
+		state.stream.lastSyncedPartialLength = len(state.stream.partialBuffer)
 	}
 
 	entry := &state.history[state.stream.assistantIndex]
@@ -517,6 +529,7 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 	app_clear_assistant_stream_buffers(stream)
 	app_clear_assistant_stream_tool_calls(stream)
 	stream.assistantIndex = -1
+	stream.lastSyncedPartialLength = 0
 	stream.err = .None
 	stream.finished = false
 	stream.cancelRequested = false
@@ -524,13 +537,30 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 }
 
 app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
-	if stream.partial != "" {
-		delete(stream.partial, stream.bufferAllocator)
-		stream.partial = ""
-	}
+	delete(stream.partialBuffer)
+	stream.partialBuffer = make([dynamic]byte, 0, 0, stream.bufferAllocator)
+	stream.lastSyncedPartialLength = 0
 	if stream.finishReason != "" {
 		delete(stream.finishReason, stream.bufferAllocator)
 		stream.finishReason = ""
+	}
+}
+
+assistant_stream_append_partial :: proc(stream: ^Assistant_Stream_State, content: string) {
+	append(&stream.partialBuffer, ..transmute([]byte)content)
+}
+
+app_tool_output_is_owned :: proc(toolID: string) -> bool {
+	switch toolID {
+	case "read_file", "list_directory", "get_file_info", "list_available_shells":
+		return true
+	}
+	return false
+}
+
+app_destroy_tool_output_if_owned :: proc(output: string, owned: bool, allocator: mem.Allocator) {
+	if owned {
+		delete(output, allocator)
 	}
 }
 

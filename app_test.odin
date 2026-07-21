@@ -166,7 +166,7 @@ test_tool_call_queue_reinitializes_with_stream_allocator :: proc(t: ^testing.T) 
 test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	state.stream.partial = strings.clone("I will inspect the file.", context.allocator)
+	assistant_stream_append_partial(&state.stream, "I will inspect the file.")
 	append(
 		&state.stream.toolCalls,
 		ai.Tool_Call {
@@ -611,7 +611,7 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 
 	assert(app_scroll_history_page(&state, 1), "expected history to remain scrollable")
 	state.stream.assistantIndex = len(state.history) - 1
-	state.stream.partial = strings.clone("streamed entry", context.allocator)
+	assistant_stream_append_partial(&state.stream, "streamed entry")
 	assert(app_sync_assistant_history_entry(&state), "expected streamed content to update history")
 	assert(
 		state.historyScrollOffset == 0,
