@@ -68,14 +68,10 @@ run_command_tool_proc := proc(
 	command: string,
 	working_directory: string = "",
 	timeout: int = 0,
-	shell: string = "",
 ) -> string {
-	shell := shell
+	shell := get_default_shell()
 	if shell == "" {
-		shell = get_default_shell()
-		if shell == "" {
-			return fmt.aprintf("run_command_tool: Unsupported OS: %s", ODIN_OS)
-		}
+		return fmt.aprintf("run_command_tool: Unsupported OS: %s", ODIN_OS)
 	}
 
 	proc_desc := os.Process_Desc {

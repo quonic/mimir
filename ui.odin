@@ -145,9 +145,6 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			displayPath := approval_display_text(action.targetPath, context.temp_allocator)
 			write_clipped_line(batch, row, interior.left_column, width, displayPath)
 		case .Execute:
-			displayShell := approval_display_text(action.shell, context.temp_allocator)
-			write_clipped_line(batch, row, interior.left_column, width, displayShell)
-			row += 1
 			displayCommand := approval_display_text(action.command, context.temp_allocator)
 			write_clipped_line(batch, row, interior.left_column, width, displayCommand)
 			row += 1
