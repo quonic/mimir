@@ -53,6 +53,16 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_display_text_escapes_terminal_controls :: proc(t: ^testing.T) {
+	display := approval_display_text("printf 'one\ntwo'\x1b[2J\t", context.temp_allocator)
+	assert(
+		display == "printf 'one\\ntwo'\\e[2J\\t",
+		"expected terminal controls to be escaped for approval display",
+	)
+	_ = t
+}
+
+@(test)
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
@@ -115,6 +125,21 @@ test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
 	assert(len(resultMessage.toolResults) == 1, "expected one typed tool result")
 	assert(resultMessage.toolResults[0].toolCallID == "call-1", "expected call ID")
 	assert(resultMessage.toolResults[0].content == "package main", "expected tool output")
+	_ = t
+}
+
+@(test)
+test_app_stream_conversation_uses_app_allocator :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	history := []History_Entry{{role = .User, content = "Read main.odin"}}
+
+	state.stream.conversation = app_build_ai_messages(history, state.stream.bufferAllocator)
+	app_append_tool_result(&state, "call-1", "package main", false)
+
+	assert(len(state.stream.conversation) == 2, "expected retained tool conversation")
+	app_clear_assistant_stream_conversation(&state.stream)
+	assert(len(state.stream.conversation) == 0, "expected cleared retained tool conversation")
 	_ = t
 }
 

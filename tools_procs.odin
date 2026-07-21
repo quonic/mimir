@@ -33,10 +33,13 @@ read_file_tool_proc := proc(file_path: string, start_line: string, end_line: str
 	}
 	// If start_line or end_line are specified, extract the relevant lines
 	lines := strings.split(string(data), "\n")
+	defer delete(lines, context.allocator)
 	if end_line_int == 0 || end_line_int > len(lines) {
 		end_line_int = len(lines)
 	}
-	return strings.join(lines[start_line_int:end_line_int], "\n")
+	joined_lines := strings.join(lines[start_line_int:end_line_int], "\n")
+	defer delete(joined_lines, context.allocator)
+	return joined_lines
 
 }
 
@@ -147,7 +150,9 @@ list_available_shells_tool_proc := proc() -> string {
 	} else {
 		return fmt.aprintf("list_available_shells_tool: Unsupported OS: %s", ODIN_OS)
 	}
-	return strings.join(shells[:], ", ")
+	joined_shells := strings.join(shells[:], ", ")
+	defer delete(joined_shells, context.allocator)
+	return joined_shells
 }
 
 list_directory_tool_proc := proc(directory_path: string) -> string {
@@ -164,7 +169,9 @@ list_directory_tool_proc := proc(directory_path: string) -> string {
 		)
 	}
 	defer delete(json_data, context.allocator)
-	return strings.clone(string(json_data), context.allocator)
+	cloned_json := strings.clone(string(json_data), context.allocator)
+	defer delete(cloned_json, context.allocator)
+	return cloned_json
 }
 
 get_file_info_tool_proc := proc(file_path: string) -> string {
@@ -178,5 +185,7 @@ get_file_info_tool_proc := proc(file_path: string) -> string {
 		return fmt.aprintf("get_file_info_tool: Error converting results to JSON: %s", marshal_err)
 	}
 	defer delete(json_data, context.allocator)
-	return strings.clone(string(json_data), context.allocator)
+	cloned_json := strings.clone(string(json_data), context.allocator)
+	defer delete(cloned_json, context.allocator)
+	return cloned_json
 }

@@ -142,15 +142,23 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 		row += 1
 		switch action.effect {
 		case .Read, .Write:
-			write_clipped_line(batch, row, interior.left_column, width, action.targetPath)
+			displayPath := approval_display_text(action.targetPath, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayPath)
 		case .Execute:
-			write_clipped_line(batch, row, interior.left_column, width, action.shell)
+			displayShell := approval_display_text(action.shell, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayShell)
 			row += 1
-			write_clipped_line(batch, row, interior.left_column, width, action.command)
+			displayCommand := approval_display_text(action.command, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayCommand)
 			row += 1
-			write_clipped_line(batch, row, interior.left_column, width, action.workingDirectory)
+			displayDirectory := approval_display_text(
+				action.workingDirectory,
+				context.temp_allocator,
+			)
+			write_clipped_line(batch, row, interior.left_column, width, displayDirectory)
 		case .Remote:
-			write_clipped_line(batch, row, interior.left_column, width, action.mcpServer)
+			displayServer := approval_display_text(action.mcpServer, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayServer)
 		}
 		row += 2
 	}
@@ -182,6 +190,34 @@ approval_effect_label :: proc(effect: Permission_Effect) -> string {
 		return "Remote tool"
 	}
 	return "Tool"
+}
+
+approval_display_text :: proc(text: string, allocator := context.allocator) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	hex := "0123456789ABCDEF"
+	for index := 0; index < len(text); index += 1 {
+		value := text[index]
+		switch value {
+		case '\n':
+			strings.write_string(&builder, "\\n")
+		case '\r':
+			strings.write_string(&builder, "\\r")
+		case '\t':
+			strings.write_string(&builder, "\\t")
+		case 0x1b:
+			strings.write_string(&builder, "\\e")
+		case:
+			if value < 0x20 || value == 0x7f {
+				strings.write_string(&builder, "\\x")
+				strings.write_byte(&builder, hex[value >> 4])
+				strings.write_byte(&builder, hex[value & 0x0f])
+			} else {
+				strings.write_byte(&builder, value)
+			}
+		}
+	}
+	return strings.to_string(builder)
 }
 
 render_app_input_panel_sequence :: proc(

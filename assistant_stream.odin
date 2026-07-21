@@ -98,7 +98,10 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	}
 
 	if len(state.stream.conversation) == 0 {
-		state.stream.conversation = app_build_ai_messages(state.history[:], context.allocator)
+		state.stream.conversation = app_build_ai_messages(
+			state.history[:],
+			state.stream.bufferAllocator,
+		)
 	}
 	if len(state.stream.conversation) == 0 {
 		app_append_assistant_stream_error(state, "No chat messages to send")
@@ -544,6 +547,7 @@ app_clear_assistant_stream_conversation :: proc(stream: ^Assistant_Stream_State)
 		ai.message_destroy(&message, stream.bufferAllocator)
 	}
 	delete(stream.conversation)
+	stream.conversation = make([dynamic]ai.Message, 0, 0, stream.bufferAllocator)
 	stream.continuationCount = 0
 }
 
