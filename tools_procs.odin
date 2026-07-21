@@ -74,8 +74,12 @@ run_command_tool_proc := proc(
 	env_vars: [dynamic]string = nil,
 	shell: string = "",
 ) -> string {
+	shell := shell
 	if shell == "" {
-		return "run_command_tool: A shell is required."
+		shell = get_default_shell()
+		if shell == "" {
+			return fmt.aprintf("run_command_tool: Unsupported OS: %s", ODIN_OS)
+		}
 	}
 
 	proc_desc := os.Process_Desc {
@@ -106,6 +110,20 @@ run_command_tool_proc := proc(
 		)
 	}
 	return fmt.aprintf("{\"stdout\": \"%s\", \"stderr\": \"%s\"}", string(stdout), string(stderr))
+}
+
+get_default_shell :: proc() -> string {
+	if ODIN_OS == .Windows {
+		return "C:\\Windows\\System32\\cmd.exe"
+	} else if ODIN_OS == .Linux ||
+	   ODIN_OS == .Darwin ||
+	   ODIN_OS == .FreeBSD ||
+	   ODIN_OS == .OpenBSD ||
+	   ODIN_OS == .NetBSD {
+		return "/bin/bash"
+	} else {
+		return ""
+	}
 }
 
 list_available_shells_tool_proc := proc() -> string {
