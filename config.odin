@@ -58,11 +58,11 @@ Provider_Config :: struct {
 }
 
 Mimir_Config :: struct {
-	selectedProvider: string,
-	selectedModel:    string,
-	providers:        [dynamic]Provider_Config,
-	mcpServers:       [dynamic]MCP_Server_Config,
-	skillPaths:       [dynamic]string,
+	selectedProvider:    string,
+	selectedModel:       string,
+	providers:           [dynamic]Provider_Config,
+	mcpServers:          [dynamic]MCP_Server_Config,
+	skillPaths:          [dynamic]string,
 	allocationAllocator: mem.Allocator,
 }
 

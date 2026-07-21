@@ -1365,7 +1365,10 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 	} else if setting.id == .Provider_Endpoint {
 		if state.config.providers[setting.providerIndex].endpointOwned {
-			delete(state.config.providers[setting.providerIndex].endpoint, state.config.allocationAllocator)
+			delete(
+				state.config.providers[setting.providerIndex].endpoint,
+				state.config.allocationAllocator,
+			)
 		}
 		state.config.providers[setting.providerIndex].endpoint = strings.clone(
 			text,
@@ -1374,7 +1377,10 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		state.config.providers[setting.providerIndex].endpointOwned = true
 	} else if setting.id == .Provider_API_Key {
 		if state.config.providers[setting.providerIndex].apiKeyOwned {
-			delete(state.config.providers[setting.providerIndex].apiKey, state.config.allocationAllocator)
+			delete(
+				state.config.providers[setting.providerIndex].apiKey,
+				state.config.allocationAllocator,
+			)
 		}
 		state.config.providers[setting.providerIndex].apiKey = strings.clone(
 			text,
@@ -1383,7 +1389,10 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		state.config.providers[setting.providerIndex].apiKeyOwned = true
 	} else if setting.id == .Provider_Model {
 		if state.config.providers[setting.providerIndex].modelOwned {
-			delete(state.config.providers[setting.providerIndex].model, state.config.allocationAllocator)
+			delete(
+				state.config.providers[setting.providerIndex].model,
+				state.config.allocationAllocator,
+			)
 		}
 		state.config.providers[setting.providerIndex].model = strings.clone(
 			text,
