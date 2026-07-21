@@ -126,6 +126,7 @@ App_State :: struct {
 	historyRenderOnly:     bool,
 	config:                Mimir_Config,
 	configHome:            string,
+	workingDirectory:      string,
 	setupStep:             App_Setup_Step,
 	setupEndpoint:         string,
 	setupAPIKey:           string,
@@ -173,9 +174,14 @@ app_init_with_home :: proc(
 	}
 	state.history = make([dynamic]History_Entry, 0, 32, allocator)
 	state.configHome = strings.clone(home, context.allocator)
+	workingDirectory, workingDirectoryErr := os.get_working_directory(context.allocator)
+	if workingDirectoryErr == nil {
+		state.workingDirectory = workingDirectory
+	}
 	ai.set_raw_http_log_home(state.configHome)
 	state.config = default_ollama_config(allocator)
 	app_bootstrap_config(&state, home, probeOllama, allocator)
+	app_load_input_history(&state, allocator)
 	state.tools = builtin_tool_registry(allocator)
 	state.mcp = mcp_registry_from_config(state.config.mcpServers[:], allocator)
 	state.skills = skill_registry_init(allocator)
@@ -280,6 +286,9 @@ app_destroy :: proc(state: ^App_State) {
 	delete(state.config.skillPaths)
 	ai.set_raw_http_log_home("")
 	delete(state.configHome)
+	if state.workingDirectory != "" {
+		delete(state.workingDirectory)
+	}
 	if state.setupEndpoint != "" {
 		delete(state.setupEndpoint)
 	}
@@ -742,6 +751,51 @@ app_record_input_history :: proc(state: ^App_State, text: string) {
 	}
 	append(&state.inputHistory, strings.clone(text, context.allocator))
 	app_reset_input_history_browse(state)
+	if state.configHome != "" && state.workingDirectory != "" {
+		if save_input_history_to_file(
+			   state.configHome,
+			   state.workingDirectory,
+			   state.inputHistory[:],
+		   ) !=
+		   .None {
+			state.status = "Input history could not be saved"
+		}
+	}
+}
+
+app_load_input_history :: proc(state: ^App_State, allocator := context.allocator) {
+	if state.configHome == "" || state.workingDirectory == "" {
+		return
+	}
+
+	loaded, loadErr := load_input_history_from_file(
+		state.configHome,
+		state.workingDirectory,
+		allocator,
+	)
+	if loadErr != .None {
+		return
+	}
+	delete(state.inputHistory)
+	state.inputHistory = loaded
+}
+
+app_clear_input_history :: proc(state: ^App_State) {
+	for entry in state.inputHistory {
+		delete(entry)
+	}
+	clear(&state.inputHistory)
+	app_reset_input_history_browse(state)
+
+	if state.configHome == "" || state.workingDirectory == "" {
+		state.status = "Input history cleared"
+		return
+	}
+	if clear_input_history_file(state.configHome, state.workingDirectory) == .None {
+		state.status = "Input history cleared"
+	} else {
+		state.status = "Input history could not be cleared"
+	}
 }
 
 app_reset_input_history_browse :: proc(state: ^App_State) {
@@ -830,7 +884,7 @@ app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
 		append_history(
 			state,
 			.Assistant,
-			"Commands: /exit, /config, /help, /models, /skills, /stop",
+			"Commands: /exit, /config, /help, /models, /skills, /stop, /clear",
 		)
 		state.status = "Help displayed"
 	case .Models:
@@ -839,6 +893,8 @@ app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
 		state.status = "Skill discovery is not wired yet"
 	case .Stop:
 		app_cancel_assistant_stream(state)
+	case .Clear:
+		app_clear_input_history(state)
 	case .Unknown:
 		state.status = "Unknown command"
 	case .None:

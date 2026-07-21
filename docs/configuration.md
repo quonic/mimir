@@ -6,6 +6,15 @@ Mimir stores its main configuration file at:
 $HOME/.config/mimir/config.json
 ```
 
+Submitted input history is stored separately beneath:
+
+```text
+$HOME/.cache/mimir/history-<working-directory-hash>.json
+```
+
+Each cache file belongs to one absolute working directory. `/clear` removes
+only the history file for the directory from which Mimir is running.
+
 ## First Run
 
 At startup, Mimir probes the default native Ollama endpoint:

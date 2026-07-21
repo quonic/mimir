@@ -11,14 +11,16 @@ three parts:
 - A one-line status bar fixed to the final terminal row.
 
 Slash commands are reserved for application commands. Initial command targets
-include `/exit`, `/config`, `/help`, `/models`, `/skills`, and `/stop`.
+include `/exit`, `/config`, `/help`, `/models`, `/skills`, `/stop`, and `/clear`.
 
 ## Input and Terminal Behavior
 
 The input panel supports shell-style editing controls. Up and Down browse
-submitted input history, while Left and Right move the insertion cursor within
-the current input. The cursor is drawn inside the input panel as a blinking
-background-colored cell.
+submitted input history, which is persisted separately for each working
+directory. `/clear` removes the submitted-input history for the current working
+directory. Left and Right move the insertion cursor within the current input.
+The cursor is drawn inside the input panel as a blinking background-colored
+cell.
 
 The application enters raw mode and the alternate buffer, renders the panels,
 and restores the terminal on `/exit`, Ctrl-C, or Ctrl-D. On Linux, it reads the

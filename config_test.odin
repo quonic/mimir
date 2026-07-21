@@ -122,3 +122,66 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")
 	_ = t
 }
+
+@(test)
+test_input_history_path_is_unique_per_working_directory :: proc(t: ^testing.T) {
+	home := "/tmp/mimir-home"
+	projectA := "/tmp/project-a"
+	projectB := "/tmp/project-b"
+
+	pathA := input_history_path(home, projectA, context.temp_allocator)
+	pathARepeat := input_history_path(home, projectA, context.temp_allocator)
+	pathB := input_history_path(home, projectB, context.temp_allocator)
+
+	assert(pathA != "", "expected history path for a valid home and directory")
+	assert(pathA == pathARepeat, "expected history path to be deterministic")
+	assert(pathA != pathB, "expected working directories to have isolated history paths")
+	_ = t
+}
+
+@(test)
+test_save_load_and_clear_input_history :: proc(t: ^testing.T) {
+	home, tempErr := os.make_directory_temp("", "mimir-history-*", context.temp_allocator)
+	assert(tempErr == nil, "expected temporary home directory")
+	defer os.remove_all(home)
+
+	projectA := "/tmp/project-a"
+	projectB := "/tmp/project-b"
+	historyA := [2]string{"first entry", "quoted \"entry\"\nnext line"}
+	historyB := [1]string{"other project"}
+
+	assert(
+		save_input_history_to_file(home, projectA, historyA[:]) == .None,
+		"expected first history to save",
+	)
+	assert(
+		save_input_history_to_file(home, projectB, historyB[:]) == .None,
+		"expected second history to save",
+	)
+
+	loadedA, loadErrA := load_input_history_from_file(home, projectA, context.temp_allocator)
+	defer {
+		for entry in loadedA {
+			delete(entry)
+		}
+		delete(loadedA)
+	}
+	assert(loadErrA == .None, "expected first history to load")
+	assert(len(loadedA) == 2, "expected all first history entries")
+	assert(loadedA[1] == "quoted \"entry\"\nnext line", "expected escaped entry to round trip")
+
+	assert(clear_input_history_file(home, projectA) == .None, "expected first history to clear")
+	_, missingErr := load_input_history_from_file(home, projectA, context.temp_allocator)
+	assert(missingErr == .Not_Found, "expected cleared history file to be absent")
+
+	loadedB, loadErrB := load_input_history_from_file(home, projectB, context.temp_allocator)
+	defer {
+		for entry in loadedB {
+			delete(entry)
+		}
+		delete(loadedB)
+	}
+	assert(loadErrB == .None, "expected second history to remain")
+	assert(loadedB[0] == "other project", "expected second history to be unchanged")
+	_ = t
+}
