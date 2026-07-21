@@ -4,6 +4,7 @@ import "ai"
 import json "core:encoding/json"
 import "core:fmt"
 import "core:hash"
+import "core:mem"
 import "core:os"
 import "core:strings"
 
@@ -44,12 +45,16 @@ Mimir_Config_Wire :: struct {
 }
 
 Provider_Config :: struct {
-	name:     string,
-	type:     ai.Interface_Type,
-	endpoint: string,
-	apiKey:   string,
-	model:    string,
-	enabled:  bool,
+	name:          string,
+	type:          ai.Interface_Type,
+	endpoint:      string,
+	apiKey:        string,
+	model:         string,
+	enabled:       bool,
+	nameOwned:     bool,
+	endpointOwned: bool,
+	apiKeyOwned:   bool,
+	modelOwned:    bool,
 }
 
 Mimir_Config :: struct {
@@ -58,6 +63,7 @@ Mimir_Config :: struct {
 	providers:        [dynamic]Provider_Config,
 	mcpServers:       [dynamic]MCP_Server_Config,
 	skillPaths:       [dynamic]string,
+	allocationAllocator: mem.Allocator,
 }
 
 Config_Register_Result :: struct {
@@ -131,6 +137,39 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 		},
 	)
 	return config
+}
+
+provider_config_destroy :: proc(provider: ^Provider_Config, allocator: mem.Allocator) {
+	if provider.nameOwned && provider.name != "" {
+		delete(provider.name, allocator)
+	}
+	if provider.endpointOwned && provider.endpoint != "" {
+		delete(provider.endpoint, allocator)
+	}
+	if provider.apiKeyOwned && provider.apiKey != "" {
+		delete(provider.apiKey, allocator)
+	}
+	if provider.modelOwned && provider.model != "" {
+		delete(provider.model, allocator)
+	}
+}
+
+config_destroy :: proc(config: ^Mimir_Config) {
+	if config.selectedProvider != "" {
+		delete(config.selectedProvider, config.allocationAllocator)
+	}
+	if config.selectedModel != "" {
+		delete(config.selectedModel, config.allocationAllocator)
+	}
+	for &provider in config.providers {
+		provider_config_destroy(&provider, config.allocationAllocator)
+	}
+	for path in config.skillPaths {
+		delete(path, config.allocationAllocator)
+	}
+	delete(config.providers)
+	delete(config.mcpServers)
+	delete(config.skillPaths)
 }
 
 register_config_interfaces :: proc(
@@ -207,6 +246,7 @@ parse_config_from_json :: proc(
 	}
 
 	config: Mimir_Config
+	config.allocationAllocator = allocator
 	config.selectedProvider = strings.clone(wire.selectedProvider, allocator)
 	config.selectedModel = strings.clone(wire.selectedModel, allocator)
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
@@ -216,6 +256,7 @@ parse_config_from_json :: proc(
 	for provider in wire.providers {
 		providerType, ok := provider_type_from_string(provider.type)
 		if !ok || provider.name == "" {
+			config_destroy(&config)
 			return Mimir_Config{}, .Invalid_JSON
 		}
 		append(
@@ -227,6 +268,10 @@ parse_config_from_json :: proc(
 				apiKey = strings.clone(provider.apiKey, allocator),
 				model = strings.clone(provider.model, allocator),
 				enabled = provider.enabled,
+				nameOwned = true,
+				endpointOwned = true,
+				apiKeyOwned = true,
+				modelOwned = true,
 			},
 		)
 	}

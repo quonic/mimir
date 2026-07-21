@@ -1,12 +1,14 @@
 package main
 
 import "ai"
+import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
 
 Assistant_Stream_State :: struct {
 	mutex:           sync.Mutex,
+	bufferAllocator: mem.Allocator,
 	worker:          ^thread.Thread,
 	workerData:      ^Assistant_Stream_Worker,
 	assistantIndex:  int,
@@ -109,6 +111,7 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 		state.stream.worker = nil
 
 		if state.stream.workerData != nil {
+			app_destroy_assistant_stream_worker(state.stream.workerData)
 			free(state.stream.workerData)
 			state.stream.workerData = nil
 		}
@@ -120,13 +123,13 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 			case state.stream.err != .None:
 				errorText := assistant_stream_error_text(state.stream.err)
 				if state.stream.partial == "" {
-					state.stream.partial = strings.clone(errorText, context.allocator)
+					state.stream.partial = strings.clone(errorText, state.stream.bufferAllocator)
 				} else {
 					combined := strings.concatenate(
 						{state.stream.partial, "\n\n", errorText},
-						context.allocator,
+						state.stream.bufferAllocator,
 					)
-					delete(state.stream.partial)
+					delete(state.stream.partial, state.stream.bufferAllocator)
 					state.stream.partial = combined
 				}
 				state.status = "Assistant stream failed"
@@ -170,6 +173,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 		state.stream.worker = nil
 	}
 	if state.stream.workerData != nil {
+		app_destroy_assistant_stream_worker(state.stream.workerData)
 		free(state.stream.workerData)
 		state.stream.workerData = nil
 	}
@@ -194,7 +198,6 @@ assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 		}
 	}
 
-	app_destroy_assistant_stream_worker(worker)
 }
 
 assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: rawptr) -> bool {
@@ -206,18 +209,21 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 		}
 
 		if delta.content != "" {
-			combined := strings.concatenate({stream.partial, delta.content}, context.allocator)
+			combined := strings.concatenate(
+				{stream.partial, delta.content},
+				stream.bufferAllocator,
+			)
 			if stream.partial != "" {
-				delete(stream.partial)
+				delete(stream.partial, stream.bufferAllocator)
 			}
 			stream.partial = combined
 		}
 
 		if delta.finishReason != "" {
 			if stream.finishReason != "" {
-				delete(stream.finishReason)
+				delete(stream.finishReason, stream.bufferAllocator)
 			}
-			stream.finishReason = strings.clone(delta.finishReason, context.allocator)
+			stream.finishReason = strings.clone(delta.finishReason, stream.bufferAllocator)
 		}
 
 		if delta.done && stream.cancelRequested {
@@ -304,9 +310,11 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 
 app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
 	if stream.partial != "" {
+		delete(stream.partial, stream.bufferAllocator)
 		stream.partial = ""
 	}
 	if stream.finishReason != "" {
+		delete(stream.finishReason, stream.bufferAllocator)
 		stream.finishReason = ""
 	}
 }

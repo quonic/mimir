@@ -125,6 +125,7 @@ App_State :: struct {
 	historyScrollOffset:   int,
 	historyRenderOnly:     bool,
 	config:                Mimir_Config,
+	configStringsOwned:    bool,
 	configHome:            string,
 	workingDirectory:      string,
 	setupStep:             App_Setup_Step,
@@ -163,6 +164,7 @@ app_init_with_home :: proc(
 ) -> App_State {
 	state: App_State
 	state.mode = .Chat
+	state.stream.bufferAllocator = context.allocator
 	state.input = input_buffer_init(allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
@@ -202,10 +204,15 @@ app_bootstrap_config :: proc(
 		loaded, loadErr := load_config_from_file(home, allocator)
 		switch loadErr {
 		case .None:
-			delete(state.config.providers)
-			delete(state.config.mcpServers)
-			delete(state.config.skillPaths)
+			if state.configStringsOwned {
+				config_destroy(&state.config)
+			} else {
+				delete(state.config.providers)
+				delete(state.config.mcpServers)
+				delete(state.config.skillPaths)
+			}
 			state.config = loaded
+			state.configStringsOwned = true
 			state.status = "Config loaded"
 		case .Not_Found:
 			if !probeOllama || !app_create_default_config_from_ollama(state, home, allocator) {
@@ -281,9 +288,16 @@ app_destroy :: proc(state: ^App_State) {
 		delete(entry.content)
 	}
 	delete(state.history)
-	delete(state.config.providers)
-	delete(state.config.mcpServers)
-	delete(state.config.skillPaths)
+	if state.configStringsOwned {
+		config_destroy(&state.config)
+	} else {
+		for &provider in state.config.providers {
+			provider_config_destroy(&provider, context.allocator)
+		}
+		delete(state.config.providers)
+		delete(state.config.mcpServers)
+		delete(state.config.skillPaths)
+	}
 	ai.set_raw_http_log_home("")
 	delete(state.configHome)
 	if state.workingDirectory != "" {
@@ -938,10 +952,13 @@ app_complete_setup :: proc(state: ^App_State) {
 	delete(state.config.skillPaths)
 	state.config = default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
+	state.config.providers[0].endpointOwned = true
 	state.config.providers[0].apiKey = strings.clone(state.setupAPIKey, context.allocator)
+	state.config.providers[0].apiKeyOwned = true
 	if len(models) > 0 {
 		state.config.selectedModel = strings.clone(models[0], context.allocator)
 		state.config.providers[0].model = strings.clone(models[0], context.allocator)
+		state.config.providers[0].modelOwned = true
 	}
 
 	ai.clear_interfaces()
@@ -1335,6 +1352,10 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 		oldName := state.config.providers[setting.providerIndex].name
 		state.config.providers[setting.providerIndex].name = strings.clone(text, context.allocator)
+		if state.config.providers[setting.providerIndex].nameOwned {
+			delete(oldName, state.config.allocationAllocator)
+		}
+		state.config.providers[setting.providerIndex].nameOwned = true
 		if state.config.selectedProvider == oldName {
 			if state.modelProviderOwned && state.config.selectedProvider != "" {
 				delete(state.config.selectedProvider)
@@ -1343,20 +1364,32 @@ app_commit_config_edit :: proc(state: ^App_State) {
 			state.modelProviderOwned = true
 		}
 	} else if setting.id == .Provider_Endpoint {
+		if state.config.providers[setting.providerIndex].endpointOwned {
+			delete(state.config.providers[setting.providerIndex].endpoint, state.config.allocationAllocator)
+		}
 		state.config.providers[setting.providerIndex].endpoint = strings.clone(
 			text,
 			context.allocator,
 		)
+		state.config.providers[setting.providerIndex].endpointOwned = true
 	} else if setting.id == .Provider_API_Key {
+		if state.config.providers[setting.providerIndex].apiKeyOwned {
+			delete(state.config.providers[setting.providerIndex].apiKey, state.config.allocationAllocator)
+		}
 		state.config.providers[setting.providerIndex].apiKey = strings.clone(
 			text,
 			context.allocator,
 		)
+		state.config.providers[setting.providerIndex].apiKeyOwned = true
 	} else if setting.id == .Provider_Model {
+		if state.config.providers[setting.providerIndex].modelOwned {
+			delete(state.config.providers[setting.providerIndex].model, state.config.allocationAllocator)
+		}
 		state.config.providers[setting.providerIndex].model = strings.clone(
 			text,
 			context.allocator,
 		)
+		state.config.providers[setting.providerIndex].modelOwned = true
 		if state.config.providers[setting.providerIndex].name == state.config.selectedProvider {
 			if state.modelNameOwned && state.config.selectedModel != "" {
 				delete(state.config.selectedModel)
@@ -1389,6 +1422,8 @@ app_add_config_provider :: proc(state: ^App_State) {
 			name = strings.clone(name, context.allocator),
 			type = .Ollama,
 			endpoint = strings.clone(DEFAULT_CONFIG_ENDPOINT, context.allocator),
+			nameOwned = true,
+			endpointOwned = true,
 		},
 	)
 	state.configProviderIndex = len(state.config.providers) - 1
@@ -1409,6 +1444,7 @@ app_remove_config_provider :: proc(state: ^App_State, providerIndex: int) {
 		state.status = "Choose another active model before removing this provider"
 		return
 	}
+	provider_config_destroy(&state.config.providers[providerIndex], context.allocator)
 	ordered_remove(&state.config.providers, providerIndex)
 	if state.configProviderIndex >= len(state.config.providers) {
 		state.configProviderIndex = len(state.config.providers) - 1
@@ -1474,7 +1510,11 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 	state.modelNameOwned = true
 	for &provider in state.config.providers {
 		if provider.name == entry.providerName {
+			if provider.modelOwned && provider.model != "" {
+				delete(provider.model, context.allocator)
+			}
 			provider.model = strings.clone(entry.model, context.allocator)
+			provider.modelOwned = true
 			break
 		}
 	}
@@ -1667,7 +1707,11 @@ app_select_model_entry :: proc(state: ^App_State) {
 
 	for &provider in state.config.providers {
 		if provider.name == entry.providerName {
-			provider.model = state.config.selectedModel
+			if provider.modelOwned && provider.model != "" {
+				delete(provider.model, context.allocator)
+			}
+			provider.model = strings.clone(entry.model, context.allocator)
+			provider.modelOwned = true
 			break
 		}
 	}

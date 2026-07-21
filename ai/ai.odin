@@ -42,6 +42,9 @@ Interfaces: [dynamic]Interface
 
 clear_interfaces :: proc() {
 	for iface in Interfaces {
+		for model in iface.models {
+			delete(model)
+		}
 		delete(iface.models)
 	}
 	delete(Interfaces)
