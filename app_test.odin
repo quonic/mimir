@@ -218,9 +218,12 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	app_submit_input(&state)
 	assert(state.mode == .Config, "expected /config to switch app mode")
 	assert(state.status == "Config: arrows/Tab, Enter, Esc", "expected /config modal status")
+	assert(len(state.inputHistory) == 0, "expected commands to stay out of input history")
 
 	input_buffer_push_text(&state.input, "hello")
 	app_submit_input(&state)
+	assert(len(state.inputHistory) == 1, "expected chat input to enter input history")
+	assert(state.inputHistory[0] == "hello", "expected chat input history entry")
 	assert(len(state.history) >= 3, "expected chat submit to append history entries")
 	assert(state.history[len(state.history) - 2].role == .User, "expected user history entry")
 	assert(
@@ -235,6 +238,7 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	input_buffer_push_text(&state.input, "/exit")
 	app_submit_input(&state)
 	assert(state.shouldQuit, "expected /exit to request app shutdown")
+	assert(len(state.inputHistory) == 1, "expected exit command to stay out of input history")
 	_ = t
 }
 
@@ -454,27 +458,30 @@ test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "/help")
+	input_buffer_push_text(&state.input, "first entry")
 	app_submit_input(&state)
-	input_buffer_push_text(&state.input, "/models")
+	input_buffer_push_text(&state.input, "second entry")
 	app_submit_input(&state)
 	input_buffer_push_text(&state.input, "draft")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected up arrow to recall newest history")
-	assert(input_buffer_string(&state.input) == "/models", "expected newest history entry")
-	assert(input_buffer_cursor_position(&state.input) == len("/models"), "expected cursor at end")
+	assert(input_buffer_string(&state.input) == "second entry", "expected newest history entry")
+	assert(
+		input_buffer_cursor_position(&state.input) == len("second entry"),
+		"expected cursor at end",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected second up arrow to recall older history")
-	assert(input_buffer_string(&state.input) == "/help", "expected older history entry")
+	assert(input_buffer_string(&state.input) == "first entry", "expected older history entry")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'B'), "expected down arrow to recall newer history")
-	assert(input_buffer_string(&state.input) == "/models", "expected newer history entry")
+	assert(input_buffer_string(&state.input) == "second entry", "expected newer history entry")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")

@@ -856,13 +856,13 @@ app_submit_input :: proc(state: ^App_State) {
 		return
 	}
 
-	app_record_input_history(state, text)
-
 	command := parse_slash_command(text)
 	if command.isCommand {
 		app_run_command(state, command)
 		return
 	}
+
+	app_record_input_history(state, text)
 
 	if app_assistant_stream_active(state) {
 		state.status = "Assistant stream already active; use /stop first"
