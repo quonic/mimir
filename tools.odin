@@ -4,7 +4,7 @@ Tool_Definition :: struct {
 	id:          string,
 	parameters:  [dynamic]Tool_Parameter,
 	description: string,
-	enabled:     bool,
+	required:    [dynamic]string,
 }
 
 Tool_Parameter :: struct {
@@ -25,9 +25,10 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	read_file_tool := Tool_Definition {
 		id          = "read_file",
 		description = "Read project files for context",
-		enabled     = true,
 	}
 	defer delete(read_file_tool.parameters)
+	defer delete(read_file_tool.required)
+	append(&read_file_tool.required, "file_path")
 	append(
 		&read_file_tool.parameters,
 		Tool_Parameter {
@@ -58,9 +59,11 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	write_file_tool := Tool_Definition {
 		id          = "write_file",
 		description = "Write files to the project for context",
-		enabled     = true,
 	}
 	defer delete(write_file_tool.parameters)
+	defer delete(write_file_tool.required)
+	append(&write_file_tool.required, "file_path")
+	append(&write_file_tool.required, "content")
 	append(
 		&write_file_tool.parameters,
 		Tool_Parameter {
@@ -91,9 +94,10 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	run_command_tool := Tool_Definition {
 		id          = "run_command",
 		description = "Run a command in the project context",
-		enabled     = true,
 	}
 	defer delete(run_command_tool.parameters)
+	defer delete(run_command_tool.required)
+	append(&run_command_tool.required, "command")
 	append(
 		&run_command_tool.parameters,
 		Tool_Parameter{name = "command", description = "The command to run", required = true},
@@ -144,7 +148,6 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	list_available_shells_tool := Tool_Definition {
 		id          = "list_available_shells",
 		description = "List available shells in the project context",
-		enabled     = true,
 	}
 	defer delete(list_available_shells_tool.parameters)
 	append(&registry.definitions, list_available_shells_tool)
@@ -153,9 +156,10 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	list_directory_tool := Tool_Definition {
 		id          = "list_directory",
 		description = "List the contents of a directory in the project context",
-		enabled     = true,
 	}
 	defer delete(list_directory_tool.parameters)
+	defer delete(list_directory_tool.required)
+	append(&list_directory_tool.required, "directory_path")
 	append(
 		&list_directory_tool.parameters,
 		Tool_Parameter {
@@ -170,9 +174,10 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 	get_file_info_tool := Tool_Definition {
 		id          = "get_file_info",
 		description = "Get information about a file in the project context",
-		enabled     = true,
 	}
 	defer delete(get_file_info_tool.parameters)
+	defer delete(get_file_info_tool.required)
+	append(&get_file_info_tool.required, "file_path")
 	append(
 		&get_file_info_tool.parameters,
 		Tool_Parameter {
