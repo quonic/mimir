@@ -132,6 +132,8 @@ App_State :: struct {
 	setupEndpoint:         string,
 	setupAPIKey:           string,
 	tools:                 Tool_Registry,
+	dispatcher:            Tool_Dispatcher,
+	dispatcherReady:       bool,
 	mcp:                   MCP_Registry,
 	skills:                Skill_Registry,
 	stream:                Assistant_Stream_State,
@@ -185,6 +187,11 @@ app_init_with_home :: proc(
 	app_bootstrap_config(&state, home, probeOllama, allocator)
 	app_load_input_history(&state, allocator)
 	state.tools = builtin_tool_registry(allocator)
+	state.dispatcher, state.dispatcherReady = tool_dispatcher_init(
+		state.workingDirectory,
+		state.config.permissionGrants[:],
+		allocator,
+	)
 	state.mcp = mcp_registry_from_config(state.config.mcpServers[:], allocator)
 	state.skills = skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
@@ -210,6 +217,7 @@ app_bootstrap_config :: proc(
 				delete(state.config.providers)
 				delete(state.config.mcpServers)
 				delete(state.config.skillPaths)
+				delete(state.config.permissionGrants)
 			}
 			state.config = loaded
 			state.configStringsOwned = true
@@ -288,6 +296,9 @@ app_destroy :: proc(state: ^App_State) {
 		delete(entry.content)
 	}
 	delete(state.history)
+	if state.dispatcherReady {
+		tool_dispatcher_destroy(&state.dispatcher)
+	}
 	if state.configStringsOwned {
 		config_destroy(&state.config)
 	} else {
@@ -297,6 +308,7 @@ app_destroy :: proc(state: ^App_State) {
 		delete(state.config.providers)
 		delete(state.config.mcpServers)
 		delete(state.config.skillPaths)
+		delete(state.config.permissionGrants)
 	}
 	ai.set_raw_http_log_home("")
 	delete(state.configHome)
@@ -958,6 +970,7 @@ app_complete_setup :: proc(state: ^App_State) {
 	delete(state.config.providers)
 	delete(state.config.mcpServers)
 	delete(state.config.skillPaths)
+	delete(state.config.permissionGrants)
 	state.config = default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
 	state.config.providers[0].endpointOwned = true

@@ -71,8 +71,12 @@ run_command_tool_proc := proc(
 	env_vars: [dynamic]string = nil,
 	shell: string = "",
 ) -> string {
+	if shell == "" {
+		return "run_command_tool: A shell is required."
+	}
+
 	proc_desc := os.Process_Desc {
-		command = {command},
+		command = {shell, "-c", command},
 	}
 	if working_directory != "" {
 		proc_desc.working_dir = working_directory

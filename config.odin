@@ -36,12 +36,22 @@ Provider_Config_Wire :: struct {
 	enabled:  bool,
 }
 
+Permission_Grant_Wire :: struct {
+	kind:        string,
+	projectRoot: string,
+	directory:   string,
+	command:     string,
+	shell:       string,
+	mcpServer:   string,
+}
+
 Mimir_Config_Wire :: struct {
 	selectedProvider: string,
 	selectedModel:    string,
 	providers:        []Provider_Config_Wire,
 	mcpServers:       []MCP_Server_Config,
 	skillPaths:       []string,
+	permissionGrants: []Permission_Grant_Wire,
 }
 
 Provider_Config :: struct {
@@ -63,6 +73,7 @@ Mimir_Config :: struct {
 	providers:           [dynamic]Provider_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
 	skillPaths:          [dynamic]string,
+	permissionGrants:    [dynamic]Permission_Grant,
 	allocationAllocator: mem.Allocator,
 }
 
@@ -127,6 +138,7 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, 0, allocator)
 	config.skillPaths = make([dynamic]string, 0, 2, allocator)
+	config.permissionGrants = make([dynamic]Permission_Grant, 0, 0, allocator)
 	append(
 		&config.providers,
 		Provider_Config {
@@ -167,9 +179,13 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	for path in config.skillPaths {
 		delete(path, config.allocationAllocator)
 	}
+	for &grant in config.permissionGrants {
+		permission_grant_destroy(&grant, config.allocationAllocator)
+	}
 	delete(config.providers)
 	delete(config.mcpServers)
 	delete(config.skillPaths)
+	delete(config.permissionGrants)
 }
 
 register_config_interfaces :: proc(
@@ -232,6 +248,75 @@ provider_type_from_string :: proc(text: string) -> (ai.Interface_Type, bool) {
 	return .None, false
 }
 
+permission_grant_kind_from_string :: proc(text: string) -> (Permission_Grant_Kind, bool) {
+	switch text {
+	case "directorySubtree":
+		return .Directory_Subtree, true
+	case "commandPrefix":
+		return .Command_Prefix, true
+	case "mcpServer":
+		return .MCP_Server, true
+	}
+	return .Directory_Subtree, false
+}
+
+permission_grant_kind_to_string :: proc(kind: Permission_Grant_Kind) -> string {
+	switch kind {
+	case .Directory_Subtree:
+		return "directorySubtree"
+	case .Command_Prefix:
+		return "commandPrefix"
+	case .MCP_Server:
+		return "mcpServer"
+	}
+	return ""
+}
+
+permission_grant_from_wire :: proc(
+	wire: Permission_Grant_Wire,
+	allocator := context.allocator,
+) -> (
+	Permission_Grant,
+	bool,
+) {
+	kind, kindOK := permission_grant_kind_from_string(wire.kind)
+	projectRoot, rootOK := permission_normalize_absolute_path(wire.projectRoot, allocator)
+	if !kindOK || !rootOK {
+		return Permission_Grant{}, false
+	}
+
+	grant := Permission_Grant {
+		kind        = kind,
+		projectRoot = projectRoot,
+	}
+	switch kind {
+	case .Directory_Subtree:
+		directory, directoryOK := permission_normalize_absolute_path(wire.directory, allocator)
+		if !directoryOK || !permission_path_is_within_project(projectRoot, directory) {
+			permission_grant_destroy(&grant, allocator)
+			if directory != "" {
+				delete(directory, allocator)
+			}
+			return Permission_Grant{}, false
+		}
+		grant.directory = directory
+	case .Command_Prefix:
+		if wire.command == "" || wire.shell == "" {
+			permission_grant_destroy(&grant, allocator)
+			return Permission_Grant{}, false
+		}
+		grant.command = strings.clone(wire.command, allocator)
+		grant.shell = strings.clone(wire.shell, allocator)
+	case .MCP_Server:
+		if wire.mcpServer == "" {
+			permission_grant_destroy(&grant, allocator)
+			return Permission_Grant{}, false
+		}
+		grant.mcpServer = strings.clone(wire.mcpServer, allocator)
+	}
+	return grant, true
+}
+
 parse_config_from_json :: proc(
 	jsonText: string,
 	allocator := context.allocator,
@@ -252,6 +337,12 @@ parse_config_from_json :: proc(
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, len(wire.mcpServers), allocator)
 	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
+	config.permissionGrants = make(
+		[dynamic]Permission_Grant,
+		0,
+		len(wire.permissionGrants),
+		allocator,
+	)
 
 	for provider in wire.providers {
 		providerType, ok := provider_type_from_string(provider.type)
@@ -282,6 +373,14 @@ parse_config_from_json :: proc(
 
 	for path in wire.skillPaths {
 		append(&config.skillPaths, strings.clone(path, allocator))
+	}
+	for wireGrant in wire.permissionGrants {
+		grant, grantOK := permission_grant_from_wire(wireGrant, allocator)
+		if !grantOK {
+			config_destroy(&config)
+			return Mimir_Config{}, .Invalid_JSON
+		}
+		append(&config.permissionGrants, grant)
 	}
 
 	return config, .None
@@ -469,7 +568,36 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	}
 	strings.write_string(&builder, "],\n")
 	strings.write_string(&builder, "  \"mcpServers\": [],\n")
-	strings.write_string(&builder, "  \"skillPaths\": []\n")
+	strings.write_string(&builder, "  \"skillPaths\": [],\n")
+	strings.write_string(&builder, "  \"permissionGrants\": [")
+	for grant, index in config.permissionGrants {
+		if index > 0 {
+			strings.write_string(&builder, ",")
+		}
+		strings.write_string(&builder, "\n    {\n")
+		strings.write_string(&builder, "      \"kind\": ")
+		write_json_string(&builder, permission_grant_kind_to_string(grant.kind))
+		strings.write_string(&builder, ",\n      \"projectRoot\": ")
+		write_json_string(&builder, grant.projectRoot)
+		switch grant.kind {
+		case .Directory_Subtree:
+			strings.write_string(&builder, ",\n      \"directory\": ")
+			write_json_string(&builder, grant.directory)
+		case .Command_Prefix:
+			strings.write_string(&builder, ",\n      \"command\": ")
+			write_json_string(&builder, grant.command)
+			strings.write_string(&builder, ",\n      \"shell\": ")
+			write_json_string(&builder, grant.shell)
+		case .MCP_Server:
+			strings.write_string(&builder, ",\n      \"mcpServer\": ")
+			write_json_string(&builder, grant.mcpServer)
+		}
+		strings.write_string(&builder, "\n    }")
+	}
+	if len(config.permissionGrants) > 0 {
+		strings.write_string(&builder, "\n  ")
+	}
+	strings.write_string(&builder, "]\n")
 	strings.write_string(&builder, "}\n")
 	return strings.to_string(builder)
 }

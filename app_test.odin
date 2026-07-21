@@ -33,6 +33,19 @@ test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(state.dispatcherReady, "expected app to initialize permission dispatcher")
+	assert(
+		state.dispatcher.projectRoot == state.workingDirectory,
+		"expected dispatcher to use the app working directory",
+	)
+	_ = t
+}
+
+@(test)
 test_input_buffer_inserts_and_backspaces_at_cursor :: proc(t: ^testing.T) {
 	buffer := input_buffer_init(context.temp_allocator)
 	defer input_buffer_destroy(&buffer)
