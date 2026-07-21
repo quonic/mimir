@@ -45,27 +45,19 @@ test_permission_directory_grant_matches_project_subtree :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_permission_command_grant_requires_project_shell_and_safe_environment :: proc(t: ^testing.T) {
+test_permission_command_grant_requires_project_shell :: proc(t: ^testing.T) {
 	grant := Permission_Grant {
 		kind        = .Command_Prefix,
 		projectRoot = "/workspace/project",
 		command     = "odin test",
-		shell       = "/bin/sh",
 	}
 	action := Permission_Action {
 		effect           = .Execute,
 		projectRoot      = "/workspace/project",
 		command          = "odin test ./...",
-		shell            = "/bin/sh",
 		workingDirectory = "/workspace/project",
 	}
 	assert(permission_grant_matches_action(grant, action), "expected matching command prefix")
-
-	action.hasCustomEnvironment = true
-	assert(
-		!permission_grant_matches_action(grant, action),
-		"expected custom environment to require approval",
-	)
 	_ = t
 }
 

@@ -44,7 +44,7 @@ builtin_ai_tool_definitions :: proc(
 		ai.Tool_Definition {
 			name = "run_command",
 			description = "Run a shell command in the active project",
-			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"},"capture_output":{"type":"boolean"},"env_vars":{"type":"array","items":{"type":"string"}},"shell":{"type":"string"}},"required":["command","shell"]}`,
+			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"},"shell":{"type":"string"}},"required":["command","shell"]}`,
 		},
 	)
 	append(
@@ -172,30 +172,6 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 		Tool_Parameter {
 			name = "timeout",
 			description = "The timeout for the command in seconds",
-			required = false,
-		},
-	)
-	append(
-		&run_command_tool.parameters,
-		Tool_Parameter {
-			name = "capture_output",
-			description = "Whether to capture the command output",
-			required = false,
-		},
-	)
-	append(
-		&run_command_tool.parameters,
-		Tool_Parameter {
-			name = "env_vars",
-			description = "Environment variables to set for the command",
-			required = false,
-		},
-	)
-	append(
-		&run_command_tool.parameters,
-		Tool_Parameter {
-			name = "shell",
-			description = "The shell to use for the command",
 			required = false,
 		},
 	)

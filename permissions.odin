@@ -21,10 +21,8 @@ Permission_Action :: struct {
 	targetPath:            string,
 	targetPathOwned:       bool,
 	command:               string,
-	shell:                 string,
 	workingDirectory:      string,
 	workingDirectoryOwned: bool,
-	hasCustomEnvironment:  bool,
 	mcpServer:             string,
 }
 
@@ -42,7 +40,6 @@ Permission_Grant :: struct {
 	projectRoot: string,
 	directory:   string,
 	command:     string,
-	shell:       string,
 	mcpServer:   string,
 }
 
@@ -55,9 +52,6 @@ permission_grant_destroy :: proc(grant: ^Permission_Grant, allocator := context.
 	}
 	if grant.command != "" {
 		delete(grant.command, allocator)
-	}
-	if grant.shell != "" {
-		delete(grant.shell, allocator)
 	}
 	if grant.mcpServer != "" {
 		delete(grant.mcpServer, allocator)
@@ -157,9 +151,7 @@ permission_grant_matches_action :: proc(
 	case .Command_Prefix:
 		return(
 			action.effect == .Execute &&
-			!action.hasCustomEnvironment &&
 			action.workingDirectory == action.projectRoot &&
-			action.shell == grant.shell &&
 			strings.starts_with(action.command, grant.command) \
 		)
 	case .MCP_Server:

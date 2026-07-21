@@ -15,9 +15,6 @@ Tool_Call :: struct {
 	command:          string,
 	workingDirectory: string,
 	timeout:          int,
-	captureOutput:    bool,
-	environment:      [dynamic]string,
-	shell:            string,
 	mcpServer:        string,
 }
 
@@ -47,13 +44,7 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		command          = strings.clone(call.command, allocator),
 		workingDirectory = strings.clone(call.workingDirectory, allocator),
 		timeout          = call.timeout,
-		captureOutput    = call.captureOutput,
-		shell            = strings.clone(call.shell, allocator),
 		mcpServer        = strings.clone(call.mcpServer, allocator),
-		environment      = make([dynamic]string, 0, len(call.environment), allocator),
-	}
-	for entry in call.environment {
-		append(&clone.environment, strings.clone(entry, allocator))
 	}
 	return clone
 }
@@ -69,12 +60,7 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.overwrite, allocator)
 	delete(call.command, allocator)
 	delete(call.workingDirectory, allocator)
-	delete(call.shell, allocator)
 	delete(call.mcpServer, allocator)
-	for entry in call.environment {
-		delete(entry, allocator)
-	}
-	delete(call.environment)
 }
 
 tool_dispatch_result_destroy :: proc(
@@ -131,7 +117,6 @@ tool_dispatcher_add_session_grant :: proc(
 		projectRoot = strings.clone(grant.projectRoot, dispatcher.allocator),
 		directory   = strings.clone(grant.directory, dispatcher.allocator),
 		command     = strings.clone(grant.command, dispatcher.allocator),
-		shell       = strings.clone(grant.shell, dispatcher.allocator),
 		mcpServer   = strings.clone(grant.mcpServer, dispatcher.allocator),
 	}
 	append(&dispatcher.sessionGrants, clone)
@@ -192,13 +177,11 @@ tool_dispatch_build_action :: proc(
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
 	case "run_command":
-		if call.command == "" || call.shell == "" {
+		if call.command == "" {
 			return Permission_Action{}, false
 		}
 		action.effect = .Execute
 		action.command = call.command
-		action.shell = call.shell
-		action.hasCustomEnvironment = len(call.environment) > 0
 		if call.workingDirectory == "" {
 			action.workingDirectory = dispatcher.projectRoot
 			break
@@ -282,13 +265,12 @@ tool_dispatch_grant_from_action :: proc(
 		grant.kind = .Directory_Subtree
 		grant.directory = strings.clone(action.targetPath[:lastSlash], allocator)
 	case .Execute:
-		if action.hasCustomEnvironment || action.workingDirectory != action.projectRoot {
+		if action.workingDirectory != action.projectRoot {
 			permission_grant_destroy(&grant, allocator)
 			return Permission_Grant{}, false
 		}
 		grant.kind = .Command_Prefix
 		grant.command = strings.clone(action.command, allocator)
-		grant.shell = strings.clone(action.shell, allocator)
 	case .Remote:
 		grant.kind = .MCP_Server
 		grant.mcpServer = strings.clone(action.mcpServer, allocator)
@@ -372,14 +354,7 @@ tool_dispatch_execute_approved :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_
 			defer delete(resolvedDirectory, dispatcher.allocator)
 			workingDirectory = resolvedDirectory
 		}
-		return run_command_tool_proc(
-			call.command,
-			workingDirectory,
-			call.timeout,
-			call.captureOutput,
-			call.environment,
-			call.shell,
-		)
+		return run_command_tool_proc(call.command, workingDirectory, call.timeout)
 	case "mcp":
 		return "MCP tool dispatch is not implemented."
 	}

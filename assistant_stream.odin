@@ -39,9 +39,6 @@ AI_Tool_Call_Arguments :: struct {
 	command:           string,
 	working_directory: string,
 	timeout:           int,
-	capture_output:    bool,
-	env_vars:          []string,
-	shell:             string,
 	mcp_server:        string,
 }
 
@@ -426,13 +423,7 @@ app_tool_call_from_ai :: proc(
 		command          = strings.clone(arguments.command, allocator),
 		workingDirectory = strings.clone(arguments.working_directory, allocator),
 		timeout          = arguments.timeout,
-		captureOutput    = arguments.capture_output,
-		shell            = strings.clone(arguments.shell, allocator),
 		mcpServer        = strings.clone(arguments.mcp_server, allocator),
-		environment      = make([dynamic]string, 0, len(arguments.env_vars), allocator),
-	}
-	for entry in arguments.env_vars {
-		append(&call.environment, strings.clone(entry, allocator))
 	}
 	return call, true
 }

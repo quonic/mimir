@@ -41,7 +41,6 @@ Permission_Grant_Wire :: struct {
 	projectRoot: string,
 	directory:   string,
 	command:     string,
-	shell:       string,
 	mcpServer:   string,
 }
 
@@ -301,12 +300,11 @@ permission_grant_from_wire :: proc(
 		}
 		grant.directory = directory
 	case .Command_Prefix:
-		if wire.command == "" || wire.shell == "" {
+		if wire.command == "" {
 			permission_grant_destroy(&grant, allocator)
 			return Permission_Grant{}, false
 		}
 		grant.command = strings.clone(wire.command, allocator)
-		grant.shell = strings.clone(wire.shell, allocator)
 	case .MCP_Server:
 		if wire.mcpServer == "" {
 			permission_grant_destroy(&grant, allocator)
@@ -586,8 +584,6 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		case .Command_Prefix:
 			strings.write_string(&builder, ",\n      \"command\": ")
 			write_json_string(&builder, grant.command)
-			strings.write_string(&builder, ",\n      \"shell\": ")
-			write_json_string(&builder, grant.shell)
 		case .MCP_Server:
 			strings.write_string(&builder, ",\n      \"mcpServer\": ")
 			write_json_string(&builder, grant.mcpServer)

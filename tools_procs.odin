@@ -1,10 +1,8 @@
 package main
 
-import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
-import "core:slice"
 import "core:strconv"
 import "core:strings"
 
@@ -70,8 +68,6 @@ run_command_tool_proc := proc(
 	command: string,
 	working_directory: string = "",
 	timeout: int = 0,
-	capture_output: bool = false,
-	env_vars: [dynamic]string = nil,
 	shell: string = "",
 ) -> string {
 	shell := shell
@@ -89,14 +85,6 @@ run_command_tool_proc := proc(
 		proc_desc.working_dir = working_directory
 	}
 	proc_desc.env, _ = os.environ(context.allocator)
-	alloc_err: runtime.Allocator_Error
-	proc_desc.env, alloc_err = slice.concatenate([][]string{proc_desc.env, env_vars[:]})
-	if alloc_err != .None {
-		return fmt.aprintf(
-			"run_command_tool: Error allocating memory for environment variables: %s",
-			alloc_err,
-		)
-	}
 
 	state, stdout, stderr, err := os.process_exec(proc_desc, context.allocator)
 	if err != nil {
