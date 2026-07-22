@@ -153,7 +153,6 @@ list_available_shells_tool_proc := proc() -> string {
 		return fmt.aprintf("list_available_shells_tool: Unsupported OS: %s", ODIN_OS)
 	}
 	joined_shells := strings.join(shells[:], ", ")
-	defer delete(joined_shells, context.allocator)
 	return joined_shells
 }
 
