@@ -73,8 +73,13 @@ permission_normalize_absolute_path :: proc(
 	string,
 	bool,
 ) {
-	if len(path) == 0 || path[0] != '/' {
+	if len(path) == 0 {
 		return "", false
+	}
+	when ODIN_OS != .Windows {
+		if path[0] != '/' {
+			return "", false
+		}
 	}
 
 	parts := strings.split(path, "/", allocator)
