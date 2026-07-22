@@ -184,10 +184,7 @@ test_app_hides_successful_tool_output_from_history :: proc(t: ^testing.T) {
 		ai.Tool_Call {
 			id = strings.clone("call-1", context.allocator),
 			name = strings.clone("read_file", context.allocator),
-			arguments = strings.clone(
-				`{"file_path":"app.odin","start_line":"0","end_line":"0"}`,
-				context.allocator,
-			),
+			arguments = strings.clone(`{"file_path":"app.odin"}`, context.allocator),
 		},
 	)
 
@@ -220,10 +217,7 @@ test_app_shows_tool_errors_in_history :: proc(t: ^testing.T) {
 		ai.Tool_Call {
 			id = strings.clone("call-1", context.allocator),
 			name = strings.clone("read_file", context.allocator),
-			arguments = strings.clone(
-				`{"file_path":"missing.odin","start_line":"0","end_line":"0"}`,
-				context.allocator,
-			),
+			arguments = strings.clone(`{"file_path":"missing.odin"}`, context.allocator),
 		},
 	)
 

@@ -8,36 +8,13 @@ import "core:strings"
 
 // All tools take in strings and output strings.
 
-read_file_tool_proc := proc(file_path: string, start_line: string, end_line: string) -> string {
-	start_line_int: int = 0
-	end_line_int: int = 0
-	ok: bool = false
-
+read_file_tool_proc := proc(file_path: string) -> string {
 	data, err := os.read_entire_file_from_path(file_path, context.allocator)
 	if err != nil {
 		return fmt.aprintf("Error reading file: %s", err)
 	}
 	defer delete(data, context.allocator)
-	start_line_int, ok = strconv.parse_int(start_line)
-	if !ok {
-		return fmt.aprintf("Error parsing start_line: %s", start_line)
-	}
-	end_line_int, ok = strconv.parse_int(end_line)
-	if !ok {
-		return fmt.aprintf("Error parsing end_line: %s", end_line)
-	}
-	if start_line_int == 0 && end_line_int == 0 {
-		return strings.clone(string(data), context.allocator)
-	}
-	// If start_line or end_line are specified, extract the relevant lines
-	lines := strings.split(string(data), "\n")
-	defer delete(lines, context.allocator)
-	if end_line_int == 0 || end_line_int > len(lines) {
-		end_line_int = len(lines)
-	}
-	joined_lines := strings.join(lines[start_line_int:end_line_int], "\n")
-	return joined_lines
-
+	return strings.clone(string(data), context.allocator)
 }
 
 write_file_tool_proc := proc(file_path: string, content: string, overwrite: string) -> string {
@@ -77,7 +54,23 @@ run_command_tool_proc := proc(
 	proc_desc := os.Process_Desc {
 		command = {shell, "-c", command},
 	}
-	if working_directory != "" {
+	if working_directory == "" {
+		{
+			gwd_err: os.Error
+			proc_desc.working_dir, gwd_err = os.get_working_directory(context.allocator)
+			if gwd_err != nil {
+				return fmt.aprintf(
+					"run_command_tool: Error getting working directory: %s",
+					gwd_err,
+				)
+			}
+		}
+	} else if !os.is_directory(working_directory) {
+		return fmt.aprintf(
+			"run_command_tool: Working directory does not exist: %s",
+			working_directory,
+		)
+	} else {
 		proc_desc.working_dir = working_directory
 	}
 	proc_desc.env, _ = os.environ(context.allocator)
@@ -92,7 +85,7 @@ run_command_tool_proc := proc(
 	defer delete(stdout, context.allocator)
 	defer delete(stderr, context.allocator)
 	if err != nil {
-		return fmt.aprintf("run_command_tool: Error executing command: %s", err)
+		return fmt.aprintf("run_command_tool: Error executing command `%s`: %s", command, err)
 	}
 	if state.exit_code != 0 {
 		return fmt.aprintf(

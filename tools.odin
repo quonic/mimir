@@ -28,7 +28,7 @@ builtin_ai_tool_definitions :: proc(
 		ai.Tool_Definition {
 			name = "read_file",
 			description = "Read a file in the active project",
-			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"start_line":{"type":"string"},"end_line":{"type":"string"}},"required":["file_path"]}`,
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
 		},
 	)
 	append(
@@ -92,22 +92,6 @@ builtin_tool_registry :: proc(allocator := context.allocator) -> Tool_Registry {
 			name = "file_path",
 			description = "Path to the file to read",
 			required = true,
-		},
-	)
-	append(
-		&read_file_tool.parameters,
-		Tool_Parameter {
-			name = "start_line",
-			description = "The starting line number to read from",
-			required = false,
-		},
-	)
-	append(
-		&read_file_tool.parameters,
-		Tool_Parameter {
-			name = "end_line",
-			description = "The ending line number to read to",
-			required = false,
 		},
 	)
 	append(&registry.definitions, read_file_tool)

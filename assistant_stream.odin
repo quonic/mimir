@@ -32,8 +32,6 @@ Assistant_Stream_State :: struct {
 AI_Tool_Call_Arguments :: struct {
 	file_path:         string,
 	directory_path:    string,
-	start_line:        string,
-	end_line:          string,
 	content:           string,
 	overwrite:         string,
 	command:           string,
@@ -416,8 +414,6 @@ app_tool_call_from_ai :: proc(
 		id               = strings.clone(aiCall.name, allocator),
 		filePath         = strings.clone(arguments.file_path, allocator),
 		directoryPath    = strings.clone(arguments.directory_path, allocator),
-		startLine        = strings.clone(arguments.start_line, allocator),
-		endLine          = strings.clone(arguments.end_line, allocator),
 		content          = strings.clone(arguments.content, allocator),
 		overwrite        = strings.clone(arguments.overwrite, allocator),
 		command          = strings.clone(arguments.command, allocator),
