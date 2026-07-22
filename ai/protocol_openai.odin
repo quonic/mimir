@@ -214,14 +214,17 @@ parse_openai_embedding_response :: proc(
 ) {
 	wire: OpenAI_Embedding_Response
 	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
-	if decodeErr != nil || wire.model == "" || expectedCount <= 0 || len(wire.data) != expectedCount ||
+	if decodeErr != nil ||
+	   wire.model == "" ||
+	   expectedCount <= 0 ||
+	   len(wire.data) != expectedCount ||
 	   wire.usage.prompt_tokens < 0 {
 		return Embedding_Batch_Response{}, .Invalid_Response
 	}
 
 	response := Embedding_Batch_Response {
-		model = strings.clone(wire.model, allocator),
-		embeddings = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
+		model           = strings.clone(wire.model, allocator),
+		embeddings      = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
 		inputTokenCount = wire.usage.prompt_tokens,
 	}
 	for _ in 0 ..< expectedCount {
@@ -230,7 +233,9 @@ parse_openai_embedding_response :: proc(
 	seen := make([]bool, expectedCount, context.temp_allocator)
 
 	for item in wire.data {
-		if item.index < 0 || item.index >= expectedCount || seen[item.index] ||
+		if item.index < 0 ||
+		   item.index >= expectedCount ||
+		   seen[item.index] ||
 		   len(item.embedding) == 0 {
 			embedding_batch_response_destroy(&response, allocator)
 			return Embedding_Batch_Response{}, .Invalid_Response

@@ -158,12 +158,24 @@ test_build_ollama_embedding_request :: proc(t: ^testing.T) {
 	defaultWire := build_ollama_embedding_request(
 		Embedding_Batch_Request{model = "nomic-embed-text", inputs = []string{"first", "second"}},
 	)
-	defaultPayload, defaultMarshalErr := json.unparse(defaultWire, allocator = context.temp_allocator)
+	defaultPayload, defaultMarshalErr := json.unparse(
+		defaultWire,
+		allocator = context.temp_allocator,
+	)
 	assert(defaultMarshalErr == nil, "expected default Ollama request to serialize")
 	assert(strings.contains(defaultPayload, `"input":["first","second"]`), "expected batch input")
-	assert(!strings.contains(defaultPayload, `"truncate"`), "expected unset truncate to be omitted")
-	assert(!strings.contains(defaultPayload, `"keep_alive"`), "expected unset keep alive to be omitted")
-	assert(!strings.contains(defaultPayload, `"dimensions"`), "expected unset dimensions to be omitted")
+	assert(
+		!strings.contains(defaultPayload, `"truncate"`),
+		"expected unset truncate to be omitted",
+	)
+	assert(
+		!strings.contains(defaultPayload, `"keep_alive"`),
+		"expected unset keep alive to be omitted",
+	)
+	assert(
+		!strings.contains(defaultPayload, `"dimensions"`),
+		"expected unset dimensions to be omitted",
+	)
 	_ = t
 }
 
@@ -201,7 +213,9 @@ test_parse_ollama_embedding_response_and_cleanup :: proc(t: ^testing.T) {
 
 @(test)
 test_embedding_request_validation_and_anthropic_support :: proc(t: ^testing.T) {
-	client := Client{iface = Interface{type = .Anthropic}}
+	client := Client {
+		iface = Interface{type = .Anthropic},
+	}
 	_, emptyErr := send_embeddings(client, Embedding_Batch_Request{})
 	assert(emptyErr == .Invalid_Request, "expected empty embedding request to reject")
 
@@ -209,7 +223,10 @@ test_embedding_request_validation_and_anthropic_support :: proc(t: ^testing.T) {
 		client,
 		Embedding_Request{model = "claude-test", input = "hello"},
 	)
-	assert(unsupportedErr == .Unsupported_Interface, "expected Anthropic embeddings to be unsupported")
+	assert(
+		unsupportedErr == .Unsupported_Interface,
+		"expected Anthropic embeddings to be unsupported",
+	)
 	_ = t
 }
 

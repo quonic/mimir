@@ -147,7 +147,7 @@ Integration with local Ollama is opt-in:
    - `AI_OLLAMA_INTEGRATION=1`
    - `AI_OLLAMA_NATIVE_INTEGRATION=1` for the native `/api` protocol
    - `AI_OLLAMA_MODEL=<installed-model>`
-    - `AI_OLLAMA_EMBEDDING_MODEL=<installed-embedding-model>` for embedding tests
+   - `AI_OLLAMA_EMBEDDING_MODEL=<installed-embedding-model>` for embedding tests
    - Native endpoint: `AI_OLLAMA_ENDPOINT=http://127.0.0.1:11434`
    - OpenAI-compatible endpoint: `AI_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1`
    - Optional: `AI_OLLAMA_API_KEY=<value>`

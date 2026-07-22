@@ -174,17 +174,20 @@ parse_ollama_embedding_response :: proc(
 ) {
 	wire: Ollama_Embedding_Response
 	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
-	if decodeErr != nil || wire.model == "" || expectedCount <= 0 ||
-	   len(wire.embeddings) != expectedCount || wire.prompt_eval_count < 0 {
+	if decodeErr != nil ||
+	   wire.model == "" ||
+	   expectedCount <= 0 ||
+	   len(wire.embeddings) != expectedCount ||
+	   wire.prompt_eval_count < 0 {
 		return Embedding_Batch_Response{}, .Invalid_Response
 	}
 
 	response := Embedding_Batch_Response {
-		model = strings.clone(wire.model, allocator),
-		embeddings = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
+		model           = strings.clone(wire.model, allocator),
+		embeddings      = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
 		inputTokenCount = wire.prompt_eval_count,
-		totalDuration = wire.total_duration,
-		loadDuration = wire.load_duration,
+		totalDuration   = wire.total_duration,
+		loadDuration    = wire.load_duration,
 	}
 	for embedding in wire.embeddings {
 		if len(embedding) == 0 {

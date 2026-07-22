@@ -62,11 +62,11 @@ send_embedding :: proc(
 	}
 
 	response := Embedding_Response {
-		model = batch.model,
-		embedding = batch.embeddings[0],
+		model           = batch.model,
+		embedding       = batch.embeddings[0],
 		inputTokenCount = batch.inputTokenCount,
-		totalDuration = batch.totalDuration,
-		loadDuration = batch.loadDuration,
+		totalDuration   = batch.totalDuration,
+		loadDuration    = batch.loadDuration,
 	}
 	batch.model = ""
 	batch.embeddings[0] = {}
@@ -82,7 +82,8 @@ send_embeddings :: proc(
 	Embedding_Batch_Response,
 	AI_Error,
 ) {
-	if request.model == "" || len(request.inputs) == 0 ||
+	if request.model == "" ||
+	   len(request.inputs) == 0 ||
 	   (request.options.hasDimensions && request.options.dimensions <= 0) ||
 	   (request.options.hasOllamaKeepAlive && request.options.ollamaKeepAlive == "") {
 		return Embedding_Batch_Response{}, .Invalid_Request

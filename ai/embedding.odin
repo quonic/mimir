@@ -3,14 +3,14 @@ package ai
 import json "core:encoding/json"
 
 Embedding_Options :: struct {
-	dimensions:        int,
-	hasDimensions:     bool,
-	ollamaTruncate:    bool,
-	hasOllamaTruncate: bool,
-	ollamaKeepAlive:   string,
+	dimensions:         int,
+	hasDimensions:      bool,
+	ollamaTruncate:     bool,
+	hasOllamaTruncate:  bool,
+	ollamaKeepAlive:    string,
 	hasOllamaKeepAlive: bool,
-	ollamaOptions:     json.Value,
-	hasOllamaOptions:  bool,
+	ollamaOptions:      json.Value,
+	hasOllamaOptions:   bool,
 }
 
 Embedding_Request :: struct {
@@ -41,10 +41,7 @@ Embedding_Batch_Response :: struct {
 	loadDuration:    i64,
 }
 
-embedding_response_destroy :: proc(
-	response: ^Embedding_Response,
-	allocator := context.allocator,
-) {
+embedding_response_destroy :: proc(response: ^Embedding_Response, allocator := context.allocator) {
 	if response.model != "" {
 		delete(response.model, allocator)
 	}
