@@ -93,6 +93,22 @@ OpenAI_Models_Response :: struct {
 	data: []OpenAI_Model,
 }
 
+OpenAI_Embedding :: struct {
+	embedding: []f32,
+	index:     int,
+}
+
+OpenAI_Embedding_Usage :: struct {
+	prompt_tokens: int,
+	total_tokens:  int,
+}
+
+OpenAI_Embedding_Response :: struct {
+	model: string,
+	data:  []OpenAI_Embedding,
+	usage: OpenAI_Embedding_Usage,
+}
+
 OpenAI_Error_Detail :: struct {
 	message: string,
 	type:    string,
@@ -166,6 +182,76 @@ build_openai_chat_stream_request :: proc(request: Chat_Request) -> OpenAI_Chat_R
 	wire := build_openai_chat_request(request)
 	wire.stream = true
 	return wire
+}
+
+build_openai_embedding_request :: proc(
+	request: Embedding_Batch_Request,
+	allocator := context.temp_allocator,
+) -> json.Value {
+	inputs := make([dynamic]json.Value, 0, len(request.inputs), allocator)
+	for input in request.inputs {
+		append(&inputs, json.String(input))
+	}
+
+	wire := make(map[string]json.Value, allocator)
+	wire["model"] = json.String(request.model)
+	wire["input"] = json.Array(inputs)
+	wire["encoding_format"] = json.String("float")
+	if request.options.hasDimensions && request.options.dimensions > 0 {
+		wire["dimensions"] = json.Integer(i64(request.options.dimensions))
+	}
+
+	return json.Object(wire)
+}
+
+parse_openai_embedding_response :: proc(
+	body: string,
+	expectedCount: int,
+	allocator := context.allocator,
+) -> (
+	Embedding_Batch_Response,
+	AI_Error,
+) {
+	wire: OpenAI_Embedding_Response
+	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
+	if decodeErr != nil || wire.model == "" || expectedCount <= 0 || len(wire.data) != expectedCount ||
+	   wire.usage.prompt_tokens < 0 {
+		return Embedding_Batch_Response{}, .Invalid_Response
+	}
+
+	response := Embedding_Batch_Response {
+		model = strings.clone(wire.model, allocator),
+		embeddings = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
+		inputTokenCount = wire.usage.prompt_tokens,
+	}
+	for _ in 0 ..< expectedCount {
+		append(&response.embeddings, [dynamic]f32{})
+	}
+	seen := make([]bool, expectedCount, context.temp_allocator)
+
+	for item in wire.data {
+		if item.index < 0 || item.index >= expectedCount || seen[item.index] ||
+		   len(item.embedding) == 0 {
+			embedding_batch_response_destroy(&response, allocator)
+			return Embedding_Batch_Response{}, .Invalid_Response
+		}
+
+		vector := make([dynamic]f32, 0, len(item.embedding), allocator)
+		for value in item.embedding {
+			append(&vector, value)
+		}
+		response.embeddings[item.index] = vector
+		seen[item.index] = true
+	}
+
+	for wasSeen in seen {
+		if !wasSeen {
+			embedding_batch_response_destroy(&response, allocator)
+			return Embedding_Batch_Response{}, .Invalid_Response
+		}
+	}
+
+	return response, .None
 }
 
 parse_openai_chat_response :: proc(

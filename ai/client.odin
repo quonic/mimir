@@ -10,11 +10,13 @@ import http "../http"
 import httpClient "../http/client"
 
 OPENAI_CHAT_PATH :: "/chat/completions"
+OPENAI_EMBEDDINGS_PATH :: "/embeddings"
 OPENAI_MODELS_PATH :: "/models"
 ANTHROPIC_MESSAGES_PATH :: "/messages"
 ANTHROPIC_MODELS_PATH :: "/models"
 ANTHROPIC_VERSION :: "2023-06-01"
 OLLAMA_CHAT_PATH :: "/api/chat"
+OLLAMA_EMBED_PATH :: "/api/embed"
 OLLAMA_MODELS_PATH :: "/api/tags"
 
 send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Response, AI_Error) {
@@ -36,6 +38,72 @@ send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Res
 	}
 
 	return Chat_Response{}, .Unsupported_Interface
+}
+
+send_embedding :: proc(
+	client: Client,
+	request: Embedding_Request,
+	allocator := context.allocator,
+) -> (
+	Embedding_Response,
+	AI_Error,
+) {
+	batch, err := send_embeddings(
+		client,
+		Embedding_Batch_Request {
+			model = request.model,
+			inputs = []string{request.input},
+			options = request.options,
+		},
+		allocator,
+	)
+	if err != .None {
+		return Embedding_Response{}, err
+	}
+
+	response := Embedding_Response {
+		model = batch.model,
+		embedding = batch.embeddings[0],
+		inputTokenCount = batch.inputTokenCount,
+		totalDuration = batch.totalDuration,
+		loadDuration = batch.loadDuration,
+	}
+	batch.model = ""
+	batch.embeddings[0] = {}
+	delete(batch.embeddings)
+	return response, .None
+}
+
+send_embeddings :: proc(
+	client: Client,
+	request: Embedding_Batch_Request,
+	allocator := context.allocator,
+) -> (
+	Embedding_Batch_Response,
+	AI_Error,
+) {
+	if request.model == "" || len(request.inputs) == 0 ||
+	   (request.options.hasDimensions && request.options.dimensions <= 0) ||
+	   (request.options.hasOllamaKeepAlive && request.options.ollamaKeepAlive == "") {
+		return Embedding_Batch_Response{}, .Invalid_Request
+	}
+	for input in request.inputs {
+		if input == "" {
+			return Embedding_Batch_Response{}, .Invalid_Request
+		}
+	}
+	if !model_supported(client.iface, request.model) {
+		return Embedding_Batch_Response{}, .Unsupported_Model
+	}
+
+	if client.iface.type == .OpenAI {
+		return send_openai_embeddings(client, request, allocator)
+	}
+	if client.iface.type == .Ollama {
+		return send_ollama_embeddings(client, request, allocator)
+	}
+
+	return Embedding_Batch_Response{}, .Unsupported_Interface
 }
 
 send_chat_completion_stream :: proc(
@@ -164,6 +232,42 @@ send_openai_chat_completion :: proc(
 
 	_ = parse_openai_error_message(body)
 	return Chat_Response{}, map_status_to_error(status)
+}
+
+send_openai_embeddings :: proc(
+	client: Client,
+	request: Embedding_Batch_Request,
+	allocator := context.allocator,
+) -> (
+	Embedding_Batch_Response,
+	AI_Error,
+) {
+	target, ok := compose_endpoint_target(client.iface.endpoint, OPENAI_EMBEDDINGS_PATH)
+	if !ok {
+		return Embedding_Batch_Response{}, .Invalid_Request
+	}
+
+	wire := build_openai_embedding_request(request)
+	extraHeaders: [dynamic][2]string
+	defer delete(extraHeaders)
+
+	if client.apiKey != "" {
+		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
+		append(&extraHeaders, [2]string{"authorization", authorization})
+	}
+
+	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
+	if errKind != .None {
+		return Embedding_Batch_Response{}, errKind
+	}
+	defer if body != "" {delete(body)}
+
+	if http.status_is_success(status) {
+		return parse_openai_embedding_response(body, len(request.inputs), allocator)
+	}
+
+	_ = parse_openai_error_message(body)
+	return Embedding_Batch_Response{}, map_status_to_error(status)
 }
 
 send_openai_chat_completion_stream :: proc(
@@ -385,6 +489,42 @@ send_ollama_chat_completion :: proc(
 
 	_ = parse_ollama_error_message(body)
 	return Chat_Response{}, map_status_to_error(status)
+}
+
+send_ollama_embeddings :: proc(
+	client: Client,
+	request: Embedding_Batch_Request,
+	allocator := context.allocator,
+) -> (
+	Embedding_Batch_Response,
+	AI_Error,
+) {
+	target, ok := compose_endpoint_target(client.iface.endpoint, OLLAMA_EMBED_PATH)
+	if !ok {
+		return Embedding_Batch_Response{}, .Invalid_Request
+	}
+
+	wire := build_ollama_embedding_request(request)
+	extraHeaders: [dynamic][2]string
+	defer delete(extraHeaders)
+
+	if client.apiKey != "" {
+		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
+		append(&extraHeaders, [2]string{"authorization", authorization})
+	}
+
+	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
+	if errKind != .None {
+		return Embedding_Batch_Response{}, errKind
+	}
+	defer if body != "" {delete(body)}
+
+	if http.status_is_success(status) {
+		return parse_ollama_embedding_response(body, len(request.inputs), allocator)
+	}
+
+	_ = parse_ollama_error_message(body)
+	return Embedding_Batch_Response{}, map_status_to_error(status)
 }
 
 send_ollama_chat_completion_stream :: proc(

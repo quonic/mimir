@@ -58,6 +58,14 @@ Ollama_Models_Response :: struct {
 	models: []Ollama_Model,
 }
 
+Ollama_Embedding_Response :: struct {
+	model:             string,
+	embeddings:        [][]f32,
+	total_duration:    i64,
+	load_duration:     i64,
+	prompt_eval_count: int,
+}
+
 Ollama_Error_Response :: struct {
 	error: string,
 }
@@ -123,6 +131,75 @@ build_ollama_chat_stream_request :: proc(request: Chat_Request) -> Ollama_Chat_R
 	wire := build_ollama_chat_request(request)
 	wire.stream = true
 	return wire
+}
+
+build_ollama_embedding_request :: proc(
+	request: Embedding_Batch_Request,
+	allocator := context.temp_allocator,
+) -> json.Value {
+	wire := make(map[string]json.Value, allocator)
+	wire["model"] = json.String(request.model)
+	if len(request.inputs) == 1 {
+		wire["input"] = json.String(request.inputs[0])
+	} else {
+		inputs := make([dynamic]json.Value, 0, len(request.inputs), allocator)
+		for input in request.inputs {
+			append(&inputs, json.String(input))
+		}
+		wire["input"] = json.Array(inputs)
+	}
+	if request.options.hasDimensions && request.options.dimensions > 0 {
+		wire["dimensions"] = json.Integer(i64(request.options.dimensions))
+	}
+	if request.options.hasOllamaTruncate {
+		wire["truncate"] = json.Boolean(request.options.ollamaTruncate)
+	}
+	if request.options.hasOllamaKeepAlive {
+		wire["keep_alive"] = json.String(request.options.ollamaKeepAlive)
+	}
+	if request.options.hasOllamaOptions {
+		wire["options"] = request.options.ollamaOptions
+	}
+
+	return json.Object(wire)
+}
+
+parse_ollama_embedding_response :: proc(
+	body: string,
+	expectedCount: int,
+	allocator := context.allocator,
+) -> (
+	Embedding_Batch_Response,
+	AI_Error,
+) {
+	wire: Ollama_Embedding_Response
+	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
+	if decodeErr != nil || wire.model == "" || expectedCount <= 0 ||
+	   len(wire.embeddings) != expectedCount || wire.prompt_eval_count < 0 {
+		return Embedding_Batch_Response{}, .Invalid_Response
+	}
+
+	response := Embedding_Batch_Response {
+		model = strings.clone(wire.model, allocator),
+		embeddings = make([dynamic][dynamic]f32, 0, expectedCount, allocator),
+		inputTokenCount = wire.prompt_eval_count,
+		totalDuration = wire.total_duration,
+		loadDuration = wire.load_duration,
+	}
+	for embedding in wire.embeddings {
+		if len(embedding) == 0 {
+			embedding_batch_response_destroy(&response, allocator)
+			return Embedding_Batch_Response{}, .Invalid_Response
+		}
+
+		vector := make([dynamic]f32, 0, len(embedding), allocator)
+		for value in embedding {
+			append(&vector, value)
+		}
+		append(&response.embeddings, vector)
+	}
+
+	return response, .None
 }
 
 parse_ollama_chat_response :: proc(

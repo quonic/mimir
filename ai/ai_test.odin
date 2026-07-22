@@ -109,6 +109,111 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_build_openai_embedding_request :: proc(t: ^testing.T) {
+	wire := build_openai_embedding_request(
+		Embedding_Batch_Request {
+			model = "text-embedding-3-small",
+			inputs = []string{"first", "second"},
+			options = Embedding_Options{dimensions = 256, hasDimensions = true},
+		},
+	)
+	payload, marshalErr := json.unparse(wire, allocator = context.temp_allocator)
+	assert(marshalErr == nil, "expected OpenAI embedding request to serialize")
+	assert(strings.contains(payload, `"model":"text-embedding-3-small"`), "expected model")
+	assert(strings.contains(payload, `"input":["first","second"]`), "expected batch inputs")
+	assert(strings.contains(payload, `"encoding_format":"float"`), "expected float encoding")
+	assert(strings.contains(payload, `"dimensions":256`), "expected requested dimensions")
+	_ = t
+}
+
+@(test)
+test_build_ollama_embedding_request :: proc(t: ^testing.T) {
+	options, parseErr := json.parse_string(`{"num_ctx":2048}`, allocator = context.temp_allocator)
+	assert(parseErr == .None, "expected Ollama options JSON to parse")
+	wire := build_ollama_embedding_request(
+		Embedding_Batch_Request {
+			model = "nomic-embed-text",
+			inputs = []string{"first"},
+			options = Embedding_Options {
+				dimensions = 256,
+				hasDimensions = true,
+				ollamaTruncate = false,
+				hasOllamaTruncate = true,
+				ollamaKeepAlive = "5m",
+				hasOllamaKeepAlive = true,
+				ollamaOptions = options,
+				hasOllamaOptions = true,
+			},
+		},
+	)
+	payload, marshalErr := json.unparse(wire, allocator = context.temp_allocator)
+	assert(marshalErr == nil, "expected Ollama embedding request to serialize")
+	assert(strings.contains(payload, `"input":"first"`), "expected single string input")
+	assert(strings.contains(payload, `"dimensions":256`), "expected requested dimensions")
+	assert(strings.contains(payload, `"truncate":false`), "expected explicit truncate value")
+	assert(strings.contains(payload, `"keep_alive":"5m"`), "expected keep alive value")
+	assert(strings.contains(payload, `"options"`), "expected Ollama options")
+	assert(strings.contains(payload, `"num_ctx"`), "expected Ollama options value")
+
+	defaultWire := build_ollama_embedding_request(
+		Embedding_Batch_Request{model = "nomic-embed-text", inputs = []string{"first", "second"}},
+	)
+	defaultPayload, defaultMarshalErr := json.unparse(defaultWire, allocator = context.temp_allocator)
+	assert(defaultMarshalErr == nil, "expected default Ollama request to serialize")
+	assert(strings.contains(defaultPayload, `"input":["first","second"]`), "expected batch input")
+	assert(!strings.contains(defaultPayload, `"truncate"`), "expected unset truncate to be omitted")
+	assert(!strings.contains(defaultPayload, `"keep_alive"`), "expected unset keep alive to be omitted")
+	assert(!strings.contains(defaultPayload, `"dimensions"`), "expected unset dimensions to be omitted")
+	_ = t
+}
+
+@(test)
+test_parse_openai_embedding_response_orders_vectors :: proc(t: ^testing.T) {
+	payload := `{"model":"text-embedding-3-small","data":[{"embedding":[0.3,0.4],"index":1},{"embedding":[0.1,0.2],"index":0}],"usage":{"prompt_tokens":4,"total_tokens":4}}`
+	response, err := parse_openai_embedding_response(payload, 2, context.allocator)
+	defer embedding_batch_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected OpenAI embedding response to parse")
+	assert(response.inputTokenCount == 4, "expected OpenAI token count")
+	assert(len(response.embeddings) == 2, "expected two vectors")
+	assert(response.embeddings[0][0] == 0.1, "expected vectors ordered by response index")
+	assert(response.embeddings[1][0] == 0.3, "expected second ordered vector")
+
+	invalidPayload := `{"model":"text-embedding-3-small","data":[{"embedding":[0.1],"index":2}],"usage":{"prompt_tokens":1}}`
+	_, invalidErr := parse_openai_embedding_response(invalidPayload, 1, context.allocator)
+	assert(invalidErr == .Invalid_Response, "expected out of range index to reject")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_embedding_response_and_cleanup :: proc(t: ^testing.T) {
+	payload := `{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]],"prompt_eval_count":5,"total_duration":12,"load_duration":3}`
+	response, err := parse_ollama_embedding_response(payload, 2, context.allocator)
+	assert(err == .None, "expected Ollama embedding response to parse")
+	assert(response.inputTokenCount == 5, "expected Ollama token count")
+	assert(response.totalDuration == 12, "expected Ollama total duration")
+	assert(response.loadDuration == 3, "expected Ollama load duration")
+	assert(response.embeddings[1][1] == 0.4, "expected Ollama vector value")
+	embedding_batch_response_destroy(&response, context.allocator)
+	assert(len(response.embeddings) == 0, "expected embedding cleanup to clear vectors")
+	assert(response.model == "", "expected embedding cleanup to clear model")
+	_ = t
+}
+
+@(test)
+test_embedding_request_validation_and_anthropic_support :: proc(t: ^testing.T) {
+	client := Client{iface = Interface{type = .Anthropic}}
+	_, emptyErr := send_embeddings(client, Embedding_Batch_Request{})
+	assert(emptyErr == .Invalid_Request, "expected empty embedding request to reject")
+
+	_, unsupportedErr := send_embedding(
+		client,
+		Embedding_Request{model = "claude-test", input = "hello"},
+	)
+	assert(unsupportedErr == .Unsupported_Interface, "expected Anthropic embeddings to be unsupported")
+	_ = t
+}
+
+@(test)
 test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	request := Chat_Request {
 		model    = "test-model",
@@ -864,5 +969,83 @@ test_ollama_native_integration :: proc(t: ^testing.T) {
 	defer free_model_list(models)
 	assert(modelsErr == .None, "expected native Ollama model list request to succeed")
 	assert(len(models) > 0, "expected native Ollama model list to be non-empty")
+	_ = t
+}
+
+@(test)
+test_ollama_openai_compatible_embedding_integration :: proc(t: ^testing.T) {
+	enabled := os.get_env("AI_OLLAMA_INTEGRATION", context.temp_allocator) == "1"
+	if !enabled {
+		_ = t
+		return
+	}
+
+	model := os.get_env("AI_OLLAMA_EMBEDDING_MODEL", context.temp_allocator)
+	if model == "" {
+		_ = t
+		return
+	}
+
+	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
+	if endpoint == "" {
+		endpoint = fmt.aprintf("http://%s:11434/v1", TEST_OLLAMA_SERVER, context.temp_allocator)
+	}
+	client := Client {
+		iface = Interface{name = "ollama", type = .OpenAI, endpoint = http.url_parse(endpoint)},
+		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
+	}
+
+	response, err := send_embedding(client, Embedding_Request{model = model, input = "hello"})
+	defer embedding_response_destroy(&response)
+	assert(err == .None, "expected OpenAI-compatible Ollama embedding request to succeed")
+	assert(len(response.embedding) > 0, "expected OpenAI-compatible embedding vector")
+
+	batch, batchErr := send_embeddings(
+		client,
+		Embedding_Batch_Request{model = model, inputs = []string{"hello", "goodbye"}},
+	)
+	defer embedding_batch_response_destroy(&batch)
+	assert(batchErr == .None, "expected OpenAI-compatible Ollama embedding batch to succeed")
+	assert(len(batch.embeddings) == 2, "expected two OpenAI-compatible embedding vectors")
+	assert(len(batch.embeddings[0]) > 0, "expected first OpenAI-compatible embedding vector")
+	_ = t
+}
+
+@(test)
+test_ollama_native_embedding_integration :: proc(t: ^testing.T) {
+	enabled := os.get_env("AI_OLLAMA_NATIVE_INTEGRATION", context.temp_allocator) == "1"
+	if !enabled {
+		_ = t
+		return
+	}
+
+	model := os.get_env("AI_OLLAMA_EMBEDDING_MODEL", context.temp_allocator)
+	if model == "" {
+		_ = t
+		return
+	}
+
+	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
+	if endpoint == "" {
+		endpoint = fmt.aprintf("http://%s:11434", TEST_OLLAMA_SERVER, context.temp_allocator)
+	}
+	client := Client {
+		iface = Interface{name = "ollama", type = .Ollama, endpoint = http.url_parse(endpoint)},
+		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
+	}
+
+	response, err := send_embedding(client, Embedding_Request{model = model, input = "hello"})
+	defer embedding_response_destroy(&response)
+	assert(err == .None, "expected native Ollama embedding request to succeed")
+	assert(len(response.embedding) > 0, "expected native embedding vector")
+
+	batch, batchErr := send_embeddings(
+		client,
+		Embedding_Batch_Request{model = model, inputs = []string{"hello", "goodbye"}},
+	)
+	defer embedding_batch_response_destroy(&batch)
+	assert(batchErr == .None, "expected native Ollama embedding batch to succeed")
+	assert(len(batch.embeddings) == 2, "expected two native embedding vectors")
+	assert(len(batch.embeddings[0]) > 0, "expected first native embedding vector")
 	_ = t
 }

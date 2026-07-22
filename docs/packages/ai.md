@@ -1,6 +1,6 @@
 # AI Package
 
-The `ai` package provides a generalized chat-completions interface for:
+The `ai` package provides generalized chat-completions and embedding interfaces for:
 
 - Native Ollama endpoints
 - OpenAI-compatible endpoints, including Ollama's `/v1` compatibility API
@@ -71,6 +71,55 @@ err := ai.send_chat_completion_stream(client, ai.Chat_Request{
 }, stream_chat_delta)
 ```
 
+## Generating Embeddings
+
+OpenAI-compatible and native Ollama interfaces support embeddings. A single input
+returns one vector:
+
+```odin
+embedding, err := ai.send_embedding(client, ai.Embedding_Request{
+    model = "nomic-embed-text",
+    input = "Search this source file",
+})
+if err == .None {
+    // Use embedding.embedding and embedding.inputTokenCount.
+    ai.embedding_response_destroy(&embedding)
+}
+```
+
+Use `send_embeddings` when the caller has multiple inputs. The response vectors
+preserve the order of the request inputs:
+
+```odin
+response, err := ai.send_embeddings(client, ai.Embedding_Batch_Request{
+    model = "nomic-embed-text",
+    inputs = []string{"first document", "second document"},
+    options = ai.Embedding_Options{
+        dimensions = 256,
+        hasDimensions = true,
+    },
+})
+if err == .None {
+    // Use response.embeddings.
+    ai.embedding_batch_response_destroy(&response)
+}
+```
+
+`Embedding_Response` and `Embedding_Batch_Response` own their model strings and
+vector buffers. Always call the matching destroy procedure with the allocator used
+for the request result.
+
+Dimensions are sent to OpenAI-compatible and native Ollama APIs when
+`hasDimensions` is set. Native Ollama also supports optional `ollamaTruncate`,
+`ollamaKeepAlive`, and `ollamaOptions` controls. Set the corresponding `has...`
+field to include each control. Unset controls are omitted from the request, so
+Ollama retains its defaults, including its default truncation behavior.
+
+The normalized response exposes `model`, vectors, `inputTokenCount`,
+`totalDuration`, and `loadDuration`. A provider that does not return a metadata
+value leaves it as zero. Anthropic interfaces return `.Unsupported_Interface`
+because Anthropic does not provide a native embeddings endpoint.
+
 ## Listing Models
 
 ```odin
@@ -98,6 +147,7 @@ Integration with local Ollama is opt-in:
    - `AI_OLLAMA_INTEGRATION=1`
    - `AI_OLLAMA_NATIVE_INTEGRATION=1` for the native `/api` protocol
    - `AI_OLLAMA_MODEL=<installed-model>`
+    - `AI_OLLAMA_EMBEDDING_MODEL=<installed-embedding-model>` for embedding tests
    - Native endpoint: `AI_OLLAMA_ENDPOINT=http://127.0.0.1:11434`
    - OpenAI-compatible endpoint: `AI_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1`
    - Optional: `AI_OLLAMA_API_KEY=<value>`
