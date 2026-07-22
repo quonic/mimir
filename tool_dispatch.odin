@@ -306,7 +306,7 @@ tool_dispatch_execute_approved :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_
 			return "Permission denied."
 		}
 		defer delete(path, dispatcher.allocator)
-		return read_file_tool_proc(path, call.startLine, call.endLine)
+		return read_file_tool_proc(path)
 	case "write_file":
 		path, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
