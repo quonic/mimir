@@ -25,3 +25,11 @@ adding, removing, loading, and destroying require exclusive access.
 `save` and `load` use a portable VDB v1 binary format with fixed-width
 little-endian fields. It persists the metric, dimensions, vector data, IDs, and
 UTF-8 metadata strings.
+
+## Examples
+
+basic_search/main.odin: add labeled vectors and print nearest matches with metadata.
+
+persistence/main.odin: save a cosine-metric database, reload it, then query the reloaded data. It creates vectors.vdb in the working directory when run.
+
+metric_comparison/main.odin: compare cosine, Euclidean, and dot-product ranking behavior for one query.
