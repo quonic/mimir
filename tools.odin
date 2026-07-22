@@ -44,7 +44,7 @@ builtin_ai_tool_definitions :: proc(
 		ai.Tool_Definition {
 			name = "run_command",
 			description = "Run a shell command in the active project",
-			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"},"shell":{"type":"string"}},"required":["command","shell"]}`,
+			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`,
 		},
 	)
 	append(
