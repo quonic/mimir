@@ -76,9 +76,8 @@ configuration and are scoped to one canonical project path.
     {
       "kind": "commandPrefix",
       "projectRoot": "/home/user/project",
-      "command": "odin test",
-      "shell": "/bin/sh"
-    },
+      "command": "odin test"
+    }
     {
       "kind": "mcpServer",
       "projectRoot": "/home/user/project",
