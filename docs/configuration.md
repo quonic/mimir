@@ -88,9 +88,9 @@ configuration and are scoped to one canonical project path.
 ```
 
 A `directorySubtree` grant applies only to writes within that directory. A
-`commandPrefix` grant applies only when the command uses the configured shell,
-runs from the project root, and does not add environment variables. An
-`mcpServer` grant reserves server-level trust for future MCP transport.
+`commandPrefix` grant applies only when the command runs from the project root and
+matches the configured command prefix. An `mcpServer` grant reserves server-level
+trust for future MCP transport.
 
 Malformed grants, paths outside their project root, and path traversal are
 rejected while loading configuration.
