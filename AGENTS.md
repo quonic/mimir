@@ -17,6 +17,7 @@ Making breaking changes to the project is currently allowed, but it is recommend
 
 - Variable declarations follow the syntax `name: type = value`, where the type can be inferred from the value if it is not explicitly specified. For example, `x := 5` will infer that `x` is of type `int`, while `y: f32 = 3.14` explicitly declares that `y` is of type `f32`. If the type cannot be inferred from the value, it must be explicitly declared to avoid compilation errors.
 - For getting the length of an array, use `len(array)`. This includes strings, slices, and other array-like structures.
+- When freeing memory of a string, use `myString = ""` instead of `delete(myString, allocator)`. Unless we have written our own allocator, we should not use `delete` on strings, as it can lead to double free issues. Setting the string to an empty string is a safer way to free its memory.
 
 ## Code Style
 

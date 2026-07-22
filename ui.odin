@@ -105,10 +105,116 @@ render_app_frame_sequence :: proc(
 		render_models_modal(&batch, layout.historyPanel, state)
 	} else if state.mode == .Config {
 		render_config_modal(&batch, layout.historyPanel, state)
+	} else if state.mode == .Approval {
+		render_approval_modal(&batch, layout.historyPanel, state)
 	}
 	render_status(&batch, layout.statusBar, state)
 
 	return console.batch_sequence(&batch)
+}
+
+render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, state: ^App_State) {
+	modal := config_modal_region(parent)
+	panel := console.Panel {
+		region        = modal,
+		title         = " Tool Permission ",
+		fill_interior = true,
+	}
+	console.batch_draw_panel(batch, panel)
+	interior := console.panel_interior(panel)
+	width := console.region_width(interior)
+	if width <= 0 {
+		return
+	}
+
+	row := interior.top_row
+	write_clipped_line(batch, row, interior.left_column, width, "Approve this tool call?")
+	row += 2
+	if state.approval.preparedOwned {
+		action := state.approval.prepared.action
+		write_clipped_line(
+			batch,
+			row,
+			interior.left_column,
+			width,
+			approval_effect_label(action.effect),
+		)
+		row += 1
+		switch action.effect {
+		case .Read, .Write:
+			displayPath := approval_display_text(action.targetPath, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayPath)
+		case .Execute:
+			displayCommand := approval_display_text(action.command, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayCommand)
+			row += 1
+			displayDirectory := approval_display_text(
+				action.workingDirectory,
+				context.temp_allocator,
+			)
+			write_clipped_line(batch, row, interior.left_column, width, displayDirectory)
+		case .Remote:
+			displayServer := approval_display_text(action.mcpServer, context.temp_allocator)
+			write_clipped_line(batch, row, interior.left_column, width, displayServer)
+		}
+		row += 2
+	}
+
+	labels := [4]string{"Allow once", "Allow session", "Allow always", "Deny"}
+	for label, index in labels {
+		if row > interior.bottom_row {
+			break
+		}
+		prefix := "  "
+		if int(state.approval.choice) == index {
+			prefix = "> "
+		}
+		line := strings.concatenate({prefix, label}, context.temp_allocator)
+		write_clipped_line(batch, row, interior.left_column, width, line)
+		row += 1
+	}
+}
+
+approval_effect_label :: proc(effect: Permission_Effect) -> string {
+	switch effect {
+	case .Read:
+		return "Read"
+	case .Write:
+		return "Write"
+	case .Execute:
+		return "Run command"
+	case .Remote:
+		return "Remote tool"
+	}
+	return "Tool"
+}
+
+approval_display_text :: proc(text: string, allocator := context.allocator) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	hex := "0123456789ABCDEF"
+	for index := 0; index < len(text); index += 1 {
+		value := text[index]
+		switch value {
+		case '\n':
+			strings.write_string(&builder, "\\n")
+		case '\r':
+			strings.write_string(&builder, "\\r")
+		case '\t':
+			strings.write_string(&builder, "\\t")
+		case 0x1b:
+			strings.write_string(&builder, "\\e")
+		case:
+			if value < 0x20 || value == 0x7f {
+				strings.write_string(&builder, "\\x")
+				strings.write_byte(&builder, hex[value >> 4])
+				strings.write_byte(&builder, hex[value & 0x0f])
+			} else {
+				strings.write_byte(&builder, value)
+			}
+		}
+	}
+	return strings.to_string(builder)
 }
 
 render_app_input_panel_sequence :: proc(

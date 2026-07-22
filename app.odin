@@ -19,6 +19,29 @@ App_Mode :: enum int {
 	Config,
 	Models,
 	Setup,
+	Approval,
+}
+
+Approval_Choice :: enum int {
+	Allow_Once = 0,
+	Allow_Session,
+	Allow_Always,
+	Deny,
+}
+
+Approval_Input_State :: enum int {
+	Ready = 0,
+	Escape,
+	CSI,
+}
+
+Approval_State :: struct {
+	call:          Tool_Call,
+	callOwned:     bool,
+	prepared:      Tool_Dispatch_Result,
+	preparedOwned: bool,
+	choice:        Approval_Choice,
+	input:         Approval_Input_State,
 }
 
 App_Setup_Step :: enum int {
@@ -132,6 +155,9 @@ App_State :: struct {
 	setupEndpoint:         string,
 	setupAPIKey:           string,
 	tools:                 Tool_Registry,
+	dispatcher:            Tool_Dispatcher,
+	dispatcherReady:       bool,
+	approval:              Approval_State,
 	mcp:                   MCP_Registry,
 	skills:                Skill_Registry,
 	stream:                Assistant_Stream_State,
@@ -164,7 +190,9 @@ app_init_with_home :: proc(
 ) -> App_State {
 	state: App_State
 	state.mode = .Chat
-	state.stream.bufferAllocator = context.allocator
+	state.stream.bufferAllocator = allocator
+	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
+	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.input = input_buffer_init(allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
@@ -185,6 +213,11 @@ app_init_with_home :: proc(
 	app_bootstrap_config(&state, home, probeOllama, allocator)
 	app_load_input_history(&state, allocator)
 	state.tools = builtin_tool_registry(allocator)
+	state.dispatcher, state.dispatcherReady = tool_dispatcher_init(
+		state.workingDirectory,
+		state.config.permissionGrants[:],
+		allocator,
+	)
 	state.mcp = mcp_registry_from_config(state.config.mcpServers[:], allocator)
 	state.skills = skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
@@ -210,6 +243,7 @@ app_bootstrap_config :: proc(
 				delete(state.config.providers)
 				delete(state.config.mcpServers)
 				delete(state.config.skillPaths)
+				delete(state.config.permissionGrants)
 			}
 			state.config = loaded
 			state.configStringsOwned = true
@@ -288,6 +322,10 @@ app_destroy :: proc(state: ^App_State) {
 		delete(entry.content)
 	}
 	delete(state.history)
+	app_clear_approval(state)
+	if state.dispatcherReady {
+		tool_dispatcher_destroy(&state.dispatcher)
+	}
 	if state.configStringsOwned {
 		config_destroy(&state.config)
 	} else {
@@ -297,6 +335,7 @@ app_destroy :: proc(state: ^App_State) {
 		delete(state.config.providers)
 		delete(state.config.mcpServers)
 		delete(state.config.skillPaths)
+		delete(state.config.permissionGrants)
 	}
 	ai.set_raw_http_log_home("")
 	delete(state.configHome)
@@ -533,6 +572,9 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 }
 
 app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
+	if state.mode == .Approval {
+		return app_handle_approval_input(state, input)
+	}
 	if state.mode == .Models {
 		return app_handle_models_input(state, input)
 	}
@@ -583,6 +625,165 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 		}
 	}
 	return false
+}
+
+app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
+	if !state.dispatcherReady || state.mode == .Approval {
+		return false
+	}
+
+	approvalCall := tool_call_clone(call, state.dispatcher.allocator)
+	prepared := tool_dispatch_prepare(&state.dispatcher, approvalCall)
+	if prepared.decision != .Approval_Required || !prepared.actionOK {
+		tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
+		tool_call_destroy(&approvalCall, state.dispatcher.allocator)
+		return false
+	}
+
+	app_clear_approval(state)
+	state.approval.call = approvalCall
+	state.approval.callOwned = true
+	state.approval.prepared = prepared
+	state.approval.preparedOwned = true
+	state.approval.choice = .Allow_Once
+	state.approval.input = .Ready
+	state.mode = .Approval
+	state.status = "Permission approval required"
+	return true
+}
+
+app_clear_approval :: proc(state: ^App_State) {
+	if state.approval.callOwned {
+		tool_call_destroy(&state.approval.call, state.dispatcher.allocator)
+	}
+	if state.approval.preparedOwned {
+		tool_dispatch_result_destroy(&state.approval.prepared, state.dispatcher.allocator)
+	}
+	state.approval = {}
+}
+
+app_move_approval_choice :: proc(state: ^App_State, delta: int) {
+	choice := int(state.approval.choice) + delta
+	if choice < int(Approval_Choice.Allow_Once) {
+		choice = int(Approval_Choice.Deny)
+	} else if choice > int(Approval_Choice.Deny) {
+		choice = int(Approval_Choice.Allow_Once)
+	}
+	state.approval.choice = Approval_Choice(choice)
+}
+
+app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
+	switch state.approval.input {
+	case .Escape:
+		if input == '[' {
+			state.approval.input = .CSI
+			return false
+		}
+		app_apply_approval_choice(state, .Deny)
+		return true
+	case .CSI:
+		state.approval.input = .Ready
+		switch input {
+		case 'A':
+			app_move_approval_choice(state, -1)
+			return true
+		case 'B':
+			app_move_approval_choice(state, 1)
+			return true
+		}
+		return false
+	case .Ready:
+	}
+
+	switch input {
+	case 0x1b:
+		state.approval.input = .Escape
+		return false
+	case 'j', 'J':
+		app_move_approval_choice(state, 1)
+		return true
+	case 'k', 'K':
+		app_move_approval_choice(state, -1)
+		return true
+	case '1':
+		state.approval.choice = .Allow_Once
+		return true
+	case '2':
+		state.approval.choice = .Allow_Session
+		return true
+	case '3':
+		state.approval.choice = .Allow_Always
+		return true
+	case '4':
+		state.approval.choice = .Deny
+		return true
+	case '\r':
+		app_apply_approval_choice(state, state.approval.choice)
+		return true
+	case 3, 4:
+		app_apply_approval_choice(state, .Deny)
+		state.shouldQuit = true
+		state.status = "Exiting"
+		return true
+	}
+	return false
+}
+
+app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
+	if !state.approval.callOwned || !state.approval.preparedOwned {
+		state.mode = .Chat
+		return
+	}
+
+	if choice == .Deny {
+		output := "Permission denied."
+		append_history(state, .Tool, output)
+		app_append_tool_result(state, state.approval.call.callID, output, true)
+		state.status = "Tool call denied"
+		state.mode = .Chat
+		app_clear_approval(state)
+		app_start_tool_continuation_if_ready(state)
+		return
+	}
+
+	if choice == .Allow_Session || choice == .Allow_Always {
+		grant, grantOK := tool_dispatch_grant_from_action(
+			state.approval.prepared.action,
+			state.dispatcher.allocator,
+		)
+		if !grantOK {
+			state.status = "Tool call requires one-time approval"
+			return
+		}
+
+		if choice == .Allow_Session {
+			grantOK = tool_dispatcher_add_session_grant(&state.dispatcher, grant)
+			permission_grant_destroy(&grant, state.dispatcher.allocator)
+		} else {
+			append(&state.config.permissionGrants, grant)
+			state.dispatcher.persistentGrants = state.config.permissionGrants[:]
+			if state.configHome != "" &&
+			   save_config_to_file(state.configHome, state.config) != .None {
+				grant = pop(&state.config.permissionGrants)
+				permission_grant_destroy(&grant, state.dispatcher.allocator)
+				state.dispatcher.persistentGrants = state.config.permissionGrants[:]
+				state.status = "Permission grant could not be saved"
+				return
+			}
+		}
+
+		if !grantOK {
+			state.status = "Permission grant could not be added"
+			return
+		}
+	}
+
+	output := tool_dispatch_execute_approved(&state.dispatcher, state.approval.call)
+	app_record_tool_execution_result(state, state.approval.call.callID, output)
+	state.status = "Tool call completed"
+	state.mode = .Chat
+	app_clear_approval(state)
+	app_start_tool_continuation_if_ready(state)
 }
 
 app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
@@ -891,6 +1092,7 @@ app_submit_input :: proc(state: ^App_State) {
 		return
 	}
 
+	app_clear_assistant_stream_conversation(&state.stream)
 	append_history(state, .User, text)
 	app_start_assistant_stream(state)
 }
@@ -958,6 +1160,7 @@ app_complete_setup :: proc(state: ^App_State) {
 	delete(state.config.providers)
 	delete(state.config.mcpServers)
 	delete(state.config.skillPaths)
+	delete(state.config.permissionGrants)
 	state.config = default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
 	state.config.providers[0].endpointOwned = true

@@ -94,6 +94,7 @@ Chat_Stream_Callback_State :: struct {
 	callback:            Chat_Stream_Callback,
 	callbackWithContext: Chat_Stream_Context_Callback,
 	userData:            rawptr,
+	parserData:          rawptr,
 }
 
 chat_stream_callback_valid :: proc(state: Chat_Stream_Callback_State) -> bool {
@@ -184,11 +185,16 @@ send_openai_chat_completion_stream :: proc(
 		append(&extraHeaders, [2]string{"authorization", authorization})
 	}
 
+	toolState: OpenAI_Stream_Tool_State
+	defer openai_stream_tool_state_destroy(&toolState)
+	streamCallbackState := callbackState
+	streamCallbackState.parserData = rawptr(&toolState)
+
 	body, status, errKind := do_json_post_stream(
 		target,
 		wire,
 		extraHeaders[:],
-		callbackState,
+		streamCallbackState,
 		parse_openai_stream_event,
 		parse_sse_stream_chunk,
 	)
@@ -254,12 +260,16 @@ send_anthropic_chat_completion_stream :: proc(
 
 	wire := build_anthropic_stream_request(request)
 	headers := [][2]string{{"x-api-key", client.apiKey}, {"anthropic-version", ANTHROPIC_VERSION}}
+	toolState: Anthropic_Stream_Tool_State
+	defer anthropic_stream_tool_state_destroy(&toolState)
+	streamCallbackState := callbackState
+	streamCallbackState.parserData = rawptr(&toolState)
 
 	body, status, errKind := do_json_post_stream(
 		target,
 		wire,
 		headers,
-		callbackState,
+		streamCallbackState,
 		parse_anthropic_stream_event,
 		parse_sse_stream_chunk,
 	)
@@ -395,12 +405,15 @@ send_ollama_chat_completion_stream :: proc(
 		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
 		append(&extraHeaders, [2]string{"authorization", authorization})
 	}
+	toolState: Ollama_Stream_Tool_State
+	streamCallbackState := callbackState
+	streamCallbackState.parserData = rawptr(&toolState)
 
 	body, status, errKind := do_json_post_stream(
 		target,
 		wire,
 		extraHeaders[:],
-		callbackState,
+		streamCallbackState,
 		parse_ollama_stream_event,
 		parse_json_lines_stream_chunk,
 	)

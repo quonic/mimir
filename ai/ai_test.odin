@@ -1,12 +1,15 @@
 package ai
 
 import http "../http"
+import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 Test_Stream_State :: struct {
 	parts:        [dynamic]string,
+	toolCalls:    [dynamic]Tool_Call,
 	model:        string,
 	finishReason: string,
 	done:         bool,
@@ -20,6 +23,10 @@ testStopStreamState: Test_Stream_State
 
 reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	delete(state.parts)
+	for &call in state.toolCalls {
+		tool_call_destroy(&call)
+	}
+	delete(state.toolCalls)
 	state^ = Test_Stream_State{}
 }
 
@@ -53,6 +60,9 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 	state.calls += 1
 	if delta.content != "" {
 		append(&state.parts, delta.content)
+	}
+	if delta.hasToolCall {
+		append(&state.toolCalls, tool_call_clone(delta.toolCall))
 	}
 	if delta.model != "" {
 		state.model = delta.model
@@ -99,6 +109,88 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "test-model",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
+	}
+	wire := build_openai_chat_request(request)
+	assert(len(wire.tools) == 1, "expected OpenAI request tool")
+	assert(wire.tools[0].type == "function", "expected OpenAI function tool")
+	assert(wire.tools[0].function.name == "read_file", "expected OpenAI tool name")
+
+	payload := `{"model":"gpt-test","choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"file_path\\":\\"main.odin\\"}"}}]},"finish_reason":"tool_calls"}]}`
+	response, err := parse_openai_chat_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected OpenAI tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed OpenAI tool call")
+	assert(response.toolCalls[0].name == "read_file", "expected parsed OpenAI tool name")
+	_ = t
+}
+
+@(test)
+test_openai_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "test-model",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {
+					{id = "call-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result{{toolCallID = "call-1", content = "package main"}},
+			},
+		},
+	}
+	wire := build_openai_chat_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(wire.messages[0].role == "assistant", "expected assistant tool-call message")
+	assert(len(wire.messages[0].tool_calls) == 1, "expected serialized tool call")
+	assert(
+		wire.messages[0].tool_calls[0].function.name == "read_file",
+		"expected serialized tool name",
+	)
+	assert(wire.messages[1].role == "tool", "expected OpenAI tool result role")
+	assert(wire.messages[1].tool_call_id == "call-1", "expected result call ID")
+	assert(wire.messages[1].content == "package main", "expected tool result content")
+	_ = t
+}
+
+@(test)
+test_tool_call_clone_and_response_destroy :: proc(t: ^testing.T) {
+	call := Tool_Call {
+		id        = "call-1",
+		name      = "read_file",
+		arguments = `{"file_path":"main.odin"}`,
+	}
+	clone := tool_call_clone(call, context.allocator)
+	defer tool_call_destroy(&clone, context.allocator)
+	assert(clone.id == "call-1", "expected cloned tool call ID")
+	assert(clone.name == "read_file", "expected cloned tool call name")
+	assert(clone.arguments == call.arguments, "expected cloned tool call arguments")
+
+	response := Chat_Response {
+		content   = strings.clone("", context.allocator),
+		model     = strings.clone("test", context.allocator),
+		toolCalls = make([dynamic]Tool_Call, 0, 1, context.allocator),
+	}
+	append(&response.toolCalls, tool_call_clone(call, context.allocator))
+	chat_response_destroy(&response, context.allocator)
+	assert(len(response.toolCalls) == 0, "expected response destroy to clear tool calls")
+	_ = t
+}
+
+@(test)
 test_build_ollama_chat_request :: proc(t: ^testing.T) {
 	request := Chat_Request {
 		model       = "llama3.2",
@@ -121,6 +213,63 @@ test_build_ollama_chat_request :: proc(t: ^testing.T) {
 
 	streamWire := build_ollama_chat_stream_request(request)
 	assert(streamWire.stream, "expected native Ollama stream payload to enable streaming")
+	_ = t
+}
+
+@(test)
+test_ollama_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "qwen3",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
+	}
+	wire := build_ollama_chat_request(request)
+	assert(len(wire.tools) == 1, "expected Ollama request tool")
+	assert(wire.tools[0].type == "function", "expected Ollama function tool")
+	assert(wire.tools[0].function.name == "read_file", "expected Ollama tool name")
+
+	payload := `{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"file_path":"main.odin"}}}]},"done":true,"done_reason":"stop"}`
+	response, err := parse_ollama_chat_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected Ollama tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed Ollama tool call")
+	assert(response.toolCalls[0].id == "ollama-0", "expected synthetic Ollama call ID")
+	assert(response.toolCalls[0].name == "read_file", "expected parsed Ollama tool name")
+	_ = t
+}
+
+@(test)
+test_ollama_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "qwen3",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {
+					{id = "ollama-0", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result{{toolCallID = "ollama-0", content = "package main"}},
+			},
+		},
+	}
+	wire := build_ollama_chat_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(len(wire.messages[0].tool_calls) == 1, "expected Ollama tool-call history")
+	assert(
+		wire.messages[0].tool_calls[0].function.name == "read_file",
+		"expected Ollama tool-call name",
+	)
+	assert(wire.messages[1].role == "tool", "expected Ollama tool-result role")
+	assert(wire.messages[1].content == "package main", "expected Ollama tool result")
 	_ = t
 }
 
@@ -187,6 +336,64 @@ test_parse_anthropic_response :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "claude-test",
+		messages = []Message{{role = .User, content = "Inspect the project"}},
+		tools    = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
+			},
+		},
+	}
+	wire := build_anthropic_request(request)
+	assert(len(wire.tools) == 1, "expected Anthropic request tool")
+	assert(wire.tools[0].name == "read_file", "expected Anthropic tool name")
+
+	payload := `{"model":"claude-test","content":[{"type":"tool_use","id":"tool-1","name":"read_file","input":{"file_path":"main.odin"}}],"stop_reason":"tool_use"}`
+	response, err := parse_anthropic_response(payload, context.allocator)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected Anthropic tool call response")
+	assert(len(response.toolCalls) == 1, "expected parsed Anthropic tool call")
+	assert(response.toolCalls[0].arguments != "", "expected serialized Anthropic arguments")
+	_ = t
+}
+
+@(test)
+test_anthropic_request_serializes_tool_call_history :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model    = "claude-test",
+		messages = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {
+					{id = "tool-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
+				},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result{{toolCallID = "tool-1", content = "package main"}},
+			},
+		},
+	}
+	wire := build_anthropic_request(request)
+	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
+	assert(wire.messages[0].role == "assistant", "expected Anthropic assistant role")
+	assert(wire.messages[1].role == "user", "expected Anthropic tool result user role")
+	toolUseJSON, toolUseErr := json.unparse(wire.messages[0].content)
+	assert(toolUseErr == nil, "expected Anthropic tool-use blocks to serialize")
+	assert(strings.contains(toolUseJSON, `"tool_use"`), "expected tool_use block")
+	assert(strings.contains(toolUseJSON, `"file_path"`), "expected raw tool input")
+	toolResultJSON, toolResultErr := json.unparse(wire.messages[1].content)
+	assert(toolResultErr == nil, "expected Anthropic tool-result blocks to serialize")
+	assert(strings.contains(toolResultJSON, `"tool_result"`), "expected tool_result block")
+	assert(strings.contains(toolResultJSON, `"tool-1"`), "expected tool result call ID")
+	_ = t
+}
+
+@(test)
 test_parse_openai_stream_body :: proc(t: ^testing.T) {
 	reset_test_stream_state(&testOpenAIStreamState)
 	defer reset_test_stream_state(&testOpenAIStreamState)
@@ -229,6 +436,37 @@ test_parse_openai_stream_reasoning_delta :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_parse_openai_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOpenAIStreamState)
+	defer reset_test_stream_state(&testOpenAIStreamState)
+
+	toolState: OpenAI_Stream_Tool_State
+	defer openai_stream_tool_state_destroy(&toolState)
+	payload :=
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\\\"file_path\\\\\":\"}}]}}]}\n\n" +
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\\\"main.odin\\\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	err := parse_sse_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_openai_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_openai_stream_event,
+	)
+
+	assert(err == .None, "expected OpenAI tool-call stream to parse")
+	assert(len(testOpenAIStreamState.toolCalls) == 1, "expected one completed tool call")
+	assert(testOpenAIStreamState.toolCalls[0].id == "call-1", "expected tool call ID")
+	assert(testOpenAIStreamState.toolCalls[0].name == "read_file", "expected tool call name")
+	assert(
+		testOpenAIStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
+		"expected concatenated tool call arguments",
+	)
+	_ = t
+}
+
+@(test)
 test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 	reset_test_stream_state(&testAnthropicStreamState)
 	defer reset_test_stream_state(&testAnthropicStreamState)
@@ -261,6 +499,42 @@ test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_parse_anthropic_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testAnthropicStreamState)
+	defer reset_test_stream_state(&testAnthropicStreamState)
+
+	toolState: Anthropic_Stream_Tool_State
+	defer anthropic_stream_tool_state_destroy(&toolState)
+	payload :=
+		"event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"read_file\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\":\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"main.odin\\\"}\"}}\n\n" +
+		"event: content_block_stop\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+	err := parse_sse_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_anthropic_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_anthropic_stream_event,
+	)
+
+	assert(err == .None, "expected Anthropic tool-use stream to parse")
+	assert(len(testAnthropicStreamState.toolCalls) == 1, "expected one completed tool call")
+	assert(testAnthropicStreamState.toolCalls[0].id == "tool-1", "expected tool call ID")
+	assert(testAnthropicStreamState.toolCalls[0].name == "read_file", "expected tool call name")
+	assert(
+		testAnthropicStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
+		"expected concatenated tool arguments",
+	)
+	_ = t
+}
+
+@(test)
 test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	reset_test_stream_state(&testOllamaStreamState)
 	defer reset_test_stream_state(&testOllamaStreamState)
@@ -282,6 +556,32 @@ test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	assert(testOllamaStreamState.model == "llama3.2", "expected Ollama stream model")
 	assert(testOllamaStreamState.finishReason == "stop", "expected Ollama finish reason")
 	assert(testOllamaStreamState.done, "expected Ollama stream to mark done")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_stream_tool_calls :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOllamaStreamState)
+	defer reset_test_stream_state(&testOllamaStreamState)
+
+	toolState: Ollama_Stream_Tool_State
+	payload :=
+		`{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"file_path":"main.odin"}}}]},"done":true,"done_reason":"stop"}` +
+		"\n"
+	err := parse_json_lines_stream_body_internal(
+		payload,
+		Chat_Stream_Callback_State {
+			callback = record_ollama_stream_delta,
+			parserData = rawptr(&toolState),
+		},
+		parse_ollama_stream_event,
+	)
+
+	assert(err == .None, "expected Ollama tool-call stream to parse")
+	assert(len(testOllamaStreamState.toolCalls) == 1, "expected one streamed tool call")
+	assert(testOllamaStreamState.toolCalls[0].id == "ollama-0", "expected synthetic ID")
+	assert(testOllamaStreamState.toolCalls[0].name == "read_file", "expected tool name")
+	assert(testOllamaStreamState.done, "expected Ollama tool stream to finish")
 	_ = t
 }
 

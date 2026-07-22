@@ -32,15 +32,18 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
     }
   ],
   "mcpServers": [],
-  "skillPaths": ["/tmp/mimir/skills"]
+	"skillPaths": ["/tmp/mimir/skills"],
+	"permissionGrants": [
+		{
+			"kind": "directorySubtree",
+			"projectRoot": "/tmp/mimir",
+			"directory": "/tmp/mimir/generated"
+		}
+	]
 }`
 
-	config, err := parse_config_from_json(payload, context.temp_allocator)
-	defer {
-		delete(config.providers)
-		delete(config.mcpServers)
-		delete(config.skillPaths)
-	}
+	config, err := parse_config_from_json(payload, context.allocator)
+	defer config_destroy(&config)
 
 	assert(err == .None, "expected valid config JSON to parse")
 	assert(config.selectedProvider == "ollama", "expected selected provider")
@@ -51,6 +54,11 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(config.providers[0].enabled, "expected provider to be enabled")
 	assert(len(config.skillPaths) == 1, "expected skill path to parse")
 	assert(config.skillPaths[0] == "/tmp/mimir/skills", "expected skill path")
+	assert(len(config.permissionGrants) == 1, "expected one permission grant")
+	assert(
+		config.permissionGrants[0].kind == .Directory_Subtree,
+		"expected directory subtree permission grant",
+	)
 	_ = t
 }
 
@@ -73,7 +81,7 @@ test_parse_config_rejects_invalid_provider_type :: proc(t: ^testing.T) {
   "skillPaths": []
 }`
 
-	_, err := parse_config_from_json(payload, context.temp_allocator)
+	_, err := parse_config_from_json(payload, context.allocator)
 	assert(err == .Invalid_JSON, "expected invalid provider type to reject config")
 	_ = t
 }
@@ -102,6 +110,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 		delete(config.providers)
 		delete(config.mcpServers)
 		delete(config.skillPaths)
+		delete(config.permissionGrants)
 	}
 
 	saveErr := save_config_to_file(home, config)
@@ -112,6 +121,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 		delete(loaded.providers)
 		delete(loaded.mcpServers)
 		delete(loaded.skillPaths)
+		delete(loaded.permissionGrants)
 	}
 
 	assert(loadErr == .None, "expected config load to succeed")
@@ -120,6 +130,28 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_permission_grant_outside_project :: proc(t: ^testing.T) {
+	payload := `{
+	"selectedProvider": "ollama",
+	"selectedModel": "",
+	"providers": [],
+	"mcpServers": [],
+	"skillPaths": [],
+	"permissionGrants": [
+		{
+			"kind": "directorySubtree",
+			"projectRoot": "/workspace/project",
+			"directory": "/tmp"
+		}
+	]
+}`
+
+	_, err := parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected out-of-project directory grant to reject config")
 	_ = t
 }
 

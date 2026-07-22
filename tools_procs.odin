@@ -1,42 +1,20 @@
 package main
 
-import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
-import "core:slice"
 import "core:strconv"
 import "core:strings"
 
 // All tools take in strings and output strings.
 
-read_file_tool_proc := proc(file_path: string, start_line: string, end_line: string) -> string {
-	start_line_int: int = 0
-	end_line_int: int = 0
-	ok: bool = false
-
+read_file_tool_proc := proc(file_path: string) -> string {
 	data, err := os.read_entire_file_from_path(file_path, context.allocator)
 	if err != nil {
 		return fmt.aprintf("Error reading file: %s", err)
 	}
-	start_line_int, ok = strconv.parse_int(start_line)
-	if !ok {
-		return fmt.aprintf("Error parsing start_line: %s", start_line)
-	}
-	end_line_int, ok = strconv.parse_int(end_line)
-	if !ok {
-		return fmt.aprintf("Error parsing end_line: %s", end_line)
-	}
-	if start_line_int == 0 && end_line_int == 0 {
-		return string(data)
-	}
-	// If start_line or end_line are specified, extract the relevant lines
-	lines := strings.split(string(data), "\n")
-	if end_line_int == 0 || end_line_int > len(lines) {
-		end_line_int = len(lines)
-	}
-	return strings.join(lines[start_line_int:end_line_int], "\n")
-
+	defer delete(data, context.allocator)
+	return strings.clone(string(data), context.allocator)
 }
 
 write_file_tool_proc := proc(file_path: string, content: string, overwrite: string) -> string {
@@ -48,9 +26,9 @@ write_file_tool_proc := proc(file_path: string, content: string, overwrite: stri
 	} else if overwrite == "true" {
 		// If overwrite is true, delete the existing file
 		if _, err := os.stat(file_path, context.allocator); err == nil {
-			err := os.remove(file_path)
-			if err != nil {
-				return fmt.aprintf("Error overwriting file: %s", err)
+			rm_err := os.remove(file_path)
+			if rm_err != nil {
+				return fmt.aprintf("Error overwriting file: %s", rm_err)
 			}
 		}
 	} else {
@@ -67,29 +45,47 @@ run_command_tool_proc := proc(
 	command: string,
 	working_directory: string = "",
 	timeout: int = 0,
-	capture_output: bool = false,
-	env_vars: [dynamic]string = nil,
-	shell: string = "",
 ) -> string {
-	proc_desc := os.Process_Desc {
-		command = {command},
+	shell := get_default_shell()
+	if shell == "" {
+		return fmt.aprintf("run_command_tool: Unsupported OS: %s", ODIN_OS)
 	}
-	if working_directory != "" {
+
+	proc_desc := os.Process_Desc {
+		command = {shell, "-c", command},
+	}
+	if working_directory == "" {
+		{
+			gwd_err: os.Error
+			proc_desc.working_dir, gwd_err = os.get_working_directory(context.allocator)
+			if gwd_err != nil {
+				return fmt.aprintf(
+					"run_command_tool: Error getting working directory: %s",
+					gwd_err,
+				)
+			}
+		}
+	} else if !os.is_directory(working_directory) {
+		return fmt.aprintf(
+			"run_command_tool: Working directory does not exist: %s",
+			working_directory,
+		)
+	} else {
 		proc_desc.working_dir = working_directory
 	}
 	proc_desc.env, _ = os.environ(context.allocator)
-	alloc_err: runtime.Allocator_Error
-	proc_desc.env, alloc_err = slice.concatenate([][]string{proc_desc.env, env_vars[:]})
-	if alloc_err != .None {
-		return fmt.aprintf(
-			"run_command_tool: Error allocating memory for environment variables: %s",
-			alloc_err,
-		)
+	defer {
+		for environmentEntry in proc_desc.env {
+			delete(environmentEntry, context.allocator)
+		}
+		delete(proc_desc.env, context.allocator)
 	}
 
 	state, stdout, stderr, err := os.process_exec(proc_desc, context.allocator)
+	defer delete(stdout, context.allocator)
+	defer delete(stderr, context.allocator)
 	if err != nil {
-		return fmt.aprintf("run_command_tool: Error executing command: %s", err)
+		return fmt.aprintf("run_command_tool: Error executing command `%s`: %s", command, err)
 	}
 	if state.exit_code != 0 {
 		return fmt.aprintf(
@@ -99,6 +95,20 @@ run_command_tool_proc := proc(
 		)
 	}
 	return fmt.aprintf("{\"stdout\": \"%s\", \"stderr\": \"%s\"}", string(stdout), string(stderr))
+}
+
+get_default_shell :: proc() -> string {
+	if ODIN_OS == .Windows {
+		return "C:\\Windows\\System32\\cmd.exe"
+	} else if ODIN_OS == .Linux ||
+	   ODIN_OS == .Darwin ||
+	   ODIN_OS == .FreeBSD ||
+	   ODIN_OS == .OpenBSD ||
+	   ODIN_OS == .NetBSD {
+		return "/bin/bash"
+	} else {
+		return ""
+	}
 }
 
 list_available_shells_tool_proc := proc() -> string {
@@ -142,7 +152,8 @@ list_available_shells_tool_proc := proc() -> string {
 	} else {
 		return fmt.aprintf("list_available_shells_tool: Unsupported OS: %s", ODIN_OS)
 	}
-	return strings.join(shells[:], ", ")
+	joined_shells := strings.join(shells[:], ", ")
+	return joined_shells
 }
 
 list_directory_tool_proc := proc(directory_path: string) -> string {
@@ -150,24 +161,27 @@ list_directory_tool_proc := proc(directory_path: string) -> string {
 	if err != nil {
 		return fmt.aprintf("list_directory_tool: Error reading directory: %s", err)
 	}
-	json_data, marshal_err := json.marshal(file_infos)
+	defer os.file_info_slice_delete(file_infos, context.allocator)
+	json_data, marshal_err := json.marshal(file_infos, allocator = context.allocator)
 	if marshal_err != nil {
 		return fmt.aprintf(
 			"list_directory_tool: Error converting results to JSON: %s",
 			marshal_err,
 		)
 	}
-	return string(json_data)
+	defer delete(json_data, context.allocator)
+	return strings.clone(string(json_data), context.allocator)
 }
 
 get_file_info_tool_proc := proc(file_path: string) -> string {
-	file_info, err := os.read_directory_by_path(file_path, 1, context.allocator)
+	file_info, err := os.stat(file_path, context.allocator)
 	if err != nil {
 		return fmt.aprintf("get_file_info_tool: Error reading file info: %s", err)
 	}
-	json_data, marshal_err := json.marshal(file_info)
+	json_data, marshal_err := json.marshal(file_info, allocator = context.allocator)
 	if marshal_err != nil {
 		return fmt.aprintf("get_file_info_tool: Error converting results to JSON: %s", marshal_err)
 	}
-	return string(json_data)
+	defer delete(json_data, context.allocator)
+	return strings.clone(string(json_data), context.allocator)
 }

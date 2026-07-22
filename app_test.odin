@@ -33,6 +33,277 @@ test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		"expected write call to open approval modal",
+	)
+	assert(state.mode == .Approval, "expected approval mode")
+	assert(state.approval.choice == .Allow_Once, "expected once approval selected initially")
+	assert(app_handle_approval_input(&state, 'j'), "expected approval choice movement")
+	assert(state.approval.choice == .Allow_Session, "expected session approval selected")
+	assert(!app_handle_approval_input(&state, 0x1b), "expected escape sequence start")
+	assert(app_handle_approval_input(&state, 'x'), "expected escape to deny approval")
+	assert(state.mode == .Chat, "expected denial to restore chat mode")
+	assert(state.status == "Tool call denied", "expected escape denial status")
+	_ = t
+}
+
+@(test)
+test_approval_display_text_escapes_terminal_controls :: proc(t: ^testing.T) {
+	display := approval_display_text("printf 'one\ntwo'\x1b[2J\t", context.temp_allocator)
+	assert(
+		display == "printf 'one\\ntwo'\\e[2J\\t",
+		"expected terminal controls to be escaped for approval display",
+	)
+	_ = t
+}
+
+@(test)
+test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-1",
+			name = "run_command",
+			arguments = `{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
+		},
+		context.allocator,
+	)
+	assert(callOK, "expected command tool call to decode")
+	assert(app_show_approval(&state, call), "expected command call to open approval modal")
+	tool_call_destroy(&call, context.allocator)
+
+	sequence := render_app_frame_sequence(&state, 18, 80, context.temp_allocator)
+	assert(
+		contains_string(sequence, `echo "Test Shell command"`),
+		"expected approval modal to display retained command text",
+	)
+	_ = t
+}
+
+@(test)
+test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
+	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
+	defer delete(ollamaTools)
+	assert(len(ollamaTools) == 6, "expected Ollama to receive all built-in tools")
+
+	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
+	defer delete(openAITools)
+	assert(len(openAITools) == 6, "expected OpenAI to receive all built-in tools")
+	_ = t
+}
+
+@(test)
+test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("run_command", context.allocator),
+			arguments = strings.clone(`{"command":"pwd","shell":"/bin/sh"}`, context.allocator),
+		},
+	)
+
+	assert(app_process_pending_stream_tool_calls(&state), "expected queued tool call to process")
+	assert(state.mode == .Approval, "expected execute tool call to require approval")
+	assert(len(state.stream.toolCalls) == 0, "expected queued tool call to be consumed")
+	_ = t
+}
+
+@(test)
+test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-1",
+		name      = "write_file",
+		arguments = `{"file_path":"notes.txt","content":"hello","overwrite":"true"}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected JSON arguments to decode")
+	assert(call.id == "write_file", "expected decoded tool ID")
+	assert(call.filePath == "notes.txt", "expected decoded file path")
+	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
+test_app_retains_tool_result_for_continuation :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(
+		&state.stream.conversation,
+		ai.Message{role = .Assistant, content = strings.clone("Calling tool", context.allocator)},
+	)
+
+	app_append_tool_result(&state, "call-1", "package main", false)
+	assert(len(state.stream.conversation) == 2, "expected tool result conversation entry")
+	resultMessage := state.stream.conversation[1]
+	assert(resultMessage.role == .Tool, "expected tool result message role")
+	assert(len(resultMessage.toolResults) == 1, "expected one typed tool result")
+	assert(resultMessage.toolResults[0].toolCallID == "call-1", "expected call ID")
+	assert(resultMessage.toolResults[0].content == "package main", "expected tool output")
+	_ = t
+}
+
+@(test)
+test_app_releases_retained_failed_command_output :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	append(&state.stream.conversation, ai.Message{role = .Assistant})
+
+	output := run_command_tool_proc("ip add")
+	app_append_tool_result(&state, "call-1", output, true)
+	delete(output, context.allocator)
+
+	app_clear_assistant_stream_conversation(&state.stream)
+	assert(len(state.stream.conversation) == 0, "expected retained command output to clear")
+	_ = t
+}
+
+@(test)
+test_app_hides_successful_tool_output_from_history :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.mode = .Config
+	append(
+		&state.stream.conversation,
+		ai.Message {
+			role = .Assistant,
+			content = strings.clone("Reading app.odin", context.allocator),
+		},
+	)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(`{"file_path":"app.odin"}`, context.allocator),
+		},
+	)
+
+	assert(
+		app_process_pending_stream_tool_calls(&state),
+		"expected read-only tool call to process",
+	)
+	assert(len(state.history) == 1, "expected successful tool output to remain out of history")
+	assert(len(state.stream.conversation) == 2, "expected tool result to remain in continuation")
+	result := state.stream.conversation[1].toolResults[0]
+	assert(result.content != "", "expected retained tool output")
+	assert(!result.isError, "expected successful tool result")
+	_ = t
+}
+
+@(test)
+test_app_shows_tool_errors_in_history :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.mode = .Config
+	append(
+		&state.stream.conversation,
+		ai.Message {
+			role = .Assistant,
+			content = strings.clone("Reading a file", context.allocator),
+		},
+	)
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(`{"file_path":"missing.odin"}`, context.allocator),
+		},
+	)
+
+	assert(
+		app_process_pending_stream_tool_calls(&state),
+		"expected read-only tool call to process",
+	)
+	assert(len(state.history) == 2, "expected tool error to appear in history")
+	assert(state.history[1].role == .Tool, "expected visible tool error entry")
+	result := state.stream.conversation[1].toolResults[0]
+	assert(result.isError, "expected failed tool result")
+	_ = t
+}
+
+@(test)
+test_app_stream_conversation_uses_app_allocator :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	history := []History_Entry{{role = .User, content = "Read main.odin"}}
+
+	state.stream.conversation = app_build_ai_messages(history, state.stream.bufferAllocator)
+	app_append_tool_result(&state, "call-1", "package main", false)
+
+	assert(len(state.stream.conversation) == 2, "expected retained tool conversation")
+	app_clear_assistant_stream_conversation(&state.stream)
+	assert(len(state.stream.conversation) == 0, "expected cleared retained tool conversation")
+	_ = t
+}
+
+@(test)
+test_tool_call_queue_reinitializes_with_stream_allocator :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	app_clear_assistant_stream_tool_calls(&state.stream)
+	assert(len(state.stream.toolCalls) == 0, "expected empty reinitialized tool-call queue")
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("list_directory", context.allocator),
+			arguments = strings.clone(`{"directory_path":"."}`, context.allocator),
+		},
+	)
+	app_clear_assistant_stream_tool_calls(&state.stream)
+	assert(len(state.stream.toolCalls) == 0, "expected tool-call queue cleanup")
+	_ = t
+}
+
+@(test)
+test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assistant_stream_append_partial(&state.stream, "I will inspect the file.")
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("read_file", context.allocator),
+			arguments = strings.clone(`{"file_path":"main.odin"}`, context.allocator),
+		},
+	)
+
+	assert(app_record_stream_tool_turn(&state), "expected streamed tool turn to record")
+	assert(len(state.stream.conversation) == 1, "expected assistant conversation entry")
+	message := state.stream.conversation[0]
+	assert(message.role == .Assistant, "expected assistant tool-call message")
+	assert(message.content == "I will inspect the file.", "expected streamed assistant text")
+	assert(len(message.toolCalls) == 1, "expected retained tool call")
+	assert(message.toolCalls[0].id == "call-1", "expected retained tool call ID")
+	_ = t
+}
+
+@(test)
+test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(state.dispatcherReady, "expected app to initialize permission dispatcher")
+	assert(
+		state.dispatcher.projectRoot == state.workingDirectory,
+		"expected dispatcher to use the app working directory",
+	)
+	_ = t
+}
+
+@(test)
 test_input_buffer_inserts_and_backspaces_at_cursor :: proc(t: ^testing.T) {
 	buffer := input_buffer_init(context.temp_allocator)
 	defer input_buffer_destroy(&buffer)
@@ -444,7 +715,7 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 
 	assert(app_scroll_history_page(&state, 1), "expected history to remain scrollable")
 	state.stream.assistantIndex = len(state.history) - 1
-	state.stream.partial = strings.clone("streamed entry", context.allocator)
+	assistant_stream_append_partial(&state.stream, "streamed entry")
 	assert(app_sync_assistant_history_entry(&state), "expected streamed content to update history")
 	assert(
 		state.historyScrollOffset == 0,

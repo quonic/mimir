@@ -1,31 +1,60 @@
 package main
 
 import "ai"
+import "core:encoding/json"
 import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
 
+MAX_TOOL_CONTINUATIONS :: 8
+MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
+
 Assistant_Stream_State :: struct {
-	mutex:           sync.Mutex,
-	bufferAllocator: mem.Allocator,
-	worker:          ^thread.Thread,
-	workerData:      ^Assistant_Stream_Worker,
-	assistantIndex:  int,
-	partial:         string,
-	finishReason:    string,
-	err:             ai.AI_Error,
-	active:          bool,
-	finished:        bool,
-	cancelRequested: bool,
-	canceled:        bool,
+	mutex:                   sync.Mutex,
+	bufferAllocator:         mem.Allocator,
+	worker:                  ^thread.Thread,
+	workerData:              ^Assistant_Stream_Worker,
+	assistantIndex:          int,
+	partialBuffer:           [dynamic]byte,
+	lastSyncedPartialLength: int,
+	finishReason:            string,
+	err:                     ai.AI_Error,
+	active:                  bool,
+	finished:                bool,
+	cancelRequested:         bool,
+	canceled:                bool,
+	toolCalls:               [dynamic]ai.Tool_Call,
+	conversation:            [dynamic]ai.Message,
+	continuationCount:       int,
+}
+
+AI_Tool_Call_Arguments :: struct {
+	file_path:         string,
+	directory_path:    string,
+	content:           string,
+	overwrite:         string,
+	command:           string,
+	working_directory: string,
+	timeout:           int,
+	mcp_server:        string,
 }
 
 Assistant_Stream_Worker :: struct {
-	stream:   ^Assistant_Stream_State,
-	client:   ai.Client,
-	request:  ai.Chat_Request,
-	messages: [dynamic]ai.Message,
+	stream:          ^Assistant_Stream_State,
+	client:          ai.Client,
+	request:         ai.Chat_Request,
+	toolDefinitions: [dynamic]ai.Tool_Definition,
+}
+
+app_tool_definitions_for_provider :: proc(
+	providerType: ai.Interface_Type,
+	allocator := context.allocator,
+) -> [dynamic]ai.Tool_Definition {
+	if providerType == .None {
+		return make([dynamic]ai.Tool_Definition, 0, 0, allocator)
+	}
+	return builtin_ai_tool_definitions(allocator)
 }
 
 app_assistant_stream_active :: proc(state: ^App_State) -> bool {
@@ -65,9 +94,13 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 		return
 	}
 
-	messages := app_build_ai_messages(state.history[:], context.allocator)
-	if len(messages) == 0 {
-		delete(messages)
+	if len(state.stream.conversation) == 0 {
+		state.stream.conversation = app_build_ai_messages(
+			state.history[:],
+			state.stream.bufferAllocator,
+		)
+	}
+	if len(state.stream.conversation) == 0 {
 		app_append_assistant_stream_error(state, "No chat messages to send")
 		return
 	}
@@ -78,10 +111,14 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	workerData := new(Assistant_Stream_Worker)
 	workerData.stream = &state.stream
 	workerData.client = client
-	workerData.messages = messages
+	workerData.toolDefinitions = app_tool_definitions_for_provider(
+		provider.type,
+		context.allocator,
+	)
 	workerData.request = ai.Chat_Request {
 		model       = strings.clone(model, context.allocator),
-		messages    = workerData.messages[:],
+		messages    = state.stream.conversation[:],
+		tools       = workerData.toolDefinitions[:],
 		temperature = 0.2,
 		maxTokens   = 4096,
 	}
@@ -98,7 +135,7 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 
 app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 	if !state.stream.active {
-		return false
+		return app_process_pending_stream_tool_calls(state)
 	}
 
 	dirty := app_sync_assistant_history_entry(state)
@@ -122,16 +159,10 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 				state.status = "Assistant stream canceled"
 			case state.stream.err != .None:
 				errorText := assistant_stream_error_text(state.stream.err)
-				if state.stream.partial == "" {
-					state.stream.partial = strings.clone(errorText, state.stream.bufferAllocator)
-				} else {
-					combined := strings.concatenate(
-						{state.stream.partial, "\n\n", errorText},
-						state.stream.bufferAllocator,
-					)
-					delete(state.stream.partial, state.stream.bufferAllocator)
-					state.stream.partial = combined
+				if len(state.stream.partialBuffer) > 0 {
+					assistant_stream_append_partial(&state.stream, "\n\n")
 				}
+				assistant_stream_append_partial(&state.stream, errorText)
 				state.status = "Assistant stream failed"
 			case:
 				state.status = "Assistant response complete"
@@ -141,8 +172,14 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 		dirty = app_sync_assistant_history_entry(state) || dirty
 		state.historyRenderOnly = false
 		state.stream.active = false
+		hasToolCalls := app_record_stream_tool_turn(state)
 		app_clear_assistant_stream_buffers(&state.stream)
-		dirty = true
+		if hasToolCalls {
+			dirty = app_process_pending_stream_tool_calls(state) || true
+		} else {
+			app_clear_assistant_stream_conversation(&state.stream)
+			dirty = true
+		}
 	}
 
 	return dirty
@@ -163,6 +200,8 @@ app_cancel_assistant_stream :: proc(state: ^App_State) {
 app_destroy_assistant_stream :: proc(state: ^App_State) {
 	if !state.stream.active {
 		app_clear_assistant_stream_buffers(&state.stream)
+		app_clear_assistant_stream_tool_calls(&state.stream)
+		app_clear_assistant_stream_conversation(&state.stream)
 		return
 	}
 
@@ -179,6 +218,8 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	}
 	state.stream.active = false
 	app_clear_assistant_stream_buffers(&state.stream)
+	app_clear_assistant_stream_tool_calls(&state.stream)
+	app_clear_assistant_stream_conversation(&state.stream)
 }
 
 assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
@@ -209,14 +250,7 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 		}
 
 		if delta.content != "" {
-			combined := strings.concatenate(
-				{stream.partial, delta.content},
-				stream.bufferAllocator,
-			)
-			if stream.partial != "" {
-				delete(stream.partial, stream.bufferAllocator)
-			}
-			stream.partial = combined
+			assistant_stream_append_partial(stream, delta.content)
 		}
 
 		if delta.finishReason != "" {
@@ -224,6 +258,10 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 				delete(stream.finishReason, stream.bufferAllocator)
 			}
 			stream.finishReason = strings.clone(delta.finishReason, stream.bufferAllocator)
+		}
+
+		if delta.hasToolCall {
+			append(&stream.toolCalls, ai.tool_call_clone(delta.toolCall, stream.bufferAllocator))
 		}
 
 		if delta.done && stream.cancelRequested {
@@ -256,6 +294,198 @@ app_build_ai_messages :: proc(
 	return messages
 }
 
+app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
+	if state.mode == .Approval || !state.dispatcherReady {
+		return false
+	}
+
+	queuedCall: ai.Tool_Call
+	hasQueuedCall := false
+	if sync.mutex_guard(&state.stream.mutex) {
+		if len(state.stream.toolCalls) > 0 {
+			queuedCall = ai.tool_call_clone(
+				state.stream.toolCalls[0],
+				state.stream.bufferAllocator,
+			)
+			ai.tool_call_destroy(&state.stream.toolCalls[0], state.stream.bufferAllocator)
+			ordered_remove(&state.stream.toolCalls, 0)
+			hasQueuedCall = true
+		}
+	}
+	if !hasQueuedCall {
+		return false
+	}
+	defer ai.tool_call_destroy(&queuedCall, state.stream.bufferAllocator)
+
+	call, callOK := app_tool_call_from_ai(queuedCall, state.dispatcher.allocator)
+	if !callOK {
+		append_history(state, .Tool, "Tool call arguments are invalid.")
+		app_append_tool_result(state, queuedCall.id, "Tool call arguments are invalid.", true)
+		state.status = "Tool call rejected"
+		app_start_tool_continuation_if_ready(state)
+		return true
+	}
+	defer tool_call_destroy(&call, state.dispatcher.allocator)
+
+	decision := tool_dispatch_decide(&state.dispatcher, call)
+	switch decision {
+	case .Approval_Required:
+		if !app_show_approval(state, call) {
+			output := "Tool call requires approval."
+			append_history(state, .Tool, output)
+			app_append_tool_result(state, call.callID, output, true)
+			state.status = "Tool call rejected"
+			app_start_tool_continuation_if_ready(state)
+		}
+	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
+		output := tool_dispatch_execute(&state.dispatcher, call)
+		outputOwned := app_tool_output_is_owned(call.id)
+		if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
+			truncatedOutput := strings.concatenate(
+				{
+					output[:MAX_RETAINED_TOOL_OUTPUT_BYTES],
+					"\n\n[Tool output truncated after 64 KiB.]",
+				},
+				state.dispatcher.allocator,
+			)
+			if outputOwned {
+				delete(output, state.dispatcher.allocator)
+			}
+			output = truncatedOutput
+			outputOwned = true
+		}
+		defer app_destroy_tool_output_if_owned(output, outputOwned, state.dispatcher.allocator)
+		app_record_tool_execution_result(state, call.callID, output)
+		state.status = "Tool call completed"
+	case .Denied:
+		append_history(state, .Tool, "Permission denied.")
+		app_append_tool_result(state, call.callID, "Permission denied.", true)
+		state.status = "Tool call denied"
+	}
+	app_start_tool_continuation_if_ready(state)
+	return true
+}
+
+app_record_tool_execution_result :: proc(state: ^App_State, toolCallID: string, output: string) {
+	isError := app_tool_output_is_error(output)
+	if isError {
+		append_history(state, .Tool, output)
+	}
+	app_append_tool_result(state, toolCallID, output, isError)
+}
+
+app_tool_output_is_error :: proc(output: string) -> bool {
+	return(
+		strings.starts_with(output, "Error ") ||
+		strings.contains(output, ": Error ") ||
+		strings.contains(output, ": Unsupported ") ||
+		strings.contains(output, ": Command exited ") ||
+		strings.starts_with(output, "File already exists.") ||
+		strings.starts_with(output, "Invalid value for overwrite:") ||
+		output == "MCP tool dispatch is not implemented." ||
+		output == "Permission denied." ||
+		output == "Permission approval required." \
+	)
+}
+
+app_tool_call_from_ai :: proc(
+	aiCall: ai.Tool_Call,
+	allocator := context.allocator,
+) -> (
+	Tool_Call,
+	bool,
+) {
+	if aiCall.name == "" || aiCall.arguments == "" {
+		return Tool_Call{}, false
+	}
+
+	arguments: AI_Tool_Call_Arguments
+	decodeErr := json.unmarshal_string(
+		aiCall.arguments,
+		&arguments,
+		allocator = context.temp_allocator,
+	)
+	if decodeErr != nil {
+		return Tool_Call{}, false
+	}
+
+	call := Tool_Call {
+		callID           = strings.clone(aiCall.id, allocator),
+		id               = strings.clone(aiCall.name, allocator),
+		filePath         = strings.clone(arguments.file_path, allocator),
+		directoryPath    = strings.clone(arguments.directory_path, allocator),
+		content          = strings.clone(arguments.content, allocator),
+		overwrite        = strings.clone(arguments.overwrite, allocator),
+		command          = strings.clone(arguments.command, allocator),
+		workingDirectory = strings.clone(arguments.working_directory, allocator),
+		timeout          = arguments.timeout,
+		mcpServer        = strings.clone(arguments.mcp_server, allocator),
+	}
+	return call, true
+}
+
+app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {
+	if len(state.stream.toolCalls) == 0 {
+		return false
+	}
+
+	message := ai.Message {
+		role      = .Assistant,
+		content   = strings.clone(
+			string(state.stream.partialBuffer[:]),
+			state.stream.bufferAllocator,
+		),
+		toolCalls = make(
+			[]ai.Tool_Call,
+			len(state.stream.toolCalls),
+			state.stream.bufferAllocator,
+		),
+	}
+	for call, index in state.stream.toolCalls {
+		message.toolCalls[index] = ai.tool_call_clone(call, state.stream.bufferAllocator)
+	}
+	append(&state.stream.conversation, message)
+	return true
+}
+
+app_append_tool_result :: proc(
+	state: ^App_State,
+	toolCallID: string,
+	content: string,
+	isError: bool,
+) {
+	if toolCallID == "" || len(state.stream.conversation) == 0 {
+		return
+	}
+	message := ai.Message {
+		role        = .Tool,
+		toolResults = make([]ai.Tool_Result, 1, state.stream.bufferAllocator),
+	}
+	message.toolResults[0] = ai.Tool_Result {
+		toolCallID = strings.clone(toolCallID, state.stream.bufferAllocator),
+		content    = strings.clone(content, state.stream.bufferAllocator),
+		isError    = isError,
+	}
+	append(&state.stream.conversation, message)
+}
+
+app_start_tool_continuation_if_ready :: proc(state: ^App_State) {
+	if state.stream.active || state.mode != .Chat || len(state.stream.conversation) == 0 {
+		return
+	}
+	if len(state.stream.toolCalls) > 0 {
+		return
+	}
+	if state.stream.continuationCount >= MAX_TOOL_CONTINUATIONS {
+		append_history(state, .Tool, "Tool continuation limit reached.")
+		state.status = "Tool continuation limit reached"
+		app_clear_assistant_stream_conversation(&state.stream)
+		return
+	}
+	state.stream.continuationCount += 1
+	app_start_assistant_stream(state)
+}
+
 app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, bool) {
 	switch role {
 	case .System:
@@ -277,7 +507,11 @@ app_sync_assistant_history_entry :: proc(state: ^App_State) -> bool {
 
 	partial := ""
 	if sync.mutex_guard(&state.stream.mutex) {
-		partial = strings.clone(state.stream.partial, context.temp_allocator)
+		if len(state.stream.partialBuffer) == state.stream.lastSyncedPartialLength {
+			return false
+		}
+		partial = strings.clone(string(state.stream.partialBuffer[:]), context.temp_allocator)
+		state.stream.lastSyncedPartialLength = len(state.stream.partialBuffer)
 	}
 
 	entry := &state.history[state.stream.assistantIndex]
@@ -301,7 +535,9 @@ app_append_assistant_stream_error :: proc(state: ^App_State, message: string) {
 
 app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 	app_clear_assistant_stream_buffers(stream)
+	app_clear_assistant_stream_tool_calls(stream)
 	stream.assistantIndex = -1
+	stream.lastSyncedPartialLength = 0
 	stream.err = .None
 	stream.finished = false
 	stream.cancelRequested = false
@@ -309,24 +545,55 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 }
 
 app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
-	if stream.partial != "" {
-		delete(stream.partial, stream.bufferAllocator)
-		stream.partial = ""
-	}
+	delete(stream.partialBuffer)
+	stream.partialBuffer = make([dynamic]byte, 0, 0, stream.bufferAllocator)
+	stream.lastSyncedPartialLength = 0
 	if stream.finishReason != "" {
 		delete(stream.finishReason, stream.bufferAllocator)
 		stream.finishReason = ""
 	}
 }
 
-app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
-	for message in worker.messages {
-		delete(message.content)
+assistant_stream_append_partial :: proc(stream: ^Assistant_Stream_State, content: string) {
+	append(&stream.partialBuffer, ..transmute([]byte)content)
+}
+
+app_tool_output_is_owned :: proc(toolID: string) -> bool {
+	switch toolID {
+	case "read_file", "list_directory", "get_file_info", "list_available_shells", "run_command":
+		return true
 	}
-	delete(worker.messages)
+	return false
+}
+
+app_destroy_tool_output_if_owned :: proc(output: string, owned: bool, allocator: mem.Allocator) {
+	if owned {
+		delete(output, allocator)
+	}
+}
+
+app_clear_assistant_stream_tool_calls :: proc(stream: ^Assistant_Stream_State) {
+	for &call in stream.toolCalls {
+		ai.tool_call_destroy(&call, stream.bufferAllocator)
+	}
+	delete(stream.toolCalls)
+	stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, stream.bufferAllocator)
+}
+
+app_clear_assistant_stream_conversation :: proc(stream: ^Assistant_Stream_State) {
+	for &message in stream.conversation {
+		ai.message_destroy(&message, stream.bufferAllocator)
+	}
+	delete(stream.conversation)
+	stream.conversation = make([dynamic]ai.Message, 0, 0, stream.bufferAllocator)
+	stream.continuationCount = 0
+}
+
+app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
 		delete(worker.request.model)
 	}
+	delete(worker.toolDefinitions)
 }
 
 assistant_stream_error_text :: proc(err: ai.AI_Error) -> string {

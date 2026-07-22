@@ -51,9 +51,49 @@ The initial configuration shape is:
     }
   ],
   "mcpServers": [],
-  "skillPaths": []
+  "skillPaths": [],
+  "permissionGrants": []
 }
 ```
+
+## Permission Grants
+
+Built-in file operations are confined to Mimir's active project directory.
+Reads within that directory are allowed by default. Writes and commands require
+approval unless a matching grant is configured. Grants are stored in the user
+configuration and are scoped to one canonical project path.
+
+`permissionGrants` accepts the following grant kinds:
+
+```json
+{
+  "permissionGrants": [
+    {
+      "kind": "directorySubtree",
+      "projectRoot": "/home/user/project",
+      "directory": "/home/user/project/generated"
+    },
+    {
+      "kind": "commandPrefix",
+      "projectRoot": "/home/user/project",
+      "command": "odin test"
+    }
+    {
+      "kind": "mcpServer",
+      "projectRoot": "/home/user/project",
+      "mcpServer": "github"
+    }
+  ]
+}
+```
+
+A `directorySubtree` grant applies only to writes within that directory. A
+`commandPrefix` grant applies only when the command runs from the project root and
+matches the configured command prefix. An `mcpServer` grant reserves server-level
+trust for future MCP transport.
+
+Malformed grants, paths outside their project root, and path traversal are
+rejected while loading configuration.
 
 ## Diagnostics
 

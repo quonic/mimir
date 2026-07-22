@@ -1,11 +1,33 @@
 package ai
 
 import json "core:encoding/json"
+import "core:fmt"
 import "core:strings"
 
 Ollama_Message :: struct {
-	role:    string,
-	content: string,
+	role:       string,
+	content:    string,
+	tool_calls: []Ollama_Tool_Call,
+}
+
+Ollama_Function :: struct {
+	name:        string,
+	description: string,
+	parameters:  json.Value,
+	arguments:   json.Value,
+}
+
+Ollama_Tool :: struct {
+	type:     string,
+	function: Ollama_Function,
+}
+
+Ollama_Tool_Call :: struct {
+	function: Ollama_Function,
+}
+
+Ollama_Stream_Tool_State :: struct {
+	nextCallIndex: int,
 }
 
 Ollama_Options :: struct {
@@ -15,9 +37,10 @@ Ollama_Options :: struct {
 
 Ollama_Chat_Request :: struct {
 	model:    string,
-	messages: []Ollama_Message,
+	messages: [dynamic]Ollama_Message,
 	stream:   bool,
 	options:  Ollama_Options,
+	tools:    []Ollama_Tool,
 }
 
 Ollama_Chat_Response :: struct {
@@ -45,18 +68,51 @@ build_ollama_chat_request :: proc(
 ) -> Ollama_Chat_Request {
 	wire := Ollama_Chat_Request {
 		model = request.model,
-		messages = make([]Ollama_Message, len(request.messages), allocator),
+		messages = make([dynamic]Ollama_Message, 0, len(request.messages), allocator),
 		stream = false,
 		options = Ollama_Options {
 			temperature = request.temperature,
 			num_predict = request.maxTokens,
 		},
+		tools = make([]Ollama_Tool, len(request.tools), allocator),
 	}
 
-	for msg, idx in request.messages {
-		wire.messages[idx] = Ollama_Message {
-			role    = message_role_to_string(msg.role),
-			content = msg.content,
+	for msg in request.messages {
+		if msg.role == .Tool {
+			for result in msg.toolResults {
+				append(&wire.messages, Ollama_Message{role = "tool", content = result.content})
+			}
+			continue
+		}
+
+		wireMessage := Ollama_Message {
+			role       = message_role_to_string(msg.role),
+			content    = msg.content,
+			tool_calls = make([]Ollama_Tool_Call, len(msg.toolCalls), allocator),
+		}
+		for call, index in msg.toolCalls {
+			arguments, parseErr := json.parse_string(call.arguments, allocator = allocator)
+			if parseErr != .None {
+				arguments = json.Null(nil)
+			}
+			wireMessage.tool_calls[index] = Ollama_Tool_Call {
+				function = Ollama_Function{name = call.name, arguments = arguments},
+			}
+		}
+		append(&wire.messages, wireMessage)
+	}
+	for tool, index in request.tools {
+		parameters, parseErr := json.parse_string(tool.parametersJSON, allocator = allocator)
+		if parseErr != .None {
+			parameters = json.Null(nil)
+		}
+		wire.tools[index] = Ollama_Tool {
+			type = "function",
+			function = Ollama_Function {
+				name = tool.name,
+				description = tool.description,
+				parameters = parameters,
+			},
 		}
 	}
 
@@ -82,16 +138,36 @@ parse_ollama_chat_response :: proc(
 		return Chat_Response{}, .Invalid_Response
 	}
 
-	if wire.message.content == "" {
+	response := Chat_Response {
+		content      = strings.clone(wire.message.content, allocator),
+		model        = strings.clone(wire.model, allocator),
+		finishReason = strings.clone(wire.done_reason, allocator),
+		toolCalls    = make([dynamic]Tool_Call, 0, len(wire.message.tool_calls), allocator),
+	}
+	for call, index in wire.message.tool_calls {
+		if call.function.name == "" {
+			chat_response_destroy(&response, allocator)
+			return Chat_Response{}, .Invalid_Response
+		}
+		arguments, unparseErr := json.unparse(call.function.arguments, allocator = allocator)
+		if unparseErr != nil {
+			chat_response_destroy(&response, allocator)
+			return Chat_Response{}, .Invalid_Response
+		}
+		append(
+			&response.toolCalls,
+			Tool_Call {
+				id = ollama_tool_call_id(index, allocator),
+				name = strings.clone(call.function.name, allocator),
+				arguments = arguments,
+			},
+		)
+	}
+	if response.content == "" && len(response.toolCalls) == 0 {
+		chat_response_destroy(&response, allocator)
 		return Chat_Response{}, .Invalid_Response
 	}
-
-	return Chat_Response {
-			content = strings.clone(wire.message.content, allocator),
-			model = strings.clone(wire.model, allocator),
-			finishReason = strings.clone(wire.done_reason, allocator),
-		},
-		.None
+	return response, .None
 }
 
 parse_ollama_error_message :: proc(body: string, allocator := context.allocator) -> string {
@@ -125,7 +201,37 @@ parse_ollama_stream_event :: proc(
 		return false, .Invalid_Response
 	}
 
-	if wire.message.content == "" && !wire.done {
+	toolState := cast(^Ollama_Stream_Tool_State)callbackState.parserData
+	if len(wire.message.tool_calls) > 0 {
+		if toolState == nil {
+			return false, .Invalid_Response
+		}
+		for call in wire.message.tool_calls {
+			if call.function.name == "" {
+				return false, .Invalid_Response
+			}
+			arguments, unparseErr := json.unparse(call.function.arguments)
+			if unparseErr != nil {
+				return false, .Invalid_Response
+			}
+			toolCall := Tool_Call {
+				id        = ollama_tool_call_id(toolState.nextCallIndex),
+				name      = strings.clone(call.function.name),
+				arguments = arguments,
+			}
+			toolState.nextCallIndex += 1
+			keepStreaming := chat_stream_callback_call(
+				callbackState,
+				Chat_Stream_Delta{toolCall = toolCall, hasToolCall = true, toolCallDone = true},
+			)
+			tool_call_destroy(&toolCall)
+			if !keepStreaming {
+				return true, .None
+			}
+		}
+	}
+
+	if wire.message.content == "" && len(wire.message.tool_calls) == 0 && !wire.done {
 		return false, .None
 	}
 
@@ -139,6 +245,10 @@ parse_ollama_stream_event :: proc(
 			},
 		),
 		.None
+}
+
+ollama_tool_call_id :: proc(index: int, allocator := context.allocator) -> string {
+	return strings.clone(fmt.tprintf("ollama-%d", index), allocator)
 }
 
 parse_ollama_models_response :: proc(
