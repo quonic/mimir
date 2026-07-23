@@ -27,6 +27,20 @@ Code_Index :: struct {
 	dirty:               bool,
 }
 
+Code_Chunk :: struct {
+	id:        string,
+	metadata:  string,
+	content:   string,
+	startLine: int,
+	endLine:   int,
+}
+
+Code_Search_Result :: struct {
+	id:       string,
+	metadata: string,
+	distance: f32,
+}
+
 code_index_init :: proc(
 	workingDirectory, home, embeddingProvider, embeddingModel: string,
 	allocator := context.allocator,
@@ -161,6 +175,202 @@ code_index_write_hex_u64 :: proc(builder: ^strings.Builder, value: u64) {
 	for shift := 60; shift >= 0; shift -= 4 {
 		strings.write_byte(builder, hexDigits[(value >> u64(shift)) & 0xf])
 	}
+}
+
+code_index_chunk_text :: proc(
+	relativePath, text: string,
+	maximumLines, overlapLines: int,
+	allocator := context.allocator,
+) -> [dynamic]Code_Chunk {
+	chunks := make([dynamic]Code_Chunk, 0, 0, allocator)
+	if relativePath == "" ||
+	   text == "" ||
+	   maximumLines <= 0 ||
+	   overlapLines < 0 ||
+	   overlapLines >= maximumLines {
+		return chunks
+	}
+
+	lines := strings.split(text, "\n", allocator)
+	defer delete(lines, allocator)
+	lineCount := len(lines)
+	if lineCount > 0 && lines[lineCount - 1] == "" {
+		lineCount -= 1
+	}
+	for start := 0; start < lineCount; {
+		end := start + maximumLines
+		if end > lineCount {
+			end = lineCount
+		}
+
+		content := code_index_join_lines(lines[start:end], start, lineCount, allocator)
+		id := code_index_chunk_identifier(relativePath, start + 1, end, allocator)
+		metadata := code_index_chunk_metadata(relativePath, start + 1, end, allocator)
+		append(
+			&chunks,
+			Code_Chunk {
+				id = id,
+				metadata = metadata,
+				content = content,
+				startLine = start + 1,
+				endLine = end,
+			},
+		)
+		if end == lineCount {
+			break
+		}
+		start = end - overlapLines
+	}
+	return chunks
+}
+
+code_index_chunks_destroy :: proc(chunks: ^[dynamic]Code_Chunk, allocator := context.allocator) {
+	if chunks == nil {
+		return
+	}
+	for &chunk in chunks^ {
+		delete(chunk.id, allocator)
+		delete(chunk.metadata, allocator)
+		delete(chunk.content, allocator)
+	}
+	delete(chunks^)
+}
+
+code_index_join_lines :: proc(
+	lines: []string,
+	start, total: int,
+	allocator := context.allocator,
+) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	for line, index in lines {
+		strings.write_string(&builder, line)
+		if start + index < total - 1 {
+			strings.write_byte(&builder, '\n')
+		}
+	}
+	return strings.to_string(builder)
+}
+
+code_index_chunk_identifier :: proc(
+	relativePath: string,
+	startLine, endLine: int,
+	allocator := context.allocator,
+) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	strings.write_string(&builder, relativePath)
+	strings.write_byte(&builder, ':')
+	code_index_write_decimal(&builder, startLine)
+	strings.write_byte(&builder, '-')
+	code_index_write_decimal(&builder, endLine)
+	return strings.to_string(builder)
+}
+
+code_index_chunk_metadata :: proc(
+	relativePath: string,
+	startLine, endLine: int,
+	allocator := context.allocator,
+) -> string {
+	return code_index_chunk_identifier(relativePath, startLine, endLine, allocator)
+}
+
+code_index_write_decimal :: proc(builder: ^strings.Builder, value: int) {
+	if value == 0 {
+		strings.write_byte(builder, '0')
+		return
+	}
+	digits: [20]byte
+	length := 0
+	remaining := value
+	for remaining > 0 {
+		digits[length] = byte(remaining % 10) + '0'
+		length += 1
+		remaining /= 10
+	}
+	for index := length - 1; index >= 0; index -= 1 {
+		strings.write_byte(builder, digits[index])
+	}
+}
+
+code_index_add_embeddings :: proc(
+	index: ^Code_Index,
+	chunks: []Code_Chunk,
+	embeddings: [][]f32,
+	allocator := context.allocator,
+) -> bool {
+	if index == nil ||
+	   len(chunks) == 0 ||
+	   len(chunks) != len(embeddings) ||
+	   len(embeddings[0]) == 0 {
+		return false
+	}
+	if !index.databaseInitialized {
+		if vdb.init(&index.database, len(embeddings[0]), .Cosine, allocator) != .None {
+			return false
+		}
+		index.databaseInitialized = true
+	}
+	if vdb.dimensions(&index.database) != len(embeddings[0]) {
+		return false
+	}
+	for embedding, chunkIndex in embeddings {
+		if len(embedding) != vdb.dimensions(&index.database) ||
+		   vdb.add_vector(
+			   &index.database,
+			   embedding,
+			   chunks[chunkIndex].id,
+			   chunks[chunkIndex].metadata,
+		   ) !=
+			   .None {
+			return false
+		}
+	}
+	index.dirty = true
+	return true
+}
+
+code_index_search :: proc(
+	index: ^Code_Index,
+	query: []f32,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> [dynamic]Code_Search_Result {
+	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	if index == nil || !index.databaseInitialized || len(query) == 0 || maximumResults <= 0 {
+		return results
+	}
+
+	resultSet, searchError := vdb.search(&index.database, query, maximumResults)
+	if searchError != .None {
+		return results
+	}
+	defer vdb.result_set_destroy(&resultSet)
+	for result in resultSet.results {
+		append(
+			&results,
+			Code_Search_Result {
+				id = strings.clone(result.id, allocator),
+				metadata = strings.clone(result.metadata, allocator),
+				distance = result.distance,
+			},
+		)
+	}
+	return results
+}
+
+code_index_search_results_destroy :: proc(
+	results: ^[dynamic]Code_Search_Result,
+	allocator := context.allocator,
+) {
+	if results == nil {
+		return
+	}
+	for &result in results^ {
+		delete(result.id, allocator)
+		delete(result.metadata, allocator)
+	}
+	delete(results^)
 }
 
 code_index_load :: proc(index: ^Code_Index, allocator := context.allocator) -> Code_Index_Error {
