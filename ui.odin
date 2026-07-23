@@ -508,7 +508,7 @@ render_config_categories :: proc(
 	}
 	write_clipped_line(batch, region.top_row, region.left_column, width, "Categories")
 	for categoryIndex := 0;
-	    categoryIndex <= int(Config_Category.Model_Selection);
+	    categoryIndex <= int(Config_Category.Embedding_Model);
 	    categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
 		row := region.top_row + 2 + categoryIndex
@@ -536,8 +536,10 @@ config_category_label :: proc(category: Config_Category) -> string {
 	switch category {
 	case .Providers:
 		return "Providers"
-	case .Model_Selection:
-		return "Model selection"
+	case .Chat_Model:
+		return "Chat Model"
+	case .Embedding_Model:
+		return "Embedding Model"
 	}
 	return ""
 }
@@ -586,11 +588,19 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		return strings.to_string(builder)
 	}
 
-	if setting.id == .Model && setting.modelIndex >= 0 && setting.modelIndex < len(state.models) {
+	if (setting.id == .Chat_Model || setting.id == .Embedding_Model) &&
+	   setting.modelIndex >= 0 &&
+	   setting.modelIndex < len(state.models) {
 		entry := state.models[setting.modelIndex]
 		active := " "
-		if entry.providerName == state.config.selectedProvider &&
+		if setting.id == .Chat_Model &&
+		   entry.providerName == state.config.selectedProvider &&
 		   entry.model == state.config.selectedModel {
+			active = "*"
+		}
+		if setting.id == .Embedding_Model &&
+		   entry.providerName == state.config.embeddingProvider &&
+		   entry.model == state.config.embeddingModel {
 			active = "*"
 		}
 		strings.write_string(&builder, active)
@@ -671,8 +681,10 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Add provider"
 	case .Remove_Provider:
 		return "Remove provider"
-	case .Model:
-		return "Model"
+	case .Chat_Model:
+		return "Chat model"
+	case .Embedding_Model:
+		return "Embedding model"
 	}
 	return ""
 }
