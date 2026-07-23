@@ -9,6 +9,8 @@ import "core:thread"
 
 MAX_TOOL_CONTINUATIONS :: 8
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
+SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
+SEARCH_CODE_MAX_RESULTS :: 10
 
 Assistant_Stream_State :: struct {
 	mutex:                   sync.Mutex,
@@ -38,6 +40,8 @@ AI_Tool_Call_Arguments :: struct {
 	working_directory: string,
 	timeout:           int,
 	mcp_server:        string,
+	query:             string,
+	max_results:       int,
 }
 
 Assistant_Stream_Worker :: struct {
@@ -338,7 +342,7 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 			app_start_tool_continuation_if_ready(state)
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
-		output := tool_dispatch_execute(&state.dispatcher, call)
+		output := app_execute_tool_call(state, call)
 		outputOwned := app_tool_output_is_owned(call.id)
 		if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
 			truncatedOutput := strings.concatenate(
@@ -420,8 +424,82 @@ app_tool_call_from_ai :: proc(
 		workingDirectory = strings.clone(arguments.working_directory, allocator),
 		timeout          = arguments.timeout,
 		mcpServer        = strings.clone(arguments.mcp_server, allocator),
+		query            = strings.clone(arguments.query, allocator),
+		maxResults       = arguments.max_results,
+	}
+	if call.id == "search_code" {
+		if call.query == "" || call.maxResults < 0 {
+			tool_call_destroy(&call, allocator)
+			return Tool_Call{}, false
+		}
+		if call.maxResults == 0 {
+			call.maxResults = SEARCH_CODE_DEFAULT_MAX_RESULTS
+		} else if call.maxResults > SEARCH_CODE_MAX_RESULTS {
+			call.maxResults = SEARCH_CODE_MAX_RESULTS
+		}
 	}
 	return call, true
+}
+
+app_execute_tool_call :: proc(state: ^App_State, call: Tool_Call) -> string {
+	if call.id != "search_code" {
+		return tool_dispatch_execute(&state.dispatcher, call)
+	}
+	results, searchError := app_search_code(
+		state,
+		call.query,
+		call.maxResults,
+		state.dispatcher.allocator,
+	)
+	if searchError != .None {
+		return strings.concatenate(
+			{"search_code: ", assistant_stream_error_text(searchError)},
+			state.dispatcher.allocator,
+		)
+	}
+	defer code_index_search_results_destroy(&results, state.dispatcher.allocator)
+	return app_search_code_results_json(&state.codeIndex, results[:], state.dispatcher.allocator)
+}
+
+app_search_code_results_json :: proc(
+	codeIndex: ^Code_Index,
+	results: []Code_Search_Result,
+	allocator := context.allocator,
+) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	strings.write_string(&builder, `{"results":[`)
+	for result, index in results {
+		if index > 0 {
+			strings.write_byte(&builder, ',')
+		}
+		location, locationOK := code_index_search_result_location(result)
+		strings.write_string(&builder, `{"path":`)
+		if locationOK {
+			write_json_string(&builder, location.relativePath)
+		} else {
+			write_json_string(&builder, result.metadata)
+		}
+		strings.write_string(&builder, `,"start_line":`)
+		if locationOK {
+			code_index_write_decimal(&builder, location.startLine)
+		} else {
+			strings.write_byte(&builder, '0')
+		}
+		strings.write_string(&builder, `,"end_line":`)
+		if locationOK {
+			code_index_write_decimal(&builder, location.endLine)
+		} else {
+			strings.write_byte(&builder, '0')
+		}
+		excerpt := code_index_search_result_excerpt(codeIndex, result, allocator = allocator)
+		defer delete(excerpt, allocator)
+		strings.write_string(&builder, `,"excerpt":`)
+		write_json_string(&builder, excerpt)
+		strings.write_byte(&builder, '}')
+	}
+	strings.write_string(&builder, `]}`)
+	return strings.to_string(builder)
 }
 
 app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {
@@ -561,6 +639,8 @@ assistant_stream_append_partial :: proc(stream: ^Assistant_Stream_State, content
 app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
 	case "read_file", "list_directory", "get_file_info", "list_available_shells", "run_command":
+		return true
+	case "search_code":
 		return true
 	}
 	return false

@@ -45,12 +45,14 @@ Permission_Grant_Wire :: struct {
 }
 
 Mimir_Config_Wire :: struct {
-	selectedProvider: string,
-	selectedModel:    string,
-	providers:        []Provider_Config_Wire,
-	mcpServers:       []MCP_Server_Config,
-	skillPaths:       []string,
-	permissionGrants: []Permission_Grant_Wire,
+	selectedProvider:  string,
+	selectedModel:     string,
+	embeddingProvider: string,
+	embeddingModel:    string,
+	providers:         []Provider_Config_Wire,
+	mcpServers:        []MCP_Server_Config,
+	skillPaths:        []string,
+	permissionGrants:  []Permission_Grant_Wire,
 }
 
 Provider_Config :: struct {
@@ -69,6 +71,8 @@ Provider_Config :: struct {
 Mimir_Config :: struct {
 	selectedProvider:    string,
 	selectedModel:       string,
+	embeddingProvider:   string,
+	embeddingModel:      string,
 	providers:           [dynamic]Provider_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
 	skillPaths:          [dynamic]string,
@@ -171,6 +175,12 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	}
 	if config.selectedModel != "" {
 		delete(config.selectedModel, config.allocationAllocator)
+	}
+	if config.embeddingProvider != "" {
+		delete(config.embeddingProvider, config.allocationAllocator)
+	}
+	if config.embeddingModel != "" {
+		delete(config.embeddingModel, config.allocationAllocator)
 	}
 	for &provider in config.providers {
 		provider_config_destroy(&provider, config.allocationAllocator)
@@ -332,6 +342,8 @@ parse_config_from_json :: proc(
 	config.allocationAllocator = allocator
 	config.selectedProvider = strings.clone(wire.selectedProvider, allocator)
 	config.selectedModel = strings.clone(wire.selectedModel, allocator)
+	config.embeddingProvider = strings.clone(wire.embeddingProvider, allocator)
+	config.embeddingModel = strings.clone(wire.embeddingModel, allocator)
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, len(wire.mcpServers), allocator)
 	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
@@ -536,6 +548,12 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"selectedModel\": ")
 	write_json_string(&builder, config.selectedModel)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"embeddingProvider\": ")
+	write_json_string(&builder, config.embeddingProvider)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"embeddingModel\": ")
+	write_json_string(&builder, config.embeddingModel)
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"providers\": [")
 	for provider, index in config.providers {

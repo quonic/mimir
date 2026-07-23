@@ -22,7 +22,7 @@ Tool_Registry :: struct {
 builtin_ai_tool_definitions :: proc(
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
-	definitions := make([dynamic]ai.Tool_Definition, 0, 6, allocator)
+	definitions := make([dynamic]ai.Tool_Definition, 0, 7, allocator)
 	append(
 		&definitions,
 		ai.Tool_Definition {
@@ -69,6 +69,14 @@ builtin_ai_tool_definitions :: proc(
 			name = "get_file_info",
 			description = "Get metadata for a file in the active project",
 			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "search_code",
+			description = "Search the active project for code relevant to a query",
+			parametersJSON = `{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}`,
 		},
 	)
 	return definitions

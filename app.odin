@@ -77,7 +77,8 @@ Model_Input_State :: enum int {
 
 Config_Category :: enum int {
 	Providers = 0,
-	Model_Selection,
+	Chat_Model,
+	Embedding_Model,
 }
 
 Config_Focus :: enum int {
@@ -110,7 +111,8 @@ Config_Setting_ID :: enum int {
 	Refresh_Models,
 	Add_Provider,
 	Remove_Provider,
-	Model,
+	Chat_Model,
+	Embedding_Model,
 }
 
 Config_Setting :: struct {
@@ -129,54 +131,58 @@ Input_Escape_State :: enum int {
 }
 
 App_State :: struct {
-	mode:                  App_Mode,
-	input:                 Input_Buffer,
-	inputEscape:           Input_Escape_State,
-	inputEscapeParameter:  int,
-	inputMouseSequence:    [256]byte,
-	inputMouseSequenceLen: int,
-	inputUTF8Pending:      [utf8.UTF_MAX]byte,
-	inputUTF8PendingLen:   int,
-	inputHistory:          [dynamic]string,
-	inputHistoryCursor:    int,
-	inputHistoryDraft:     string,
-	cursorBlinkOn:         bool,
-	status:                string,
-	shouldQuit:            bool,
-	terminal:              console.Terminal_Size,
-	history:               [dynamic]History_Entry,
-	historyScrollOffset:   int,
-	historyRenderOnly:     bool,
-	config:                Mimir_Config,
-	configStringsOwned:    bool,
-	configHome:            string,
-	workingDirectory:      string,
-	setupStep:             App_Setup_Step,
-	setupEndpoint:         string,
-	setupAPIKey:           string,
-	tools:                 Tool_Registry,
-	dispatcher:            Tool_Dispatcher,
-	dispatcherReady:       bool,
-	approval:              Approval_State,
-	mcp:                   MCP_Registry,
-	skills:                Skill_Registry,
-	stream:                Assistant_Stream_State,
-	models:                [dynamic]Model_Select_Entry,
-	modelCursor:           int,
-	modelInput:            Model_Input_State,
-	modelProviderOwned:    bool,
-	modelNameOwned:        bool,
-	configCategory:        Config_Category,
-	configFocus:           Config_Focus,
-	configInput:           Config_Input_State,
-	configSettings:        [dynamic]Config_Setting,
-	configSettingCursor:   int,
-	configProviderIndex:   int,
-	configEdit:            Input_Buffer,
-	configEditing:         bool,
-	configEditingSetting:  Config_Setting,
-	configUTF8Pending:     [utf8.UTF_MAX]byte,
-	configUTF8PendingLen:  int,
+	mode:                   App_Mode,
+	input:                  Input_Buffer,
+	inputEscape:            Input_Escape_State,
+	inputEscapeParameter:   int,
+	inputMouseSequence:     [256]byte,
+	inputMouseSequenceLen:  int,
+	inputUTF8Pending:       [utf8.UTF_MAX]byte,
+	inputUTF8PendingLen:    int,
+	inputHistory:           [dynamic]string,
+	inputHistoryCursor:     int,
+	inputHistoryDraft:      string,
+	cursorBlinkOn:          bool,
+	status:                 string,
+	shouldQuit:             bool,
+	terminal:               console.Terminal_Size,
+	history:                [dynamic]History_Entry,
+	historyScrollOffset:    int,
+	historyRenderOnly:      bool,
+	config:                 Mimir_Config,
+	configStringsOwned:     bool,
+	configHome:             string,
+	workingDirectory:       string,
+	setupStep:              App_Setup_Step,
+	setupEndpoint:          string,
+	setupAPIKey:            string,
+	tools:                  Tool_Registry,
+	dispatcher:             Tool_Dispatcher,
+	dispatcherReady:        bool,
+	approval:               Approval_State,
+	mcp:                    MCP_Registry,
+	skills:                 Skill_Registry,
+	codeIndex:              Code_Index,
+	codeIndexReady:         bool,
+	stream:                 Assistant_Stream_State,
+	models:                 [dynamic]Model_Select_Entry,
+	modelCursor:            int,
+	modelInput:             Model_Input_State,
+	modelProviderOwned:     bool,
+	modelNameOwned:         bool,
+	embeddingProviderOwned: bool,
+	embeddingModelOwned:    bool,
+	configCategory:         Config_Category,
+	configFocus:            Config_Focus,
+	configInput:            Config_Input_State,
+	configSettings:         [dynamic]Config_Setting,
+	configSettingCursor:    int,
+	configProviderIndex:    int,
+	configEdit:             Input_Buffer,
+	configEditing:          bool,
+	configEditingSetting:   Config_Setting,
+	configUTF8Pending:      [utf8.UTF_MAX]byte,
+	configUTF8PendingLen:   int,
 }
 
 app_init :: proc(allocator := context.allocator) -> App_State {
@@ -212,6 +218,7 @@ app_init_with_home :: proc(
 	state.config = default_ollama_config(allocator)
 	app_bootstrap_config(&state, home, probeOllama, allocator)
 	app_load_input_history(&state, allocator)
+	app_rebuild_code_index(&state, allocator)
 	state.tools = builtin_tool_registry(allocator)
 	state.dispatcher, state.dispatcherReady = tool_dispatcher_init(
 		state.workingDirectory,
@@ -326,6 +333,9 @@ app_destroy :: proc(state: ^App_State) {
 	if state.dispatcherReady {
 		tool_dispatcher_destroy(&state.dispatcher)
 	}
+	if state.codeIndexReady {
+		code_index_destroy(&state.codeIndex, context.allocator)
+	}
 	if state.configStringsOwned {
 		config_destroy(&state.config)
 	} else {
@@ -351,11 +361,19 @@ app_destroy :: proc(state: ^App_State) {
 	delete(state.tools.definitions)
 	delete(state.mcp.servers)
 	delete(state.skills.skills)
-	if state.modelProviderOwned && state.config.selectedProvider != "" {
-		delete(state.config.selectedProvider)
-	}
-	if state.modelNameOwned && state.config.selectedModel != "" {
-		delete(state.config.selectedModel)
+	if !state.configStringsOwned {
+		if state.modelProviderOwned && state.config.selectedProvider != "" {
+			delete(state.config.selectedProvider)
+		}
+		if state.modelNameOwned && state.config.selectedModel != "" {
+			delete(state.config.selectedModel)
+		}
+		if state.embeddingProviderOwned && state.config.embeddingProvider != "" {
+			delete(state.config.embeddingProvider)
+		}
+		if state.embeddingModelOwned && state.config.embeddingModel != "" {
+			delete(state.config.embeddingModel)
+		}
 	}
 	app_clear_model_entries(state)
 	delete(state.configSettings)
@@ -1275,13 +1293,27 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			&state.configSettings,
 			Config_Setting{id = .Remove_Provider, kind = .Button, providerIndex = providerIndex},
 		)
-	case .Model_Selection:
+	case .Chat_Model:
 		app_rebuild_model_entries(state)
 		for _, index in state.models {
 			append(
 				&state.configSettings,
-				Config_Setting{id = .Model, kind = .Single_Select, modelIndex = index},
+				Config_Setting{id = .Chat_Model, kind = .Single_Select, modelIndex = index},
 			)
+		}
+	case .Embedding_Model:
+		app_rebuild_model_entries(state)
+		for _, index in state.models {
+			if app_model_entry_supports_embeddings(state.models[index]) {
+				append(
+					&state.configSettings,
+					Config_Setting {
+						id = .Embedding_Model,
+						kind = .Single_Select,
+						modelIndex = index,
+					},
+				)
+			}
 		}
 	}
 
@@ -1357,8 +1389,8 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 	if state.configFocus == .Categories {
 		category := int(state.configCategory) + delta
 		if category < int(Config_Category.Providers) {
-			category = int(Config_Category.Model_Selection)
-		} else if category > int(Config_Category.Model_Selection) {
+			category = int(Config_Category.Embedding_Model)
+		} else if category > int(Config_Category.Embedding_Model) {
 			category = int(Config_Category.Providers)
 		}
 		state.configCategory = Config_Category(category)
@@ -1411,8 +1443,10 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 		app_add_config_provider(state)
 	case .Remove_Provider:
 		app_remove_config_provider(state, setting.providerIndex)
-	case .Model:
+	case .Chat_Model:
 		app_select_config_model(state, setting.modelIndex)
+	case .Embedding_Model:
+		app_select_config_embedding_model(state, setting.modelIndex)
 	}
 	return true
 }
@@ -1741,6 +1775,33 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 	app_apply_config_change(state, "Model selected and saved")
 }
 
+app_model_entry_supports_embeddings :: proc(entry: Model_Select_Entry) -> bool {
+	return entry.providerType == .OpenAI || entry.providerType == .Ollama
+}
+
+app_select_config_embedding_model :: proc(state: ^App_State, modelIndex: int) {
+	if modelIndex < 0 || modelIndex >= len(state.models) {
+		return
+	}
+
+	entry := state.models[modelIndex]
+	if !app_model_entry_supports_embeddings(entry) {
+		state.status = "Selected provider does not support embeddings"
+		return
+	}
+	if state.embeddingProviderOwned && state.config.embeddingProvider != "" {
+		delete(state.config.embeddingProvider)
+	}
+	if state.embeddingModelOwned && state.config.embeddingModel != "" {
+		delete(state.config.embeddingModel)
+	}
+	state.config.embeddingProvider = strings.clone(entry.providerName, context.allocator)
+	state.config.embeddingModel = strings.clone(entry.model, context.allocator)
+	state.embeddingProviderOwned = true
+	state.embeddingModelOwned = true
+	app_apply_config_change(state, "Embedding model selected and saved")
+}
+
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 	ai.clear_interfaces()
 	register_config_interfaces(state.config, false)
@@ -1749,7 +1810,104 @@ app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 		state.status = "Config changed; save failed"
 		return
 	}
+	app_rebuild_code_index(state)
 	state.status = successStatus
+}
+
+app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator) {
+	if state.codeIndexReady {
+		code_index_destroy(&state.codeIndex, allocator)
+		state.codeIndexReady = false
+	}
+	if state.configHome == "" ||
+	   state.workingDirectory == "" ||
+	   state.config.embeddingProvider == "" ||
+	   state.config.embeddingModel == "" {
+		return
+	}
+
+	index, initError := code_index_init(
+		state.workingDirectory,
+		state.configHome,
+		state.config.embeddingProvider,
+		state.config.embeddingModel,
+		allocator,
+	)
+	if initError != .None {
+		return
+	}
+	state.codeIndex = index
+	state.codeIndexReady = true
+	_ = code_index_load(&state.codeIndex, allocator)
+}
+
+app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
+	if state == nil || state.config.embeddingProvider == "" || state.config.embeddingModel == "" {
+		return ai.Client{}, .Invalid_Request
+	}
+	provider, providerOK := app_find_provider(state.config, state.config.embeddingProvider)
+	if !providerOK || !provider.enabled {
+		return ai.Client{}, .Interface_Not_Found
+	}
+	if provider.type != .Ollama && provider.type != .OpenAI {
+		return ai.Client{}, .Unsupported_Interface
+	}
+	return ai.new_client(provider.name, provider.apiKey)
+}
+
+app_ensure_code_index :: proc(state: ^App_State, allocator := context.allocator) -> ai.AI_Error {
+	if state == nil {
+		return .Invalid_Request
+	}
+	if !state.codeIndexReady {
+		app_rebuild_code_index(state, allocator)
+	}
+	if !state.codeIndexReady {
+		return .Invalid_Request
+	}
+	if state.codeIndex.databaseInitialized {
+		return .None
+	}
+	client, clientError := app_embedding_client(state)
+	if clientError != .None {
+		return clientError
+	}
+	rebuildError := code_index_rebuild(
+		&state.codeIndex,
+		client,
+		CODE_INDEX_DEFAULT_CHUNK_LINES,
+		CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
+		allocator,
+	)
+	if rebuildError != .None {
+		return rebuildError
+	}
+	if code_index_save(&state.codeIndex) != .None {
+		return .Provider_Error
+	}
+	return .None
+}
+
+app_search_code :: proc(
+	state: ^App_State,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Code_Search_Result,
+	ai.AI_Error,
+) {
+	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	ensureError := app_ensure_code_index(state, allocator)
+	if ensureError != .None {
+		return results, ensureError
+	}
+	client, clientError := app_embedding_client(state)
+	if clientError != .None {
+		return results, clientError
+	}
+	delete(results)
+	return code_index_search_text(&state.codeIndex, client, query, maximumResults, allocator)
 }
 
 app_show_models :: proc(state: ^App_State) {

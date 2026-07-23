@@ -15,6 +15,17 @@ $HOME/.cache/mimir/history-<working-directory-hash>.json
 Each cache file belongs to one absolute working directory. `/clear` removes
 only the history file for the directory from which Mimir is running.
 
+Semantic code indexes are stored separately beneath:
+
+```text
+$HOME/.cache/mimir/code-index-<project-and-model-hash>.vdb
+```
+
+The index cache is scoped to the Git project root when one is found, otherwise
+to Mimir's working directory. Its identity also includes the embedding provider
+and model, so projects and embedding models never share vectors. Mimir loads a
+matching cache on startup and builds it lazily when `search_code` is first used.
+
 ## First Run
 
 At startup, Mimir probes the default native Ollama endpoint:
@@ -40,6 +51,8 @@ The initial configuration shape is:
 {
   "selectedProvider": "ollama",
   "selectedModel": "",
+  "embeddingProvider": "",
+  "embeddingModel": "",
   "providers": [
     {
       "name": "ollama",
@@ -55,6 +68,12 @@ The initial configuration shape is:
   "permissionGrants": []
 }
 ```
+
+`selectedProvider` and `selectedModel` configure the chat model.
+`embeddingProvider` and `embeddingModel` configure semantic code search and
+are intentionally independent. Select an embedding-capable provider and model
+in the `Embedding Model` settings category before using `search_code`; Mimir
+does not choose a default embedding model.
 
 ## Permission Grants
 

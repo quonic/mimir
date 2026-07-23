@@ -48,6 +48,8 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(err == .None, "expected valid config JSON to parse")
 	assert(config.selectedProvider == "ollama", "expected selected provider")
 	assert(config.selectedModel == "llama3.2", "expected selected model")
+	assert(config.embeddingProvider == "", "expected missing embedding provider to stay empty")
+	assert(config.embeddingModel == "", "expected missing embedding model to stay empty")
 	assert(len(config.providers) == 1, "expected one provider")
 	assert(config.providers[0].type == ai.Interface_Type.Ollama, "expected Ollama provider")
 	assert(config.providers[0].model == "llama3.2", "expected provider model")
@@ -105,6 +107,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 
 	config := default_ollama_config(context.temp_allocator)
 	config.selectedModel = "llama3.2"
+	config.embeddingProvider = "ollama"
+	config.embeddingModel = "nomic-embed-text"
 	config.providers[0].model = "llama3.2"
 	defer {
 		delete(config.providers)
@@ -127,6 +131,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loadErr == .None, "expected config load to succeed")
 	assert(loaded.selectedProvider == DEFAULT_CONFIG_PROVIDER, "expected selected provider")
 	assert(loaded.selectedModel == "llama3.2", "expected selected model round trip")
+	assert(loaded.embeddingProvider == "ollama", "expected embedding provider round trip")
+	assert(loaded.embeddingModel == "nomic-embed-text", "expected embedding model round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")

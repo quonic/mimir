@@ -90,11 +90,45 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 6, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 7, "expected Ollama to receive all built-in tools")
 
 	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
 	defer delete(openAITools)
-	assert(len(openAITools) == 6, "expected OpenAI to receive all built-in tools")
+	assert(len(openAITools) == 7, "expected OpenAI to receive all built-in tools")
+	_ = t
+}
+
+@(test)
+test_app_embedding_client_requires_embedding_configuration :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	_, clientError := app_embedding_client(&state)
+	assert(
+		clientError == .Invalid_Request,
+		"expected missing embedding selection to reject client",
+	)
+	_ = t
+}
+
+@(test)
+test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testing.T) {
+	state: App_State
+	state.config.embeddingProvider = "embeddings"
+	state.config.embeddingModel = "nomic-embed-text"
+	state.config.providers = make([dynamic]Provider_Config, 0, 1, context.temp_allocator)
+	defer delete(state.config.providers)
+	append(
+		&state.config.providers,
+		Provider_Config {
+			name = "embeddings",
+			type = .Ollama,
+			endpoint = "http://localhost:11434",
+			enabled = false,
+		},
+	)
+
+	_, clientError := app_embedding_client(&state)
+	assert(clientError == .Interface_Not_Found, "expected disabled embedding provider rejection")
 	_ = t
 }
 
@@ -130,6 +164,39 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 	assert(call.id == "write_file", "expected decoded tool ID")
 	assert(call.filePath == "notes.txt", "expected decoded file path")
 	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
+test_app_decodes_search_code_tool_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-search",
+		name      = "search_code",
+		arguments = `{"query":"permission dispatch","max_results":50}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected search_code arguments to decode")
+	assert(call.query == "permission dispatch", "expected search query")
+	assert(call.maxResults == SEARCH_CODE_MAX_RESULTS, "expected maximum results cap")
+	_ = t
+}
+
+@(test)
+test_app_search_code_results_json_serializes_references :: proc(t: ^testing.T) {
+	results := [1]Code_Search_Result {
+		{id = "src/main.odin:10-20", metadata = "src/main.odin:10-20"},
+	}
+	index := Code_Index {
+		projectRoot = "/project",
+	}
+	output := app_search_code_results_json(&index, results[:], context.temp_allocator)
+	defer delete(output, context.temp_allocator)
+	assert(
+		output ==
+		`{"results":[{"path":"src/main.odin","start_line":10,"end_line":20,"excerpt":""}]}`,
+		"expected JSON source locations",
+	)
 	_ = t
 }
 
