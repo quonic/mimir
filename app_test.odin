@@ -187,11 +187,15 @@ test_app_search_code_results_json_serializes_references :: proc(t: ^testing.T) {
 	results := [1]Code_Search_Result {
 		{id = "src/main.odin:10-20", metadata = "src/main.odin:10-20"},
 	}
-	output := app_search_code_results_json(results[:], context.temp_allocator)
+	index := Code_Index {
+		projectRoot = "/project",
+	}
+	output := app_search_code_results_json(&index, results[:], context.temp_allocator)
 	defer delete(output, context.temp_allocator)
 	assert(
-		output == `{"results":[{"id":"src/main.odin:10-20","location":"src/main.odin:10-20"}]}`,
-		"expected JSON source references",
+		output ==
+		`{"results":[{"path":"src/main.odin","start_line":10,"end_line":20,"excerpt":""}]}`,
+		"expected JSON source locations",
 	)
 	_ = t
 }

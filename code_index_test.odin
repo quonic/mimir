@@ -213,6 +213,42 @@ test_code_index_search_copies_ranked_results_and_releases_lock :: proc(t: ^testi
 }
 
 @(test)
+test_code_index_reads_bounded_result_excerpt :: proc(t: ^testing.T) {
+	project, projectError := os.make_directory_temp(
+		"",
+		"mimir-code-excerpt-",
+		context.temp_allocator,
+	)
+	assert(projectError == nil, "expected temporary project directory")
+	defer os.remove_all(project)
+
+	path := strings.concatenate({project, "/source.odin"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(path, "one\ntwo\nthree\nfour\nfive") == nil,
+		"expected excerpt source file",
+	)
+	index := Code_Index {
+		projectRoot = project,
+	}
+	result := Code_Search_Result {
+		metadata = "source.odin:2-5",
+	}
+	excerpt := code_index_search_result_excerpt(&index, result, 2, context.temp_allocator)
+	defer delete(excerpt, context.temp_allocator)
+	assert(excerpt == "two\nthree", "expected bounded matching source excerpt")
+
+	escaped := Code_Search_Result {
+		metadata = "../outside.odin:1-1",
+	}
+	assert(
+		code_index_search_result_excerpt(&index, escaped, 2, context.temp_allocator) == "",
+		"expected project escape to be rejected",
+	)
+	_ = t
+}
+
+@(test)
 test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
 	home, homeError := os.make_directory_temp("", "mimir-code-index-home-", context.temp_allocator)
 	assert(homeError == nil, "expected temporary home directory")

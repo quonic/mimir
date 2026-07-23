@@ -11,6 +11,7 @@ CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
 CODE_INDEX_EMBEDDING_BATCH_SIZE :: 32
 CODE_INDEX_DEFAULT_CHUNK_LINES :: 120
 CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES :: 12
+CODE_INDEX_MAX_RESULT_EXCERPT_LINES :: 24
 
 Code_Index_Error :: enum int {
 	None = 0,
@@ -44,6 +45,12 @@ Code_Search_Result :: struct {
 	id:       string,
 	metadata: string,
 	distance: f32,
+}
+
+Code_Search_Location :: struct {
+	relativePath: string,
+	startLine:    int,
+	endLine:      int,
 }
 
 Code_Source :: struct {
@@ -625,6 +632,110 @@ code_index_search_results_destroy :: proc(
 		delete(result.metadata, allocator)
 	}
 	delete(results^)
+}
+
+code_index_search_result_location :: proc(
+	result: Code_Search_Result,
+) -> (
+	Code_Search_Location,
+	bool,
+) {
+	identifier := result.metadata
+	if identifier == "" {
+		identifier = result.id
+	}
+	dashIndex := -1
+	colonIndex := -1
+	for index := len(identifier) - 1; index >= 0; index -= 1 {
+		if dashIndex < 0 && identifier[index] == '-' {
+			dashIndex = index
+		} else if dashIndex >= 0 && identifier[index] == ':' {
+			colonIndex = index
+			break
+		}
+	}
+	if colonIndex <= 0 || dashIndex <= colonIndex + 1 || dashIndex >= len(identifier) - 1 {
+		return Code_Search_Location{}, false
+	}
+	startLine, startOK := code_index_parse_positive_decimal(identifier[colonIndex + 1:dashIndex])
+	endLine, endOK := code_index_parse_positive_decimal(identifier[dashIndex + 1:])
+	if !startOK || !endOK || endLine < startLine {
+		return Code_Search_Location{}, false
+	}
+	return Code_Search_Location {
+			relativePath = identifier[:colonIndex],
+			startLine = startLine,
+			endLine = endLine,
+		},
+		true
+}
+
+code_index_parse_positive_decimal :: proc(value: string) -> (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	parsed := 0
+	for character in value {
+		if character < '0' || character > '9' {
+			return 0, false
+		}
+		parsed = parsed * 10 + int(character - '0')
+	}
+	return parsed, parsed > 0
+}
+
+code_index_search_result_excerpt :: proc(
+	index: ^Code_Index,
+	result: Code_Search_Result,
+	maximumLines: int = CODE_INDEX_MAX_RESULT_EXCERPT_LINES,
+	allocator := context.allocator,
+) -> string {
+	if index == nil || index.projectRoot == "" || maximumLines <= 0 {
+		return ""
+	}
+	location, locationOK := code_index_search_result_location(result)
+	if !locationOK {
+		return ""
+	}
+	path, pathOK := permission_resolve_project_path(
+		index.projectRoot,
+		location.relativePath,
+		allocator,
+	)
+	if !pathOK || !permission_path_is_within_project(index.projectRoot, path) {
+		if path != "" {
+			delete(path, allocator)
+		}
+		return ""
+	}
+	defer delete(path, allocator)
+
+	data, readError := os.read_entire_file(path, allocator)
+	if readError != nil || code_index_is_binary(data[:]) {
+		if data != nil {
+			delete(data, allocator)
+		}
+		return ""
+	}
+	defer delete(data, allocator)
+	lines := strings.split(string(data), "\n", allocator)
+	defer delete(lines, allocator)
+	lineCount := len(lines)
+	if lineCount > 0 && lines[lineCount - 1] == "" {
+		lineCount -= 1
+	}
+	start := location.startLine - 1
+	if start < 0 || start >= lineCount {
+		return ""
+	}
+	end := location.endLine
+	if end > start + maximumLines {
+		end = start + maximumLines
+	}
+	if end > lineCount {
+		end = lineCount
+	}
+	return strings.join(lines[start:end], "\n", allocator)
 }
 
 code_index_search_text :: proc(

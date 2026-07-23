@@ -458,10 +458,11 @@ app_execute_tool_call :: proc(state: ^App_State, call: Tool_Call) -> string {
 		)
 	}
 	defer code_index_search_results_destroy(&results, state.dispatcher.allocator)
-	return app_search_code_results_json(results[:], state.dispatcher.allocator)
+	return app_search_code_results_json(&state.codeIndex, results[:], state.dispatcher.allocator)
 }
 
 app_search_code_results_json :: proc(
+	codeIndex: ^Code_Index,
 	results: []Code_Search_Result,
 	allocator := context.allocator,
 ) -> string {
@@ -472,10 +473,29 @@ app_search_code_results_json :: proc(
 		if index > 0 {
 			strings.write_byte(&builder, ',')
 		}
-		strings.write_string(&builder, `{"id":`)
-		write_json_string(&builder, result.id)
-		strings.write_string(&builder, `,"location":`)
-		write_json_string(&builder, result.metadata)
+		location, locationOK := code_index_search_result_location(result)
+		strings.write_string(&builder, `{"path":`)
+		if locationOK {
+			write_json_string(&builder, location.relativePath)
+		} else {
+			write_json_string(&builder, result.metadata)
+		}
+		strings.write_string(&builder, `,"start_line":`)
+		if locationOK {
+			code_index_write_decimal(&builder, location.startLine)
+		} else {
+			strings.write_byte(&builder, '0')
+		}
+		strings.write_string(&builder, `,"end_line":`)
+		if locationOK {
+			code_index_write_decimal(&builder, location.endLine)
+		} else {
+			strings.write_byte(&builder, '0')
+		}
+		excerpt := code_index_search_result_excerpt(codeIndex, result, allocator = allocator)
+		defer delete(excerpt, allocator)
+		strings.write_string(&builder, `,"excerpt":`)
+		write_json_string(&builder, excerpt)
 		strings.write_byte(&builder, '}')
 	}
 	strings.write_string(&builder, `]}`)
