@@ -1782,12 +1782,14 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 				model,
 			)
 			if contextWindowErr == .None && contextWindowTokens > 0 {
-				contextWindowsChanged = config_update_context_window_tokens(
-					&state.config,
-					provider.name,
-					model,
-					contextWindowTokens,
-				) || contextWindowsChanged
+				contextWindowsChanged =
+					config_update_context_window_tokens(
+						&state.config,
+						provider.name,
+						model,
+						contextWindowTokens,
+					) ||
+					contextWindowsChanged
 			}
 		}
 	}

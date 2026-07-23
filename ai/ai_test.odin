@@ -921,10 +921,7 @@ test_new_client_with_endpoint_validates_endpoint :: proc(t: ^testing.T) {
 	client, err := new_client_with_endpoint(.Ollama, "http://localhost:11434", "key")
 	assert(err == .None, "expected configured endpoint client")
 	assert(client.iface.type == .Ollama, "expected configured client type")
-	assert(
-		client.iface.endpoint.host == "localhost:11434",
-		"expected configured client endpoint",
-	)
+	assert(client.iface.endpoint.host == "localhost:11434", "expected configured client endpoint")
 	assert(client.apiKey == "key", "expected configured client API key")
 
 	_, invalidErr := new_client_with_endpoint(.Ollama, "localhost:11434", "")
