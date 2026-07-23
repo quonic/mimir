@@ -1,5 +1,6 @@
 package main
 
+import "ai"
 import "core:hash"
 import "core:os"
 import "core:strings"
@@ -7,6 +8,7 @@ import vdb "vdb"
 
 CODE_INDEX_SCHEMA_VERSION :: "1"
 CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
+CODE_INDEX_EMBEDDING_BATCH_SIZE :: 32
 
 Code_Index_Error :: enum int {
 	None = 0,
@@ -385,6 +387,26 @@ code_index_chunks_destroy :: proc(chunks: ^[dynamic]Code_Chunk, allocator := con
 	delete(chunks^)
 }
 
+code_index_chunks_from_sources :: proc(
+	sources: []Code_Source,
+	maximumLines, overlapLines: int,
+	allocator := context.allocator,
+) -> [dynamic]Code_Chunk {
+	chunks := make([dynamic]Code_Chunk, 0, 0, allocator)
+	for source in sources {
+		sourceChunks := code_index_chunk_text(
+			source.relativePath,
+			source.content,
+			maximumLines,
+			overlapLines,
+			allocator,
+		)
+		append(&chunks, ..sourceChunks[:])
+		delete(sourceChunks)
+	}
+	return chunks
+}
+
 code_index_join_lines :: proc(
 	lines: []string,
 	start, total: int,
@@ -477,6 +499,87 @@ code_index_add_embeddings :: proc(
 	}
 	index.dirty = true
 	return true
+}
+
+code_index_rebuild :: proc(
+	index: ^Code_Index,
+	client: ai.Client,
+	maximumLines, overlapLines: int,
+	allocator := context.allocator,
+) -> ai.AI_Error {
+	if index == nil || index.projectRoot == "" || index.embeddingModel == "" {
+		return .Invalid_Request
+	}
+	sources := code_index_collect_sources(index.projectRoot, allocator)
+	defer code_index_sources_destroy(&sources, allocator)
+	chunks := code_index_chunks_from_sources(sources[:], maximumLines, overlapLines, allocator)
+	defer code_index_chunks_destroy(&chunks, allocator)
+	if len(chunks) == 0 {
+		return .Invalid_Request
+	}
+
+	replacement: Code_Index
+	embedError := code_index_embed_chunks(
+		&replacement,
+		client,
+		index.embeddingModel,
+		chunks[:],
+		allocator,
+	)
+	if embedError != .None {
+		code_index_destroy(&replacement, allocator)
+		return embedError
+	}
+	if index.databaseInitialized {
+		vdb.destroy(&index.database)
+	}
+	index.database = replacement.database
+	index.databaseInitialized = true
+	index.dirty = true
+	replacement.databaseInitialized = false
+	return .None
+}
+
+code_index_embed_chunks :: proc(
+	index: ^Code_Index,
+	client: ai.Client,
+	model: string,
+	chunks: []Code_Chunk,
+	allocator := context.allocator,
+) -> ai.AI_Error {
+	if index == nil || model == "" || len(chunks) == 0 {
+		return .Invalid_Request
+	}
+	for start := 0; start < len(chunks); start += CODE_INDEX_EMBEDDING_BATCH_SIZE {
+		end := start + CODE_INDEX_EMBEDDING_BATCH_SIZE
+		if end > len(chunks) {
+			end = len(chunks)
+		}
+		inputs := make([dynamic]string, 0, end - start, allocator)
+		for chunk in chunks[start:end] {
+			append(&inputs, chunk.content)
+		}
+		response, embeddingError := ai.send_embeddings(
+			client,
+			ai.Embedding_Batch_Request{model = model, inputs = inputs[:]},
+			allocator,
+		)
+		delete(inputs)
+		if embeddingError != .None {
+			return embeddingError
+		}
+		embeddingSlices := make([dynamic][]f32, 0, len(response.embeddings), allocator)
+		for embedding in response.embeddings {
+			append(&embeddingSlices, embedding[:])
+		}
+		added := code_index_add_embeddings(index, chunks[start:end], embeddingSlices[:], allocator)
+		delete(embeddingSlices)
+		ai.embedding_batch_response_destroy(&response, allocator)
+		if !added {
+			return .Invalid_Response
+		}
+	}
+	return .None
 }
 
 code_index_search :: proc(

@@ -131,6 +131,34 @@ test_code_index_collects_supported_project_sources :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_code_index_assembles_chunks_from_sorted_sources :: proc(t: ^testing.T) {
+	sources := make([dynamic]Code_Source, 0, 2, context.temp_allocator)
+	append(
+		&sources,
+		Code_Source {
+			relativePath = strings.clone("README.md", context.temp_allocator),
+			content = strings.clone("first", context.temp_allocator),
+		},
+	)
+	append(
+		&sources,
+		Code_Source {
+			relativePath = strings.clone("src/main.odin", context.temp_allocator),
+			content = strings.clone("one\ntwo\nthree", context.temp_allocator),
+		},
+	)
+	defer code_index_sources_destroy(&sources, context.temp_allocator)
+
+	chunks := code_index_chunks_from_sources(sources[:], 2, 1, context.temp_allocator)
+	defer code_index_chunks_destroy(&chunks, context.temp_allocator)
+	assert(len(chunks) == 3, "expected chunks from every source")
+	assert(chunks[0].id == "README.md:1-1", "expected first source chunk first")
+	assert(chunks[1].id == "src/main.odin:1-2", "expected first code chunk")
+	assert(chunks[2].id == "src/main.odin:2-3", "expected overlapping code chunk")
+	_ = t
+}
+
+@(test)
 test_code_index_adds_embeddings_to_vdb :: proc(t: ^testing.T) {
 	chunks := code_index_chunk_text(
 		"main.odin",
