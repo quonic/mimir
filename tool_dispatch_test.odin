@@ -79,10 +79,24 @@ test_tool_dispatcher_allows_shell_listing_as_read_only :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tool_dispatcher_allows_project_code_search_as_read_only :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	decision := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call{id = "search_code", query = "tool dispatch"},
+	)
+	assert(decision == .Allowed_Read_Only, "expected project code search to be read-only")
+	_ = t
+}
+
+@(test)
 test_builtin_ai_tool_definitions_cover_dispatcher_tools :: proc(t: ^testing.T) {
 	definitions := builtin_ai_tool_definitions(context.allocator)
 	defer delete(definitions)
-	assert(len(definitions) == 6, "expected every built-in tool to be advertised")
+	assert(len(definitions) == 7, "expected every built-in tool to be advertised")
 	assert(definitions[0].name == "read_file", "expected read_file tool definition")
 	assert(definitions[2].name == "run_command", "expected run_command tool definition")
 	assert(
@@ -90,6 +104,7 @@ test_builtin_ai_tool_definitions_cover_dispatcher_tools :: proc(t: ^testing.T) {
 		"expected shell listing tool definition",
 	)
 	assert(definitions[2].parametersJSON != "", "expected run_command JSON schema")
+	assert(definitions[6].name == "search_code", "expected code search tool definition")
 	_ = t
 }
 

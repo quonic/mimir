@@ -16,6 +16,8 @@ Tool_Call :: struct {
 	workingDirectory: string,
 	timeout:          int,
 	mcpServer:        string,
+	query:            string,
+	maxResults:       int,
 }
 
 Tool_Dispatcher :: struct {
@@ -45,6 +47,8 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		workingDirectory = strings.clone(call.workingDirectory, allocator),
 		timeout          = call.timeout,
 		mcpServer        = strings.clone(call.mcpServer, allocator),
+		query            = strings.clone(call.query, allocator),
+		maxResults       = call.maxResults,
 	}
 	return clone
 }
@@ -61,6 +65,7 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.command, allocator)
 	delete(call.workingDirectory, allocator)
 	delete(call.mcpServer, allocator)
+	delete(call.query, allocator)
 }
 
 tool_dispatch_result_destroy :: proc(
@@ -146,7 +151,10 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Read
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "list_available_shells":
+	case "list_available_shells", "search_code":
+		if call.id == "search_code" && call.query == "" {
+			return Permission_Action{}, false
+		}
 		action.effect = .Read
 		action.targetPath = dispatcher.projectRoot
 	case "list_directory":

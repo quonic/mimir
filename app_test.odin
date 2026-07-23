@@ -90,11 +90,11 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 6, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 7, "expected Ollama to receive all built-in tools")
 
 	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
 	defer delete(openAITools)
-	assert(len(openAITools) == 6, "expected OpenAI to receive all built-in tools")
+	assert(len(openAITools) == 7, "expected OpenAI to receive all built-in tools")
 	_ = t
 }
 
@@ -164,6 +164,35 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 	assert(call.id == "write_file", "expected decoded tool ID")
 	assert(call.filePath == "notes.txt", "expected decoded file path")
 	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
+test_app_decodes_search_code_tool_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-search",
+		name      = "search_code",
+		arguments = `{"query":"permission dispatch","max_results":50}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected search_code arguments to decode")
+	assert(call.query == "permission dispatch", "expected search query")
+	assert(call.maxResults == SEARCH_CODE_MAX_RESULTS, "expected maximum results cap")
+	_ = t
+}
+
+@(test)
+test_app_search_code_results_json_serializes_references :: proc(t: ^testing.T) {
+	results := [1]Code_Search_Result {
+		{id = "src/main.odin:10-20", metadata = "src/main.odin:10-20"},
+	}
+	output := app_search_code_results_json(results[:], context.temp_allocator)
+	defer delete(output, context.temp_allocator)
+	assert(
+		output == `{"results":[{"id":"src/main.odin:10-20","location":"src/main.odin:10-20"}]}`,
+		"expected JSON source references",
+	)
 	_ = t
 }
 
