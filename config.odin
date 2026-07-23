@@ -36,6 +36,12 @@ Provider_Config_Wire :: struct {
 	enabled:  bool,
 }
 
+Context_Window_Config_Wire :: struct {
+	providerName: string,
+	model:        string,
+	tokens:       int,
+}
+
 Permission_Grant_Wire :: struct {
 	kind:        string,
 	projectRoot: string,
@@ -50,6 +56,7 @@ Mimir_Config_Wire :: struct {
 	embeddingProvider: string,
 	embeddingModel:    string,
 	providers:         []Provider_Config_Wire,
+	contextWindows:    []Context_Window_Config_Wire,
 	mcpServers:        []MCP_Server_Config,
 	skillPaths:        []string,
 	permissionGrants:  []Permission_Grant_Wire,
@@ -68,12 +75,19 @@ Provider_Config :: struct {
 	modelOwned:    bool,
 }
 
+Context_Window_Config :: struct {
+	providerName: string,
+	model:        string,
+	tokens:       int,
+}
+
 Mimir_Config :: struct {
 	selectedProvider:    string,
 	selectedModel:       string,
 	embeddingProvider:   string,
 	embeddingModel:      string,
 	providers:           [dynamic]Provider_Config,
+	contextWindows:      [dynamic]Context_Window_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
 	skillPaths:          [dynamic]string,
 	permissionGrants:    [dynamic]Permission_Grant,
@@ -137,8 +151,10 @@ input_history_path :: proc(
 
 default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config: Mimir_Config
+	config.allocationAllocator = allocator
 	config.selectedProvider = DEFAULT_CONFIG_PROVIDER
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
+	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, 0, allocator)
 	config.skillPaths = make([dynamic]string, 0, 2, allocator)
 	config.permissionGrants = make([dynamic]Permission_Grant, 0, 0, allocator)
@@ -169,6 +185,43 @@ provider_config_destroy :: proc(provider: ^Provider_Config, allocator: mem.Alloc
 	}
 }
 
+config_context_window_tokens :: proc(config: ^Mimir_Config, providerName, model: string) -> int {
+	if config == nil || providerName == "" || model == "" {
+		return 0
+	}
+	for entry in config.contextWindows {
+		if entry.providerName == providerName && entry.model == model {
+			return entry.tokens
+		}
+	}
+	return 0
+}
+
+config_set_context_window_tokens :: proc(
+	config: ^Mimir_Config,
+	providerName, model: string,
+	tokens: int,
+) -> bool {
+	if config == nil || providerName == "" || model == "" || tokens < 0 {
+		return false
+	}
+	for &entry in config.contextWindows {
+		if entry.providerName == providerName && entry.model == model {
+			entry.tokens = tokens
+			return true
+		}
+	}
+	append(
+		&config.contextWindows,
+		Context_Window_Config {
+			providerName = strings.clone(providerName, config.allocationAllocator),
+			model = strings.clone(model, config.allocationAllocator),
+			tokens = tokens,
+		},
+	)
+	return true
+}
+
 config_destroy :: proc(config: ^Mimir_Config) {
 	if config.selectedProvider != "" {
 		delete(config.selectedProvider, config.allocationAllocator)
@@ -185,6 +238,14 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	for &provider in config.providers {
 		provider_config_destroy(&provider, config.allocationAllocator)
 	}
+	for &entry in config.contextWindows {
+		if entry.providerName != "" {
+			delete(entry.providerName, config.allocationAllocator)
+		}
+		if entry.model != "" {
+			delete(entry.model, config.allocationAllocator)
+		}
+	}
 	for path in config.skillPaths {
 		delete(path, config.allocationAllocator)
 	}
@@ -192,6 +253,7 @@ config_destroy :: proc(config: ^Mimir_Config) {
 		permission_grant_destroy(&grant, config.allocationAllocator)
 	}
 	delete(config.providers)
+	delete(config.contextWindows)
 	delete(config.mcpServers)
 	delete(config.skillPaths)
 	delete(config.permissionGrants)
@@ -345,6 +407,12 @@ parse_config_from_json :: proc(
 	config.embeddingProvider = strings.clone(wire.embeddingProvider, allocator)
 	config.embeddingModel = strings.clone(wire.embeddingModel, allocator)
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
+	config.contextWindows = make(
+		[dynamic]Context_Window_Config,
+		0,
+		len(wire.contextWindows),
+		allocator,
+	)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, len(wire.mcpServers), allocator)
 	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
 	config.permissionGrants = make(
@@ -373,6 +441,20 @@ parse_config_from_json :: proc(
 				endpointOwned = true,
 				apiKeyOwned = true,
 				modelOwned = true,
+			},
+		)
+	}
+	for entry in wire.contextWindows {
+		if entry.providerName == "" || entry.model == "" || entry.tokens < 0 {
+			config_destroy(&config)
+			return Mimir_Config{}, .Invalid_JSON
+		}
+		append(
+			&config.contextWindows,
+			Context_Window_Config {
+				providerName = strings.clone(entry.providerName, allocator),
+				model = strings.clone(entry.model, allocator),
+				tokens = entry.tokens,
 			},
 		)
 	}
@@ -580,6 +662,23 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		strings.write_string(&builder, "\n    }")
 	}
 	if len(config.providers) > 0 {
+		strings.write_string(&builder, "\n  ")
+	}
+	strings.write_string(&builder, "],\n")
+	strings.write_string(&builder, "  \"contextWindows\": [")
+	for entry, index in config.contextWindows {
+		if index > 0 {
+			strings.write_string(&builder, ",")
+		}
+		strings.write_string(&builder, "\n    {\n      \"providerName\": ")
+		write_json_string(&builder, entry.providerName)
+		strings.write_string(&builder, ",\n      \"model\": ")
+		write_json_string(&builder, entry.model)
+		strings.write_string(&builder, ",\n      \"tokens\": ")
+		code_index_write_decimal(&builder, entry.tokens)
+		strings.write_string(&builder, "\n    }")
+	}
+	if len(config.contextWindows) > 0 {
 		strings.write_string(&builder, "\n  ")
 	}
 	strings.write_string(&builder, "],\n")

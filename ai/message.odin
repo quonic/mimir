@@ -27,6 +27,13 @@ Tool_Result :: struct {
 	isError:    bool,
 }
 
+Chat_Usage :: struct {
+	inputTokens:     int,
+	outputTokens:    int,
+	hasInputTokens:  bool,
+	hasOutputTokens: bool,
+}
+
 Message :: struct {
 	role:        Message_Role,
 	content:     string,
@@ -57,6 +64,7 @@ Chat_Stream_Delta :: struct {
 	hasToolCall:  bool,
 	toolCallDone: bool,
 	done:         bool,
+	usage:        Chat_Usage,
 }
 
 Chat_Stream_Callback :: #type proc(delta: Chat_Stream_Delta) -> bool

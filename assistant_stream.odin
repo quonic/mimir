@@ -2,6 +2,7 @@ package main
 
 import "ai"
 import "core:encoding/json"
+import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:sync"
@@ -29,6 +30,15 @@ Assistant_Stream_State :: struct {
 	toolCalls:               [dynamic]ai.Tool_Call,
 	conversation:            [dynamic]ai.Message,
 	continuationCount:       int,
+	usage:                   ai.Chat_Usage,
+	contextWindowTokens:     int,
+	contextWindowCache:      [dynamic]Context_Window_Cache_Entry,
+}
+
+Context_Window_Cache_Entry :: struct {
+	providerName: string,
+	model:        string,
+	tokens:       int,
 }
 
 AI_Tool_Call_Arguments :: struct {
@@ -128,6 +138,11 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	}
 
 	app_reset_assistant_stream_state(&state.stream)
+	state.stream.contextWindowTokens = config_context_window_tokens(
+		&state.config,
+		provider.name,
+		model,
+	)
 	state.stream.workerData = workerData
 	state.stream.assistantIndex = assistantIndex
 	state.stream.active = true
@@ -206,6 +221,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 		app_clear_assistant_stream_buffers(&state.stream)
 		app_clear_assistant_stream_tool_calls(&state.stream)
 		app_clear_assistant_stream_conversation(&state.stream)
+		app_clear_context_window_cache(&state.stream)
 		return
 	}
 
@@ -224,10 +240,12 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	app_clear_assistant_stream_buffers(&state.stream)
 	app_clear_assistant_stream_tool_calls(&state.stream)
 	app_clear_assistant_stream_conversation(&state.stream)
+	app_clear_context_window_cache(&state.stream)
 }
 
 assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 	worker := cast(^Assistant_Stream_Worker)workerThread.data
+	assistant_stream_resolve_context_window(worker)
 	err := ai.send_chat_completion_stream_with_context(
 		worker.client,
 		worker.request,
@@ -266,6 +284,14 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 
 		if delta.hasToolCall {
 			append(&stream.toolCalls, ai.tool_call_clone(delta.toolCall, stream.bufferAllocator))
+		}
+		if delta.usage.hasInputTokens {
+			stream.usage.inputTokens = delta.usage.inputTokens
+			stream.usage.hasInputTokens = true
+		}
+		if delta.usage.hasOutputTokens {
+			stream.usage.outputTokens = delta.usage.outputTokens
+			stream.usage.hasOutputTokens = true
 		}
 
 		if delta.done && stream.cancelRequested {
@@ -620,6 +646,8 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 	stream.finished = false
 	stream.cancelRequested = false
 	stream.canceled = false
+	stream.usage = {}
+	stream.contextWindowTokens = 0
 }
 
 app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
@@ -669,11 +697,110 @@ app_clear_assistant_stream_conversation :: proc(stream: ^Assistant_Stream_State)
 	stream.continuationCount = 0
 }
 
+assistant_stream_resolve_context_window :: proc(worker: ^Assistant_Stream_Worker) {
+	if worker.client.iface.type != .Ollama || worker.request.model == "" {
+		return
+	}
+	stream := worker.stream
+	if sync.mutex_guard(&stream.mutex) {
+		for entry in stream.contextWindowCache {
+			if entry.providerName == worker.client.iface.name &&
+			   entry.model == worker.request.model {
+				if entry.tokens > 0 {
+					stream.contextWindowTokens = entry.tokens
+				}
+				return
+			}
+		}
+	}
+
+	contextWindowTokens, _ := ai.get_ollama_model_context_window(
+		worker.client,
+		worker.request.model,
+	)
+	if sync.mutex_guard(&stream.mutex) {
+		entry := Context_Window_Cache_Entry {
+			providerName = strings.clone(worker.client.iface.name, stream.bufferAllocator),
+			model        = strings.clone(worker.request.model, stream.bufferAllocator),
+			tokens       = contextWindowTokens,
+		}
+		append(&stream.contextWindowCache, entry)
+		if contextWindowTokens > 0 {
+			stream.contextWindowTokens = contextWindowTokens
+		}
+	}
+}
+
+app_clear_context_window_cache :: proc(stream: ^Assistant_Stream_State) {
+	for &entry in stream.contextWindowCache {
+		if entry.providerName != "" {
+			delete(entry.providerName, stream.bufferAllocator)
+		}
+		if entry.model != "" {
+			delete(entry.model, stream.bufferAllocator)
+		}
+	}
+	delete(stream.contextWindowCache)
+	stream.contextWindowCache = make(
+		[dynamic]Context_Window_Cache_Entry,
+		0,
+		0,
+		stream.bufferAllocator,
+	)
+}
+
 app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
 		delete(worker.request.model)
 	}
 	delete(worker.toolDefinitions)
+}
+
+app_context_usage_status_text :: proc(
+	state: ^App_State,
+	allocator := context.temp_allocator,
+) -> string {
+	if state == nil {
+		return ""
+	}
+	usage: ai.Chat_Usage
+	contextWindowTokens := 0
+	active := false
+	if sync.mutex_guard(&state.stream.mutex) {
+		usage = state.stream.usage
+		contextWindowTokens = state.stream.contextWindowTokens
+		active = state.stream.active
+	}
+	if !usage.hasInputTokens {
+		if active {
+			return "ctx ..."
+		}
+		return ""
+	}
+
+	inputText := assistant_stream_compact_token_count(usage.inputTokens, allocator)
+	if contextWindowTokens <= 0 {
+		return fmt.tprintf("ctx %s", inputText)
+	}
+	contextText := assistant_stream_compact_token_count(contextWindowTokens, allocator)
+	percentage := usage.inputTokens * 100 / contextWindowTokens
+	return fmt.tprintf("ctx %s/%s %d%%", inputText, contextText, percentage)
+}
+
+assistant_stream_compact_token_count :: proc(
+	tokens: int,
+	allocator := context.temp_allocator,
+) -> string {
+	if tokens < 1000 {
+		return fmt.tprintf("%d", tokens)
+	}
+	tenths := (tokens + 50) / 100
+	whole := tenths / 10
+	decimal := tenths % 10
+	if decimal == 0 {
+		return fmt.tprintf("%dk", whole)
+	}
+	return fmt.tprintf("%d.%dk", whole, decimal)
 }
 
 assistant_stream_error_text :: proc(err: ai.AI_Error) -> string {

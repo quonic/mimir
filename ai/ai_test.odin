@@ -14,6 +14,7 @@ Test_Stream_State :: struct {
 	finishReason: string,
 	done:         bool,
 	calls:        int,
+	usage:        Chat_Usage,
 }
 
 testOpenAIStreamState: Test_Stream_State
@@ -73,6 +74,14 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 	if delta.done {
 		state.done = true
 	}
+	if delta.usage.hasInputTokens {
+		state.usage.inputTokens = delta.usage.inputTokens
+		state.usage.hasInputTokens = true
+	}
+	if delta.usage.hasOutputTokens {
+		state.usage.outputTokens = delta.usage.outputTokens
+		state.usage.hasOutputTokens = true
+	}
 }
 
 free_model_list :: proc(models: [dynamic]string) {
@@ -105,6 +114,7 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 
 	streamWire := build_openai_chat_stream_request(request)
 	assert(streamWire.stream, "expected OpenAI stream payload to enable streaming")
+	assert(streamWire.stream_options.include_usage, "expected OpenAI stream usage to be requested")
 	_ = t
 }
 
@@ -524,6 +534,7 @@ test_parse_openai_stream_body :: proc(t: ^testing.T) {
 		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
 		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
 		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n" +
 		"data: [DONE]\n\n"
 	err := parse_sse_stream_body(payload, record_openai_stream_delta, parse_openai_stream_event)
 
@@ -537,6 +548,10 @@ test_parse_openai_stream_body :: proc(t: ^testing.T) {
 	)
 	assert(testOpenAIStreamState.finishReason == "stop", "expected OpenAI finish reason")
 	assert(testOpenAIStreamState.done, "expected OpenAI stream to mark done")
+	assert(testOpenAIStreamState.usage.hasInputTokens, "expected OpenAI prompt usage")
+	assert(testOpenAIStreamState.usage.inputTokens == 12, "expected OpenAI prompt tokens")
+	assert(testOpenAIStreamState.usage.hasOutputTokens, "expected OpenAI completion usage")
+	assert(testOpenAIStreamState.usage.outputTokens == 3, "expected OpenAI completion tokens")
 	_ = t
 }
 
@@ -595,11 +610,11 @@ test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 
 	payload :=
 		"event: message_start\n" +
-		"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\"}}\n\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":11}}}\n\n" +
 		"event: content_block_delta\n" +
 		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n" +
 		"event: message_delta\n" +
-		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
 		"event: message_stop\n" +
 		"data: {\"type\":\"message_stop\"}\n\n"
 	err := parse_sse_stream_body(
@@ -617,6 +632,8 @@ test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 	assert(testAnthropicStreamState.model == "claude-test", "expected Anthropic stream model")
 	assert(testAnthropicStreamState.finishReason == "end_turn", "expected Anthropic finish reason")
 	assert(testAnthropicStreamState.done, "expected Anthropic stream to mark done")
+	assert(testAnthropicStreamState.usage.inputTokens == 11, "expected Anthropic input tokens")
+	assert(testAnthropicStreamState.usage.outputTokens == 2, "expected Anthropic output tokens")
 	_ = t
 }
 
@@ -664,7 +681,7 @@ test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	payload :=
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"o\"},\"done\":false}\n" +
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"k\"},\"done\":false}\n" +
-		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\"}\n"
+		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":10,\"eval_count\":2}\n"
 	err := parse_json_lines_stream_body(
 		payload,
 		record_ollama_stream_delta,
@@ -678,6 +695,8 @@ test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	assert(testOllamaStreamState.model == "llama3.2", "expected Ollama stream model")
 	assert(testOllamaStreamState.finishReason == "stop", "expected Ollama finish reason")
 	assert(testOllamaStreamState.done, "expected Ollama stream to mark done")
+	assert(testOllamaStreamState.usage.inputTokens == 10, "expected Ollama prompt tokens")
+	assert(testOllamaStreamState.usage.outputTokens == 2, "expected Ollama output tokens")
 	_ = t
 }
 
@@ -847,6 +866,30 @@ test_parse_ollama_models_response :: proc(t: ^testing.T) {
 	assert(len(models) == 2, "expected Ollama models response to return two model names")
 	assert(models[0] == "qwen3.6", "expected first Ollama model name to match payload")
 	assert(models[1] == "gemma4", "expected second Ollama model name to match payload")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_model_context_window :: proc(t: ^testing.T) {
+	payload := `{"model_info":{"qwen35moe.context_length":262144,"general.parameter_count":35500000000}}`
+	contextWindow, err := parse_ollama_model_context_window(payload)
+
+	assert(err == .None, "expected valid Ollama model info response")
+	assert(contextWindow == 262144, "expected context length from prefixed model info key")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_model_context_window_missing_or_invalid :: proc(t: ^testing.T) {
+	missingContext, missingErr := parse_ollama_model_context_window(`{"model_info":{}}`)
+	assert(missingErr == .None, "expected missing context length to remain nonfatal")
+	assert(missingContext == 0, "expected unknown context length when metadata is missing")
+
+	invalidContext, invalidErr := parse_ollama_model_context_window(
+		`{"model_info":{"gemma4.context_length":0}}`,
+	)
+	assert(invalidErr == .None, "expected invalid optional context metadata to remain nonfatal")
+	assert(invalidContext == 0, "expected nonpositive context length to be unknown")
 	_ = t
 }
 

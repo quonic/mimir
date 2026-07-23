@@ -52,6 +52,20 @@ OpenAI_Chat_Request :: struct {
 	tools:       []OpenAI_Tool,
 }
 
+OpenAI_Chat_Stream_Request :: struct {
+	model:          string,
+	messages:       [dynamic]OpenAI_Message,
+	temperature:    f32,
+	max_tokens:     int,
+	stream:         bool,
+	stream_options: OpenAI_Stream_Options,
+	tools:          []OpenAI_Tool,
+}
+
+OpenAI_Stream_Options :: struct {
+	include_usage: bool,
+}
+
 OpenAI_Choice_Message :: struct {
 	role:       string,
 	content:    string,
@@ -80,9 +94,15 @@ OpenAI_Stream_Choice :: struct {
 	finish_reason: string,
 }
 
+OpenAI_Stream_Usage :: struct {
+	prompt_tokens:     int,
+	completion_tokens: int,
+}
+
 OpenAI_Stream_Response :: struct {
 	model:   string,
 	choices: []OpenAI_Stream_Choice,
+	usage:   OpenAI_Stream_Usage,
 }
 
 OpenAI_Model :: struct {
@@ -178,10 +198,17 @@ build_openai_chat_request :: proc(
 	return wire
 }
 
-build_openai_chat_stream_request :: proc(request: Chat_Request) -> OpenAI_Chat_Request {
-	wire := build_openai_chat_request(request)
-	wire.stream = true
-	return wire
+build_openai_chat_stream_request :: proc(request: Chat_Request) -> OpenAI_Chat_Stream_Request {
+	base := build_openai_chat_request(request)
+	return OpenAI_Chat_Stream_Request {
+		model = base.model,
+		messages = base.messages,
+		temperature = base.temperature,
+		max_tokens = base.max_tokens,
+		stream = true,
+		stream_options = OpenAI_Stream_Options{include_usage = true},
+		tools = base.tools,
+	}
 }
 
 build_openai_embedding_request :: proc(
@@ -336,7 +363,18 @@ parse_openai_stream_event :: proc(
 	}
 
 	if len(wire.choices) == 0 {
-		return false, .Invalid_Response
+		return !chat_stream_callback_call(
+				callbackState,
+				Chat_Stream_Delta {
+					usage = Chat_Usage {
+						inputTokens = wire.usage.prompt_tokens,
+						outputTokens = wire.usage.completion_tokens,
+						hasInputTokens = true,
+						hasOutputTokens = true,
+					},
+				},
+			),
+			.None
 	}
 
 	choice := wire.choices[0]

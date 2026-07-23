@@ -53,6 +53,13 @@ The initial configuration shape is:
   "selectedModel": "",
   "embeddingProvider": "",
   "embeddingModel": "",
+  "contextWindows": [
+    {
+      "providerName": "ollama",
+      "model": "qwen3.5",
+      "tokens": 262144
+    }
+  ],
   "providers": [
     {
       "name": "ollama",
@@ -74,6 +81,12 @@ The initial configuration shape is:
 are intentionally independent. Select an embedding-capable provider and model
 in the `Embedding Model` settings category before using `search_code`; Mimir
 does not choose a default embedding model.
+
+`contextWindows` optionally records a nonnegative manual context capacity for a
+specific provider/model pair. A value of `0` means the capacity is unknown. For
+Ollama, Mimir queries `/api/show` for a positive `model_info` key ending in
+`.context_length`; a discovered value is used for the current run in preference
+to this fallback. Missing or unsupported model metadata does not prevent chat.
 
 ## Permission Grants
 
