@@ -1,6 +1,7 @@
 package main
 
 import "console"
+import "core:fmt"
 import "core:strings"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
@@ -636,6 +637,15 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	case .Provider_Model:
 		strings.write_string(&builder, "Configured model: ")
 		strings.write_string(&builder, provider.model)
+	case .Provider_Context_Window:
+		strings.write_string(&builder, "Context window tokens: ")
+		strings.write_string(
+			&builder,
+			fmt.tprintf(
+				"%d",
+				config_context_window_tokens(&state.config, provider.name, provider.model),
+			),
+		)
 	case .Provider_Enabled:
 		if provider.enabled {
 			return "[x] Enabled"
@@ -673,6 +683,8 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "API key"
 	case .Provider_Model:
 		return "Configured model"
+	case .Provider_Context_Window:
+		return "Context window tokens"
 	case .Provider_Enabled:
 		return "Enabled"
 	case .Refresh_Models:
@@ -902,13 +914,57 @@ render_input_cursor_cell :: proc(batch: ^console.Batch, text: string) {
 
 render_status :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
 	console.batch_fill_region(batch, region, ' ')
-	write_clipped_line(
-		batch,
-		region.top_row,
-		region.left_column,
-		console.region_width(region),
-		state.status,
-	)
+	width := console.region_width(region)
+	if width <= 0 {
+		return
+	}
+	contextUsage := app_context_usage_status_text(state, context.temp_allocator)
+	contextUsage = right_clipped_text(contextUsage, width)
+	contextWidth := text_display_width(contextUsage)
+	if contextWidth > 0 {
+		contextColumn := region.right_column - contextWidth + 1
+		write_clipped_line(
+			batch,
+			region.top_row,
+			region.left_column,
+			contextColumn - region.left_column,
+			state.status,
+		)
+		write_clipped_line(batch, region.top_row, contextColumn, contextWidth, contextUsage)
+		return
+	}
+	write_clipped_line(batch, region.top_row, region.left_column, width, state.status)
+}
+
+text_display_width :: proc(text: string) -> int {
+	width := 0
+	for index := 0; index < len(text); {
+		width += unicode_grapheme_width_at(text, index)
+		next := unicode_next_grapheme_offset(text, index)
+		if next <= index {
+			break
+		}
+		index = next
+	}
+	return width
+}
+
+right_clipped_text :: proc(text: string, width: int) -> string {
+	if width <= 0 || text == "" {
+		return ""
+	}
+	totalWidth := text_display_width(text)
+	start := 0
+	for totalWidth > width && start < len(text) {
+		graphemeWidth := unicode_grapheme_width_at(text, start)
+		next := unicode_next_grapheme_offset(text, start)
+		if next <= start {
+			break
+		}
+		totalWidth -= graphemeWidth
+		start = next
+	}
+	return text[start:]
 }
 
 history_entry_line :: proc(entry: History_Entry, allocator := context.allocator) -> string {

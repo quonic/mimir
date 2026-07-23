@@ -21,6 +21,13 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	payload := `{
   "selectedProvider": "ollama",
   "selectedModel": "llama3.2",
+	"contextWindows": [
+		{
+			"providerName": "ollama",
+			"model": "llama3.2",
+			"tokens": 131072
+		}
+	],
   "providers": [
     {
       "name": "ollama",
@@ -53,6 +60,10 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(len(config.providers) == 1, "expected one provider")
 	assert(config.providers[0].type == ai.Interface_Type.Ollama, "expected Ollama provider")
 	assert(config.providers[0].model == "llama3.2", "expected provider model")
+	assert(
+		config_context_window_tokens(&config, "ollama", "llama3.2") == 131072,
+		"expected model-specific context window",
+	)
 	assert(config.providers[0].enabled, "expected provider to be enabled")
 	assert(len(config.skillPaths) == 1, "expected skill path to parse")
 	assert(config.skillPaths[0] == "/tmp/mimir/skills", "expected skill path")
@@ -110,8 +121,17 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.embeddingProvider = "ollama"
 	config.embeddingModel = "nomic-embed-text"
 	config.providers[0].model = "llama3.2"
+	assert(
+		config_set_context_window_tokens(&config, "ollama", "llama3.2", 131072),
+		"expected context window setting to save",
+	)
 	defer {
 		delete(config.providers)
+		for &entry in config.contextWindows {
+			delete(entry.providerName, context.temp_allocator)
+			delete(entry.model, context.temp_allocator)
+		}
+		delete(config.contextWindows)
 		delete(config.mcpServers)
 		delete(config.skillPaths)
 		delete(config.permissionGrants)
@@ -123,6 +143,11 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	loaded, loadErr := load_config_from_file(home, context.temp_allocator)
 	defer {
 		delete(loaded.providers)
+		for &entry in loaded.contextWindows {
+			delete(entry.providerName, context.temp_allocator)
+			delete(entry.model, context.temp_allocator)
+		}
+		delete(loaded.contextWindows)
 		delete(loaded.mcpServers)
 		delete(loaded.skillPaths)
 		delete(loaded.permissionGrants)
@@ -136,6 +161,38 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")
+	assert(
+		config_context_window_tokens(&loaded, "ollama", "llama3.2") == 131072,
+		"expected context window round trip",
+	)
+	_ = t
+}
+
+@(test)
+test_config_update_context_window_tokens_changes_only_new_values :: proc(t: ^testing.T) {
+	config := default_ollama_config(context.temp_allocator)
+	defer config_destroy(&config)
+
+	assert(
+		config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		"expected new context window to be added",
+	)
+	assert(
+		!config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		"expected unchanged context window to be a no-op",
+	)
+	assert(
+		config_update_context_window_tokens(&config, "ollama", "qwen3", 65536),
+		"expected changed context window to update",
+	)
+	assert(
+		config_context_window_tokens(&config, "ollama", "qwen3") == 65536,
+		"expected updated model-specific context window",
+	)
+	assert(
+		!config_update_context_window_tokens(&config, "ollama", "qwen3", 0),
+		"expected unknown context window to be ignored",
+	)
 	_ = t
 }
 

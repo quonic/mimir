@@ -34,6 +34,7 @@ Anthropic_Response :: struct {
 	model:       string,
 	content:     []Anthropic_Content_Block,
 	stop_reason: string,
+	usage:       json.Value,
 }
 
 Anthropic_Stream_Content_Delta :: struct {
@@ -59,6 +60,7 @@ Anthropic_Stream_Response :: struct {
 	type:          string,
 	index:         int,
 	content_block: Anthropic_Content_Block,
+	usage:         json.Value,
 	delta:         struct {
 		type:         string,
 		text:         string,
@@ -67,6 +69,7 @@ Anthropic_Stream_Response :: struct {
 	},
 	message:       struct {
 		model: string,
+		usage: json.Value,
 	},
 }
 
@@ -267,10 +270,11 @@ parse_anthropic_stream_event :: proc(
 
 	switch wire.type {
 	case "message_start":
-		if wire.message.model != "" {
+		usage := anthropic_chat_usage(wire.message.usage)
+		if wire.message.model != "" || usage.hasInputTokens {
 			return !chat_stream_callback_call(
 					callbackState,
-					Chat_Stream_Delta{model = wire.message.model},
+					Chat_Stream_Delta{model = wire.message.model, usage = usage},
 				),
 				.None
 		}
@@ -349,10 +353,15 @@ parse_anthropic_stream_event :: proc(
 			),
 			.None
 	case "message_delta":
-		if wire.delta.stop_reason != "" {
+		usage := anthropic_chat_usage(wire.usage)
+		if wire.delta.stop_reason != "" || usage.hasOutputTokens {
 			return !chat_stream_callback_call(
 					callbackState,
-					Chat_Stream_Delta{finishReason = wire.delta.stop_reason, done = true},
+					Chat_Stream_Delta {
+						finishReason = wire.delta.stop_reason,
+						done = true,
+						usage = usage,
+					},
 				),
 				.None
 		}
@@ -361,6 +370,27 @@ parse_anthropic_stream_event :: proc(
 	}
 
 	return false, .None
+}
+
+anthropic_chat_usage :: proc(value: json.Value) -> Chat_Usage {
+	usage: Chat_Usage
+	object, ok := value.(json.Object)
+	if !ok {
+		return usage
+	}
+	if input, found := object["input_tokens"]; found {
+		if count, countOK := input.(json.Integer); countOK && count >= 0 {
+			usage.inputTokens = int(count)
+			usage.hasInputTokens = true
+		}
+	}
+	if output, found := object["output_tokens"]; found {
+		if count, countOK := output.(json.Integer); countOK && count >= 0 {
+			usage.outputTokens = int(count)
+			usage.hasOutputTokens = true
+		}
+	}
+	return usage
 }
 
 anthropic_stream_tool_state_destroy :: proc(state: ^Anthropic_Stream_Tool_State) {

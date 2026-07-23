@@ -924,7 +924,7 @@ test_config_modal_toggles_provider_enabled_and_cancels_text_edit :: proc(t: ^tes
 	app_show_config(&state)
 	state.configFocus = .Settings
 
-	state.configSettingCursor = 6
+	state.configSettingCursor = 7
 	assert(app_activate_config_setting(&state), "expected enabled setting activation")
 	assert(!state.config.providers[0].enabled, "expected enabled checkbox to toggle")
 
@@ -1084,6 +1084,27 @@ test_compute_app_layout_places_status_last :: proc(t: ^testing.T) {
 	assert(
 		layout.inputPanel.bottom_row - layout.inputPanel.top_row + 1 == 5,
 		"expected input panel to grow to input lines plus border",
+	)
+	_ = t
+}
+
+@(test)
+test_context_usage_status_text_and_right_clipping :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.stream.usage = ai.Chat_Usage {
+		inputTokens    = 12500,
+		hasInputTokens = true,
+	}
+	state.stream.contextWindowTokens = 32000
+
+	status := app_context_usage_status_text(&state, context.temp_allocator)
+	assert(status == "ctx 12.5k/32k 39%", "expected compact context usage status")
+	clipped := right_clipped_text(status, 6)
+	assert(text_display_width(clipped) <= 6, "expected right-clipped indicator to fit")
+	assert(
+		strings.has_suffix(status, clipped),
+		"expected right clipping to retain the indicator end",
 	)
 	_ = t
 }

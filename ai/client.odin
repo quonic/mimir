@@ -18,6 +18,7 @@ ANTHROPIC_VERSION :: "2023-06-01"
 OLLAMA_CHAT_PATH :: "/api/chat"
 OLLAMA_EMBED_PATH :: "/api/embed"
 OLLAMA_MODELS_PATH :: "/api/tags"
+OLLAMA_SHOW_PATH :: "/api/show"
 
 send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Response, AI_Error) {
 	if request.model == "" || len(request.messages) == 0 {

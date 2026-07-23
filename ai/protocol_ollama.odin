@@ -4,6 +4,8 @@ import json "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
+import http "../http"
+
 Ollama_Message :: struct {
 	role:       string,
 	content:    string,
@@ -44,10 +46,12 @@ Ollama_Chat_Request :: struct {
 }
 
 Ollama_Chat_Response :: struct {
-	model:       string,
-	message:     Ollama_Message,
-	done:        bool,
-	done_reason: string,
+	model:             string,
+	message:           Ollama_Message,
+	done:              bool,
+	done_reason:       string,
+	prompt_eval_count: json.Value,
+	eval_count:        json.Value,
 }
 
 Ollama_Model :: struct {
@@ -56,6 +60,14 @@ Ollama_Model :: struct {
 
 Ollama_Models_Response :: struct {
 	models: []Ollama_Model,
+}
+
+Ollama_Show_Request :: struct {
+	model: string,
+}
+
+Ollama_Show_Response :: struct {
+	model_info: json.Value,
 }
 
 Ollama_Embedding_Response :: struct {
@@ -315,6 +327,10 @@ parse_ollama_stream_event :: proc(
 		return false, .None
 	}
 
+	usage := ollama_chat_usage(wire.prompt_eval_count, wire.eval_count)
+	if !wire.done {
+		usage = {}
+	}
 	return !chat_stream_callback_call(
 			callbackState,
 			Chat_Stream_Delta {
@@ -322,9 +338,23 @@ parse_ollama_stream_event :: proc(
 				model = wire.model,
 				finishReason = wire.done_reason,
 				done = wire.done,
+				usage = usage,
 			},
 		),
 		.None
+}
+
+ollama_chat_usage :: proc(inputValue, outputValue: json.Value) -> Chat_Usage {
+	usage: Chat_Usage
+	if input, ok := inputValue.(json.Integer); ok && input >= 0 {
+		usage.inputTokens = int(input)
+		usage.hasInputTokens = true
+	}
+	if output, ok := outputValue.(json.Integer); ok && output >= 0 {
+		usage.outputTokens = int(output)
+		usage.hasOutputTokens = true
+	}
+	return usage
 }
 
 ollama_tool_call_id :: proc(index: int, allocator := context.allocator) -> string {
@@ -352,4 +382,58 @@ parse_ollama_models_response :: proc(
 	}
 
 	return models, .None
+}
+
+get_ollama_model_context_window :: proc(client: Client, model: string) -> (int, AI_Error) {
+	if client.iface.type != .Ollama || model == "" {
+		return 0, .Invalid_Request
+	}
+	target, ok := compose_endpoint_target(client.iface.endpoint, OLLAMA_SHOW_PATH)
+	if !ok {
+		return 0, .Invalid_Request
+	}
+
+	extraHeaders: [dynamic][2]string
+	defer delete(extraHeaders)
+	if client.apiKey != "" {
+		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
+		append(&extraHeaders, [2]string{"authorization", authorization})
+	}
+
+	body, status, errKind := do_json_post(
+		target,
+		Ollama_Show_Request{model = model},
+		extraHeaders[:],
+	)
+	if errKind != .None {
+		return 0, errKind
+	}
+	defer if body != "" {delete(body)}
+	if !http.status_is_success(status) {
+		_ = parse_ollama_error_message(body)
+		return 0, map_status_to_error(status)
+	}
+	return parse_ollama_model_context_window(body)
+}
+
+parse_ollama_model_context_window :: proc(body: string) -> (int, AI_Error) {
+	wire: Ollama_Show_Response
+	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
+	if decodeErr != nil {
+		return 0, .Invalid_Response
+	}
+	modelInfo, ok := wire.model_info.(json.Object)
+	if !ok {
+		return 0, .None
+	}
+	for key, value in modelInfo {
+		if !strings.has_suffix(key, ".context_length") {
+			continue
+		}
+		if contextLength, contextLengthOK := value.(json.Integer);
+		   contextLengthOK && contextLength > 0 {
+			return int(contextLength), .None
+		}
+	}
+	return 0, .None
 }

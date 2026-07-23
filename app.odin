@@ -3,6 +3,7 @@ package main
 import "ai"
 import "console"
 import "core:c"
+import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -107,6 +108,7 @@ Config_Setting_ID :: enum int {
 	Provider_Endpoint,
 	Provider_API_Key,
 	Provider_Model,
+	Provider_Context_Window,
 	Provider_Enabled,
 	Refresh_Models,
 	Add_Provider,
@@ -199,6 +201,7 @@ app_init_with_home :: proc(
 	state.stream.bufferAllocator = allocator
 	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
+	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
 	state.input = input_buffer_init(allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
@@ -343,6 +346,15 @@ app_destroy :: proc(state: ^App_State) {
 			provider_config_destroy(&provider, context.allocator)
 		}
 		delete(state.config.providers)
+		for &entry in state.config.contextWindows {
+			if entry.providerName != "" {
+				delete(entry.providerName, context.allocator)
+			}
+			if entry.model != "" {
+				delete(entry.model, context.allocator)
+			}
+		}
+		delete(state.config.contextWindows)
 		delete(state.config.mcpServers)
 		delete(state.config.skillPaths)
 		delete(state.config.permissionGrants)
@@ -1275,6 +1287,14 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			append(
 				&state.configSettings,
 				Config_Setting {
+					id = .Provider_Context_Window,
+					kind = .Text,
+					providerIndex = providerIndex,
+				},
+			)
+			append(
+				&state.configSettings,
+				Config_Setting {
 					id = .Provider_Enabled,
 					kind = .Checkbox,
 					providerIndex = providerIndex,
@@ -1435,7 +1455,11 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 			state.config.providers[setting.providerIndex].enabled = !state.config.providers[setting.providerIndex].enabled
 			app_apply_config_change(state, "Provider enabled setting saved")
 		}
-	case .Provider_Name, .Provider_Endpoint, .Provider_API_Key, .Provider_Model:
+	case .Provider_Name,
+	     .Provider_Endpoint,
+	     .Provider_API_Key,
+	     .Provider_Model,
+	     .Provider_Context_Window:
 		app_begin_config_edit(state, setting)
 	case .Refresh_Models:
 		app_refresh_config_models(state, setting.providerIndex)
@@ -1501,6 +1525,11 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 		value = provider.apiKey
 	case .Provider_Model:
 		value = provider.model
+	case .Provider_Context_Window:
+		value = fmt.tprintf(
+			"%d",
+			config_context_window_tokens(&state.config, provider.name, provider.model),
+		)
 	case:
 		return
 	}
@@ -1651,6 +1680,23 @@ app_commit_config_edit :: proc(state: ^App_State) {
 			state.config.selectedModel = strings.clone(text, context.allocator)
 			state.modelNameOwned = true
 		}
+	} else if setting.id == .Provider_Context_Window {
+		tokens, tokensOK := strconv.parse_int(text)
+		if !tokensOK || tokens < 0 {
+			state.status = "Context window must be a nonnegative integer"
+			return
+		}
+		provider := state.config.providers[setting.providerIndex]
+		if provider.model == "" ||
+		   !config_set_context_window_tokens(
+				   &state.config,
+				   provider.name,
+				   provider.model,
+				   tokens,
+			   ) {
+			state.status = "Set a configured model before context window"
+			return
+		}
 	}
 	app_apply_config_change(state, "Provider setting saved")
 }
@@ -1723,6 +1769,30 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		return
 	}
 	defer delete(models)
+	contextClient, contextClientErr := ai.new_client_with_endpoint(
+		.Ollama,
+		provider.endpoint,
+		provider.apiKey,
+	)
+	contextWindowsChanged := false
+	if contextClientErr == .None {
+		for model in models {
+			contextWindowTokens, contextWindowErr := ai.get_ollama_model_context_window(
+				contextClient,
+				model,
+			)
+			if contextWindowErr == .None && contextWindowTokens > 0 {
+				contextWindowsChanged =
+					config_update_context_window_tokens(
+						&state.config,
+						provider.name,
+						model,
+						contextWindowTokens,
+					) ||
+					contextWindowsChanged
+			}
+		}
+	}
 	ai.clear_interfaces()
 	for configuredProvider in state.config.providers {
 		if !configuredProvider.enabled {
@@ -1744,6 +1814,16 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		}
 	}
 	app_rebuild_config_settings(state)
+	if contextWindowsChanged &&
+	   state.configHome != "" &&
+	   save_config_to_file(state.configHome, state.config) != .None {
+		state.status = "Provider models refreshed; context window save failed"
+		return
+	}
+	if contextWindowsChanged {
+		state.status = "Provider models and context windows refreshed"
+		return
+	}
 	state.status = "Provider models refreshed"
 }
 
