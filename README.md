@@ -9,7 +9,7 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 
 ## Screenshots
 
-<img width="944" height="582" alt="Screenshot_20260720_175632" src="https://github.com/user-attachments/assets/ae69833a-9e4e-4b84-a245-2ff2fec8dcbb" />
+<img width="716" height="381" alt="image" src="https://github.com/user-attachments/assets/19dcde61-0422-44da-a0ef-142689724112" />
 <img width="1300" height="970" alt="image" src="https://github.com/user-attachments/assets/84b64494-8280-4946-8a9b-2fd0e970c11b" />
 
 ## Prerequisites
