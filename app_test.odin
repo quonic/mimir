@@ -1103,7 +1103,7 @@ test_render_app_frame_contains_panels_and_status :: proc(t: ^testing.T) {
 	assert(contains_string(sequence, HISTORY_TITLE), "expected history panel title")
 	assert(contains_string(sequence, INPUT_TITLE), "expected input panel title")
 	assert(
-		contains_string(sequence, "system: Mimir terminal harness ready."),
+		contains_string(sequence, "system: Mimir the terminal harness is ready."),
 		"expected history text",
 	)
 	assert(contains_string(sequence, "hello"), "expected input text first line")

@@ -230,7 +230,7 @@ app_init_with_home :: proc(
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
 	state.configEdit = input_buffer_init(allocator)
-	append_history(&state, .System, "Mimir terminal harness ready.")
+	append_history(&state, .System, "Mimir the terminal harness is ready.")
 	return state
 }
 
