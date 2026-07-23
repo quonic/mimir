@@ -85,8 +85,11 @@ does not choose a default embedding model.
 `contextWindows` optionally records a nonnegative manual context capacity for a
 specific provider/model pair. A value of `0` means the capacity is unknown. For
 Ollama, Mimir queries `/api/show` for a positive `model_info` key ending in
-`.context_length`; a discovered value is used for the current run in preference
-to this fallback. Missing or unsupported model metadata does not prevent chat.
+`.context_length`; a discovered value is used in preference to this fallback.
+The Providers configuration modal's **Refresh models** action discovers these
+values for all listed Ollama models and persists changed positive values. Missing
+or unsupported model metadata retains any existing configured value and does not
+prevent chat.
 
 ## Permission Grants
 

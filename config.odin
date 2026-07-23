@@ -222,6 +222,34 @@ config_set_context_window_tokens :: proc(
 	return true
 }
 
+config_update_context_window_tokens :: proc(
+	config: ^Mimir_Config,
+	providerName, model: string,
+	tokens: int,
+) -> bool {
+	if config == nil || providerName == "" || model == "" || tokens <= 0 {
+		return false
+	}
+	for &entry in config.contextWindows {
+		if entry.providerName == providerName && entry.model == model {
+			if entry.tokens == tokens {
+				return false
+			}
+			entry.tokens = tokens
+			return true
+		}
+	}
+	append(
+		&config.contextWindows,
+		Context_Window_Config {
+			providerName = strings.clone(providerName, config.allocationAllocator),
+			model = strings.clone(model, config.allocationAllocator),
+			tokens = tokens,
+		},
+	)
+	return true
+}
+
 config_destroy :: proc(config: ^Mimir_Config) {
 	if config.selectedProvider != "" {
 		delete(config.selectedProvider, config.allocationAllocator)

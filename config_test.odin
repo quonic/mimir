@@ -169,6 +169,34 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_update_context_window_tokens_changes_only_new_values :: proc(t: ^testing.T) {
+	config := default_ollama_config(context.temp_allocator)
+	defer config_destroy(&config)
+
+	assert(
+		config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		"expected new context window to be added",
+	)
+	assert(
+		!config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		"expected unchanged context window to be a no-op",
+	)
+	assert(
+		config_update_context_window_tokens(&config, "ollama", "qwen3", 65536),
+		"expected changed context window to update",
+	)
+	assert(
+		config_context_window_tokens(&config, "ollama", "qwen3") == 65536,
+		"expected updated model-specific context window",
+	)
+	assert(
+		!config_update_context_window_tokens(&config, "ollama", "qwen3", 0),
+		"expected unknown context window to be ignored",
+	)
+	_ = t
+}
+
+@(test)
 test_parse_config_rejects_permission_grant_outside_project :: proc(t: ^testing.T) {
 	payload := `{
 	"selectedProvider": "ollama",

@@ -1769,6 +1769,28 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		return
 	}
 	defer delete(models)
+	contextClient, contextClientErr := ai.new_client_with_endpoint(
+		.Ollama,
+		provider.endpoint,
+		provider.apiKey,
+	)
+	contextWindowsChanged := false
+	if contextClientErr == .None {
+		for model in models {
+			contextWindowTokens, contextWindowErr := ai.get_ollama_model_context_window(
+				contextClient,
+				model,
+			)
+			if contextWindowErr == .None && contextWindowTokens > 0 {
+				contextWindowsChanged = config_update_context_window_tokens(
+					&state.config,
+					provider.name,
+					model,
+					contextWindowTokens,
+				) || contextWindowsChanged
+			}
+		}
+	}
 	ai.clear_interfaces()
 	for configuredProvider in state.config.providers {
 		if !configuredProvider.enabled {
@@ -1790,6 +1812,16 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		}
 	}
 	app_rebuild_config_settings(state)
+	if contextWindowsChanged &&
+	   state.configHome != "" &&
+	   save_config_to_file(state.configHome, state.config) != .None {
+		state.status = "Provider models refreshed; context window save failed"
+		return
+	}
+	if contextWindowsChanged {
+		state.status = "Provider models and context windows refreshed"
+		return
+	}
 	state.status = "Provider models refreshed"
 }
 

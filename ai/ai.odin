@@ -100,6 +100,20 @@ new_client :: proc(interfaceName: string, apiKey: string) -> (Client, AI_Error) 
 	return Client{iface = iface, apiKey = apiKey}, .None
 }
 
+new_client_with_endpoint :: proc(
+	interfaceType: Interface_Type,
+	endpoint, apiKey: string,
+) -> (Client, AI_Error) {
+	url := http.url_parse(endpoint)
+	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
+		return Client{}, .Invalid_Request
+	}
+	return Client {
+		iface = Interface {type = interfaceType, endpoint = url},
+		apiKey = apiKey,
+	}, .None
+}
+
 probe_ollama_endpoint :: proc(
 	endpoint: string,
 	allocator := context.allocator,

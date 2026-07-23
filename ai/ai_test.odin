@@ -917,6 +917,22 @@ test_probe_ollama_endpoint_rejects_invalid_url :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_new_client_with_endpoint_validates_endpoint :: proc(t: ^testing.T) {
+	client, err := new_client_with_endpoint(.Ollama, "http://localhost:11434", "key")
+	assert(err == .None, "expected configured endpoint client")
+	assert(client.iface.type == .Ollama, "expected configured client type")
+	assert(
+		client.iface.endpoint.host == "localhost:11434",
+		"expected configured client endpoint",
+	)
+	assert(client.apiKey == "key", "expected configured client API key")
+
+	_, invalidErr := new_client_with_endpoint(.Ollama, "localhost:11434", "")
+	assert(invalidErr == .Invalid_Request, "expected invalid configured endpoint rejection")
+	_ = t
+}
+
+@(test)
 test_compose_endpoint_target :: proc(t: ^testing.T) {
 	withVersion := http.url_parse("http://localhost:11434/v1")
 	target1, ok1 := compose_endpoint_target(withVersion, "/chat/completions")
