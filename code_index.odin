@@ -6,6 +6,7 @@ import "core:strings"
 import vdb "vdb"
 
 CODE_INDEX_SCHEMA_VERSION :: "1"
+CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
 
 Code_Index_Error :: enum int {
 	None = 0,
@@ -39,6 +40,11 @@ Code_Search_Result :: struct {
 	id:       string,
 	metadata: string,
 	distance: f32,
+}
+
+Code_Source :: struct {
+	relativePath: string,
+	content:      string,
 }
 
 code_index_init :: proc(
@@ -174,6 +180,149 @@ code_index_write_hex_u64 :: proc(builder: ^strings.Builder, value: u64) {
 	hexDigits := "0123456789abcdef"
 	for shift := 60; shift >= 0; shift -= 4 {
 		strings.write_byte(builder, hexDigits[(value >> u64(shift)) & 0xf])
+	}
+}
+
+code_index_collect_sources :: proc(
+	projectRoot: string,
+	allocator := context.allocator,
+) -> [dynamic]Code_Source {
+	sources := make([dynamic]Code_Source, 0, 0, allocator)
+	if projectRoot == "" || !os.is_directory(projectRoot) {
+		return sources
+	}
+	code_index_collect_directory(projectRoot, projectRoot, &sources, allocator)
+	code_index_sort_sources(sources[:])
+	return sources
+}
+
+code_index_sources_destroy :: proc(
+	sources: ^[dynamic]Code_Source,
+	allocator := context.allocator,
+) {
+	if sources == nil {
+		return
+	}
+	for &source in sources^ {
+		delete(source.relativePath, allocator)
+		delete(source.content, allocator)
+	}
+	delete(sources^)
+}
+
+code_index_collect_directory :: proc(
+	projectRoot, directory: string,
+	sources: ^[dynamic]Code_Source,
+	allocator := context.allocator,
+) {
+	entries, readError := os.read_directory_by_path(directory, 0, allocator)
+	if readError != nil {
+		return
+	}
+	defer os.file_info_slice_delete(entries, allocator)
+	for entry in entries {
+		if entry.type == .Directory {
+			if !code_index_skip_directory(entry.name) {
+				code_index_collect_directory(projectRoot, entry.fullpath, sources, allocator)
+			}
+			continue
+		}
+		if entry.type != .Regular ||
+		   entry.size <= 0 ||
+		   entry.size > CODE_INDEX_MAX_SOURCE_BYTES ||
+		   !code_index_file_supported(entry.name) {
+			continue
+		}
+
+		data, readError := os.read_entire_file(entry.fullpath, allocator)
+		if readError != nil {
+			continue
+		}
+		if code_index_is_binary(data[:]) {
+			delete(data, allocator)
+			continue
+		}
+		relativePath := code_index_relative_path(projectRoot, entry.fullpath, allocator)
+		if relativePath == "" {
+			delete(data, allocator)
+			continue
+		}
+		append(
+			&sources^,
+			Code_Source {
+				relativePath = relativePath,
+				content = strings.clone(string(data), allocator),
+			},
+		)
+		delete(data, allocator)
+	}
+}
+
+code_index_skip_directory :: proc(name: string) -> bool {
+	switch name {
+	case ".git", ".hg", ".svn", ".cache", "node_modules", "target", "build", "dist", "vendor":
+		return true
+	}
+	return false
+}
+
+code_index_file_supported :: proc(name: string) -> bool {
+	extensions := []string {
+		".odin",
+		".c",
+		".h",
+		".cpp",
+		".hpp",
+		".go",
+		".rs",
+		".py",
+		".js",
+		".ts",
+		".tsx",
+		".java",
+		".json",
+		".md",
+		".toml",
+		".yaml",
+		".yml",
+		".sh",
+	}
+	for extension in extensions {
+		if strings.ends_with(name, extension) {
+			return true
+		}
+	}
+	return false
+}
+
+code_index_is_binary :: proc(data: []byte) -> bool {
+	for value in data {
+		if value == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+code_index_relative_path :: proc(
+	projectRoot, path: string,
+	allocator := context.allocator,
+) -> string {
+	if !permission_path_is_within_project(projectRoot, path) || len(path) <= len(projectRoot) {
+		return ""
+	}
+	return strings.clone(path[len(projectRoot) + 1:], allocator)
+}
+
+code_index_sort_sources :: proc(sources: []Code_Source) {
+	for index := 1; index < len(sources); index += 1 {
+		current := sources[index]
+		previous := index - 1
+		for previous >= 0 && sources[previous].relativePath > current.relativePath {
+			sources[previous + 1] = sources[previous]
+			previous -= 1
+		}
+		sources[previous + 1] = current
 	}
 }
 

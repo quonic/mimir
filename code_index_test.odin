@@ -83,6 +83,54 @@ test_code_index_chunks_source_with_stable_overlapping_ranges :: proc(t: ^testing
 }
 
 @(test)
+test_code_index_collects_supported_project_sources :: proc(t: ^testing.T) {
+	project, projectError := os.make_directory_temp(
+		"",
+		"mimir-code-sources-",
+		context.temp_allocator,
+	)
+	assert(projectError == nil, "expected temporary project directory")
+	defer os.remove_all(project)
+
+	sourceDirectory := strings.concatenate({project, "/src"}, context.temp_allocator)
+	defer delete(sourceDirectory, context.temp_allocator)
+	skipDirectory := strings.concatenate({project, "/node_modules/pkg"}, context.temp_allocator)
+	defer delete(skipDirectory, context.temp_allocator)
+	assert(os.make_directory_all(sourceDirectory) == nil, "expected source directory")
+	assert(os.make_directory_all(skipDirectory) == nil, "expected skipped directory")
+
+	odinPath := strings.concatenate({sourceDirectory, "/main.odin"}, context.temp_allocator)
+	defer delete(odinPath, context.temp_allocator)
+	markdownPath := strings.concatenate({project, "/README.md"}, context.temp_allocator)
+	defer delete(markdownPath, context.temp_allocator)
+	skippedPath := strings.concatenate({skipDirectory, "/index.js"}, context.temp_allocator)
+	defer delete(skippedPath, context.temp_allocator)
+	binaryPath := strings.concatenate({project, "/data.bin"}, context.temp_allocator)
+	defer delete(binaryPath, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(odinPath, "package main") == nil,
+		"expected Odin source",
+	)
+	assert(
+		os.write_entire_file_from_string(markdownPath, "# Mimir") == nil,
+		"expected Markdown source",
+	)
+	assert(
+		os.write_entire_file_from_string(skippedPath, "module.exports = {}") == nil,
+		"expected skipped source",
+	)
+	assert(os.write_entire_file(binaryPath, []byte{0, 1, 2}) == nil, "expected binary fixture")
+
+	sources := code_index_collect_sources(project, context.temp_allocator)
+	defer code_index_sources_destroy(&sources, context.temp_allocator)
+	assert(len(sources) == 2, "expected only supported project sources")
+	assert(sources[0].relativePath == "README.md", "expected sorted root source")
+	assert(sources[1].relativePath == "src/main.odin", "expected nested source")
+	assert(sources[1].content == "package main", "expected source content")
+	_ = t
+}
+
+@(test)
 test_code_index_adds_embeddings_to_vdb :: proc(t: ^testing.T) {
 	chunks := code_index_chunk_text(
 		"main.odin",
