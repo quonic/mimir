@@ -51,8 +51,8 @@ The initial configuration shape is:
 {
   "selectedProvider": "ollama",
   "selectedModel": "",
-	"embeddingProvider": "",
-	"embeddingModel": "",
+  "embeddingProvider": "",
+  "embeddingModel": "",
   "providers": [
     {
       "name": "ollama",
