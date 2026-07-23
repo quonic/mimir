@@ -9,6 +9,8 @@ import vdb "vdb"
 CODE_INDEX_SCHEMA_VERSION :: "1"
 CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
 CODE_INDEX_EMBEDDING_BATCH_SIZE :: 32
+CODE_INDEX_DEFAULT_CHUNK_LINES :: 120
+CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES :: 12
 
 Code_Index_Error :: enum int {
 	None = 0,
@@ -623,6 +625,40 @@ code_index_search_results_destroy :: proc(
 		delete(result.metadata, allocator)
 	}
 	delete(results^)
+}
+
+code_index_search_text :: proc(
+	index: ^Code_Index,
+	client: ai.Client,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Code_Search_Result,
+	ai.AI_Error,
+) {
+	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	if index == nil ||
+	   !index.databaseInitialized ||
+	   index.embeddingModel == "" ||
+	   query == "" ||
+	   maximumResults <= 0 {
+		return results, .Invalid_Request
+	}
+	response, embeddingError := ai.send_embedding(
+		client,
+		ai.Embedding_Request{model = index.embeddingModel, input = query},
+		allocator,
+	)
+	if embeddingError != .None {
+		return results, embeddingError
+	}
+	defer ai.embedding_response_destroy(&response, allocator)
+	if len(response.embedding) != vdb.dimensions(&index.database) {
+		return results, .Invalid_Response
+	}
+	delete(results)
+	return code_index_search(index, response.embedding[:], maximumResults, allocator), .None
 }
 
 code_index_load :: proc(index: ^Code_Index, allocator := context.allocator) -> Code_Index_Error {

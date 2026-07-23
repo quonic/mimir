@@ -1841,6 +1841,75 @@ app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator
 	_ = code_index_load(&state.codeIndex, allocator)
 }
 
+app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
+	if state == nil || state.config.embeddingProvider == "" || state.config.embeddingModel == "" {
+		return ai.Client{}, .Invalid_Request
+	}
+	provider, providerOK := app_find_provider(state.config, state.config.embeddingProvider)
+	if !providerOK || !provider.enabled {
+		return ai.Client{}, .Interface_Not_Found
+	}
+	if provider.type != .Ollama && provider.type != .OpenAI {
+		return ai.Client{}, .Unsupported_Interface
+	}
+	return ai.new_client(provider.name, provider.apiKey)
+}
+
+app_ensure_code_index :: proc(state: ^App_State, allocator := context.allocator) -> ai.AI_Error {
+	if state == nil {
+		return .Invalid_Request
+	}
+	if !state.codeIndexReady {
+		app_rebuild_code_index(state, allocator)
+	}
+	if !state.codeIndexReady {
+		return .Invalid_Request
+	}
+	if state.codeIndex.databaseInitialized {
+		return .None
+	}
+	client, clientError := app_embedding_client(state)
+	if clientError != .None {
+		return clientError
+	}
+	rebuildError := code_index_rebuild(
+		&state.codeIndex,
+		client,
+		CODE_INDEX_DEFAULT_CHUNK_LINES,
+		CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
+		allocator,
+	)
+	if rebuildError != .None {
+		return rebuildError
+	}
+	if code_index_save(&state.codeIndex) != .None {
+		return .Provider_Error
+	}
+	return .None
+}
+
+app_search_code :: proc(
+	state: ^App_State,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Code_Search_Result,
+	ai.AI_Error,
+) {
+	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	ensureError := app_ensure_code_index(state, allocator)
+	if ensureError != .None {
+		return results, ensureError
+	}
+	client, clientError := app_embedding_client(state)
+	if clientError != .None {
+		return results, clientError
+	}
+	delete(results)
+	return code_index_search_text(&state.codeIndex, client, query, maximumResults, allocator)
+}
+
 app_show_models :: proc(state: ^App_State) {
 	if app_assistant_stream_active(state) {
 		state.status = "Assistant stream active; use /stop before changing models"

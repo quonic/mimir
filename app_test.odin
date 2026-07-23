@@ -99,6 +99,40 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_embedding_client_requires_embedding_configuration :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	_, clientError := app_embedding_client(&state)
+	assert(
+		clientError == .Invalid_Request,
+		"expected missing embedding selection to reject client",
+	)
+	_ = t
+}
+
+@(test)
+test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testing.T) {
+	state: App_State
+	state.config.embeddingProvider = "embeddings"
+	state.config.embeddingModel = "nomic-embed-text"
+	state.config.providers = make([dynamic]Provider_Config, 0, 1, context.temp_allocator)
+	defer delete(state.config.providers)
+	append(
+		&state.config.providers,
+		Provider_Config {
+			name = "embeddings",
+			type = .Ollama,
+			endpoint = "http://localhost:11434",
+			enabled = false,
+		},
+	)
+
+	_, clientError := app_embedding_client(&state)
+	assert(clientError == .Interface_Not_Found, "expected disabled embedding provider rejection")
+	_ = t
+}
+
+@(test)
 test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
