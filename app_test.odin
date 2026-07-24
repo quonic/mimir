@@ -77,6 +77,27 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		"expected write call to open approval modal",
+	)
+	motion := "\x1b[<35;44;44M"
+	for inputIndex := 0; inputIndex < len(motion); inputIndex += 1 {
+		app_handle_input_byte(&state, motion[inputIndex])
+	}
+	assert(state.mode == .Approval, "expected mouse motion to keep approval modal open")
+	assert(
+		state.approval.choice == .Allow_Once,
+		"expected mouse motion coordinates to leave the approval choice unchanged",
+	)
+	_ = t
+}
+
+@(test)
 test_approval_display_text_escapes_terminal_controls :: proc(t: ^testing.T) {
 	display := approval_display_text("printf 'one\ntwo'\x1b[2J\t", context.temp_allocator)
 	assert(

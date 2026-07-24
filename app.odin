@@ -33,6 +33,7 @@ Approval_Input_State :: enum int {
 	Ready = 0,
 	Escape,
 	CSI,
+	CSI_Mouse,
 }
 
 Approval_State :: struct {
@@ -1074,6 +1075,10 @@ app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
 		app_apply_approval_choice(state, .Deny)
 		return true
 	case .CSI:
+		if input == '<' {
+			state.approval.input = .CSI_Mouse
+			return false
+		}
 		state.approval.input = .Ready
 		switch input {
 		case 'A':
@@ -1082,6 +1087,11 @@ app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
 		case 'B':
 			app_move_approval_choice(state, 1)
 			return true
+		}
+		return false
+	case .CSI_Mouse:
+		if input == 'M' || input == 'm' {
+			state.approval.input = .Ready
 		}
 		return false
 	case .Ready:
