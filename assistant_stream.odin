@@ -35,6 +35,19 @@ Assistant_Stream_State :: struct {
 	contextWindowCache:      [dynamic]Context_Window_Cache_Entry,
 }
 
+Tool_Execution_State :: struct {
+	mutex:        sync.Mutex,
+	allocator:    mem.Allocator,
+	worker:       ^thread.Thread,
+	app:          ^App_State,
+	call:         Tool_Call,
+	result:       string,
+	resultOwned:  bool,
+	historyIndex: int,
+	active:       bool,
+	finished:     bool,
+}
+
 Context_Window_Cache_Entry :: struct {
 	providerName: string,
 	model:        string,
@@ -243,6 +256,21 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	app_clear_context_window_cache(&state.stream)
 }
 
+app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
+	if execution.worker != nil {
+		thread.join(execution.worker)
+		thread.destroy(execution.worker)
+		execution.worker = nil
+	}
+	if execution.call.id != "" {
+		tool_call_destroy(&execution.call, execution.allocator)
+	}
+	if execution.resultOwned {
+		delete(execution.result, execution.allocator)
+	}
+	execution^ = {}
+}
+
 assistant_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 	worker := cast(^Assistant_Stream_Worker)workerThread.data
 	assistant_stream_resolve_context_window(worker)
@@ -325,7 +353,7 @@ app_build_ai_messages :: proc(
 }
 
 app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
-	if state.mode == .Approval || !state.dispatcherReady {
+	if state.mode == .Approval || !state.dispatcherReady || state.toolExecution.active {
 		return false
 	}
 
@@ -349,48 +377,125 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 
 	call, callOK := app_tool_call_from_ai(queuedCall, state.dispatcher.allocator)
 	if !callOK {
-		append_history(state, .Tool, "Tool call arguments are invalid.")
+		toolID := queuedCall.name
+		if toolID == "" {
+			toolID = "unknown"
+		}
+		app_append_tool_history(state, toolID, "failed")
 		app_append_tool_result(state, queuedCall.id, "Tool call arguments are invalid.", true)
 		state.status = "Tool call rejected"
 		app_start_tool_continuation_if_ready(state)
 		return true
 	}
 	defer tool_call_destroy(&call, state.dispatcher.allocator)
+	historyIndex := app_append_tool_history(state, call.id, "running")
 
 	decision := tool_dispatch_decide(&state.dispatcher, call)
 	switch decision {
 	case .Approval_Required:
+		app_update_tool_history(state, historyIndex, call.id, "awaiting approval")
 		if !app_show_approval(state, call) {
 			output := "Tool call requires approval."
-			append_history(state, .Tool, output)
+			app_update_tool_history(state, historyIndex, call.id, "denied")
 			app_append_tool_result(state, call.callID, output, true)
 			state.status = "Tool call rejected"
 			app_start_tool_continuation_if_ready(state)
+		} else {
+			state.approval.historyIndex = historyIndex
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
-		output := app_execute_tool_call(state, call)
-		outputOwned := app_tool_output_is_owned(call.id)
-		if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
-			truncatedOutput := strings.concatenate(
-				{
-					output[:MAX_RETAINED_TOOL_OUTPUT_BYTES],
-					"\n\n[Tool output truncated after 64 KiB.]",
-				},
-				state.dispatcher.allocator,
-			)
-			if outputOwned {
-				delete(output, state.dispatcher.allocator)
-			}
-			output = truncatedOutput
-			outputOwned = true
+		if !app_start_tool_execution(state, call, historyIndex) {
+			app_update_tool_history(state, historyIndex, call.id, "failed")
+			app_append_tool_result(state, call.callID, "Tool call could not start.", true)
+			state.status = "Tool call could not start"
+			app_start_tool_continuation_if_ready(state)
 		}
-		defer app_destroy_tool_output_if_owned(output, outputOwned, state.dispatcher.allocator)
-		app_record_tool_execution_result(state, call.callID, output)
-		state.status = "Tool call completed"
 	case .Denied:
-		append_history(state, .Tool, "Permission denied.")
+		app_update_tool_history(state, historyIndex, call.id, "denied")
 		app_append_tool_result(state, call.callID, "Permission denied.", true)
 		state.status = "Tool call denied"
+	}
+	if !state.toolExecution.active && state.mode != .Approval {
+		app_start_tool_continuation_if_ready(state)
+	}
+	return true
+}
+
+app_start_tool_execution :: proc(state: ^App_State, call: Tool_Call, historyIndex: int) -> bool {
+	execution := &state.toolExecution
+	if execution.active || call.id == "" {
+		return false
+	}
+	execution.app = state
+	execution.call = tool_call_clone(call, execution.allocator)
+	execution.historyIndex = historyIndex
+	execution.active = true
+	execution.finished = false
+	execution.worker = thread.create(tool_execution_worker_proc)
+	execution.worker.data = rawptr(execution)
+	thread.start(execution.worker)
+	state.status = "Tool call running"
+	return true
+}
+
+tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
+	execution := cast(^Tool_Execution_State)workerThread.data
+	output := app_execute_tool_call(execution.app, execution.call)
+	outputOwned := app_tool_output_is_owned(execution.call.id)
+	if outputOwned {
+		ownedOutput := strings.clone(output, execution.allocator)
+		delete(output)
+		output = ownedOutput
+	}
+	if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
+		truncatedOutput := strings.concatenate(
+			{output[:MAX_RETAINED_TOOL_OUTPUT_BYTES], "\n\n[Tool output truncated after 64 KiB.]"},
+			execution.allocator,
+		)
+		delete(output, execution.allocator)
+		output = truncatedOutput
+		outputOwned = true
+	}
+	if sync.mutex_guard(&execution.mutex) {
+		execution.result = output
+		execution.resultOwned = outputOwned
+		execution.finished = true
+	}
+}
+
+app_poll_tool_execution :: proc(state: ^App_State) -> bool {
+	execution := &state.toolExecution
+	if !execution.active || execution.worker == nil || !thread.is_done(execution.worker) {
+		return false
+	}
+
+	thread.join(execution.worker)
+	thread.destroy(execution.worker)
+	execution.worker = nil
+	output := execution.result
+	outputOwned := execution.resultOwned
+	toolCallID := execution.call.callID
+	toolID := execution.call.id
+	isError := app_tool_output_is_error(output)
+	if isError {
+		app_update_tool_history(state, execution.historyIndex, toolID, "failed")
+	} else {
+		app_update_tool_history(state, execution.historyIndex, toolID, "completed")
+	}
+	app_record_tool_execution_result(state, toolCallID, output)
+	app_destroy_tool_output_if_owned(output, outputOwned, execution.allocator)
+	tool_call_destroy(&execution.call, execution.allocator)
+	execution.call = {}
+	execution.result = ""
+	execution.resultOwned = false
+	execution.app = nil
+	execution.historyIndex = -1
+	execution.active = false
+	execution.finished = false
+	if isError {
+		state.status = "Tool call failed"
+	} else {
+		state.status = "Tool call completed"
 	}
 	app_start_tool_continuation_if_ready(state)
 	return true
@@ -398,9 +503,6 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 
 app_record_tool_execution_result :: proc(state: ^App_State, toolCallID: string, output: string) {
 	isError := app_tool_output_is_error(output)
-	if isError {
-		append_history(state, .Tool, output)
-	}
 	app_append_tool_result(state, toolCallID, output, isError)
 }
 
@@ -469,7 +571,7 @@ app_tool_call_from_ai :: proc(
 
 app_execute_tool_call :: proc(state: ^App_State, call: Tool_Call) -> string {
 	if call.id != "search_code" {
-		return tool_dispatch_execute(&state.dispatcher, call)
+		return tool_dispatch_execute_approved(&state.dispatcher, call)
 	}
 	results, searchError := app_search_code(
 		state,
@@ -574,7 +676,10 @@ app_append_tool_result :: proc(
 }
 
 app_start_tool_continuation_if_ready :: proc(state: ^App_State) {
-	if state.stream.active || state.mode != .Chat || len(state.stream.conversation) == 0 {
+	if state.stream.active ||
+	   state.toolExecution.active ||
+	   state.mode != .Chat ||
+	   len(state.stream.conversation) == 0 {
 		return
 	}
 	if len(state.stream.toolCalls) > 0 {

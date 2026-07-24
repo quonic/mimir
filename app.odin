@@ -40,6 +40,7 @@ Approval_State :: struct {
 	callOwned:     bool,
 	prepared:      Tool_Dispatch_Result,
 	preparedOwned: bool,
+	historyIndex:  int,
 	safety:        Approval_Safety_State,
 	choice:        Approval_Choice,
 	input:         Approval_Input_State,
@@ -182,6 +183,7 @@ App_State :: struct {
 	codeIndex:              Code_Index,
 	codeIndexReady:         bool,
 	stream:                 Assistant_Stream_State,
+	toolExecution:          Tool_Execution_State,
 	models:                 [dynamic]Model_Select_Entry,
 	modelProviderOwned:     bool,
 	modelNameOwned:         bool,
@@ -215,6 +217,8 @@ app_init_with_home :: proc(
 	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
+	state.toolExecution.allocator = allocator
+	state.toolExecution.historyIndex = -1
 	state.input = input_buffer_init(allocator)
 	state.inputPaste = make([dynamic]byte, 0, 0, allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
@@ -340,6 +344,7 @@ app_enter_setup :: proc(state: ^App_State, status: string) {
 
 app_destroy :: proc(state: ^App_State) {
 	app_destroy_assistant_stream(state)
+	app_destroy_tool_execution(&state.toolExecution)
 	input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
 	for entry in state.inputHistory {
@@ -477,6 +482,9 @@ run_app :: proc() {
 			frameDirty = true
 			historyDirty = false
 		}
+		if app_poll_tool_execution(&state) {
+			frameDirty = true
+		}
 		if app_poll_assistant_stream(&state) {
 			frameDirty = true
 			if state.historyRenderOnly {
@@ -552,6 +560,26 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 		&state.history,
 		History_Entry{role = role, content = strings.clone(content, context.allocator)},
 	)
+	state.historyScrollOffset = 0
+	state.historySelection = {}
+}
+
+app_append_tool_history :: proc(state: ^App_State, toolID, status: string) -> int {
+	append_history(state, .Tool, fmt.tprintf("%s (%s)", toolID, status))
+	return len(state.history) - 1
+}
+
+app_update_tool_history :: proc(state: ^App_State, historyIndex: int, toolID, status: string) {
+	if historyIndex < 0 || historyIndex >= len(state.history) {
+		return
+	}
+	entry := &state.history[historyIndex]
+	if entry.content != "" {
+		delete(entry.content)
+	}
+	entry.content = strings.clone(fmt.tprintf("%s (%s)", toolID, status), context.allocator)
+	entry.cachedLineWidth = 0
+	entry.cachedLineCount = 0
 	state.historyScrollOffset = 0
 	state.historySelection = {}
 }
@@ -990,6 +1018,7 @@ app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
 	state.approval.callOwned = true
 	state.approval.prepared = prepared
 	state.approval.preparedOwned = true
+	state.approval.historyIndex = -1
 	state.approval.choice = .Allow_Once
 	state.approval.input = .Ready
 	if prepared.action.effect == .Execute {
@@ -1090,7 +1119,12 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if choice == .Deny {
 		output := "Permission denied."
-		append_history(state, .Tool, output)
+		app_update_tool_history(
+			state,
+			state.approval.historyIndex,
+			state.approval.call.id,
+			"denied",
+		)
 		app_append_tool_result(state, state.approval.call.callID, output, true)
 		state.status = "Tool call denied"
 		state.mode = .Chat
@@ -1131,12 +1165,26 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		}
 	}
 
-	output := tool_dispatch_execute_approved(&state.dispatcher, state.approval.call)
-	app_record_tool_execution_result(state, state.approval.call.callID, output)
-	state.status = "Tool call completed"
+	if state.approval.historyIndex < 0 {
+		state.approval.historyIndex = app_append_tool_history(
+			state,
+			state.approval.call.id,
+			"running",
+		)
+	} else {
+		app_update_tool_history(
+			state,
+			state.approval.historyIndex,
+			state.approval.call.id,
+			"running",
+		)
+	}
+	started := app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
 	state.mode = .Chat
 	app_clear_approval(state)
-	app_start_tool_continuation_if_ready(state)
+	if !started {
+		state.status = "Tool call could not start"
+	}
 }
 
 app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
