@@ -14,7 +14,7 @@ APPROVAL_SAFETY_SYSTEM_PROMPT ::
 	"The rationale must be one concise sentence. Do not use headings, line breaks, " +
 	"repeated command text, or suggestions to execute the command."
 
-APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES :: 120
+APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES :: 200
 
 Approval_Safety_State :: struct {
 	mutex:           sync.Mutex,
