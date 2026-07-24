@@ -931,8 +931,7 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 			state.status = "Copied history selection"
 			return true
 		}
-		state.shouldQuit = true
-		state.status = "Exiting"
+		state.status = "No selection to copy"
 		return true
 	case 4:
 		app_reset_input_utf8_pending(state)

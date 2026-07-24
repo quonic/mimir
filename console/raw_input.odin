@@ -33,7 +33,7 @@ enable_raw_input_mode :: proc() -> (Raw_Terminal_State, bool) {
 	}
 
 	raw := state.original
-	raw.c_lflag -= {.ICANON, .ECHO}
+	raw.c_lflag -= {.ICANON, .ECHO, .ISIG}
 	raw.c_iflag -= {.ICRNL, .IXON}
 	raw.c_cc[.VMIN] = 1
 	raw.c_cc[.VTIME] = 0

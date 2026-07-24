@@ -749,6 +749,17 @@ test_chat_input_arrow_keys_move_cursor_and_insert :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_chat_input_ctrl_c_does_not_quit_without_selection :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	assert(app_handle_input_byte(&state, 3), "expected Ctrl+C to be handled")
+	assert(!state.shouldQuit, "expected Ctrl+C to preserve the running app")
+	assert(state.status == "No selection to copy", "expected missing selection status")
+	_ = t
+}
+
+@(test)
 test_chat_input_supports_home_end_delete_and_ctrl_navigation :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
