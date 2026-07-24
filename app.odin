@@ -919,20 +919,7 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 		return true
 	case 3:
 		app_reset_input_utf8_pending(state)
-		if input_buffer_has_selection(&state.input) {
-			_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
-			state.status = "Copied input selection"
-			return true
-		}
-		if app_has_history_selection(state) {
-			selected := app_history_selection_text(state)
-			_, _ = console.osc52_copy_to_clipboard(selected)
-			delete(selected)
-			state.status = "Copied history selection"
-			return true
-		}
-		state.status = "No selection to copy"
-		return true
+		return app_copy_active_selection(state)
 	case 4:
 		app_reset_input_utf8_pending(state)
 		state.shouldQuit = true
@@ -1262,6 +1249,23 @@ app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -
 	return false
 }
 
+app_copy_active_selection :: proc(state: ^App_State) -> bool {
+	if input_buffer_has_selection(&state.input) {
+		_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
+		state.status = "Copied input selection"
+		return true
+	}
+	if app_has_history_selection(state) {
+		selected := app_history_selection_text(state)
+		_, _ = console.osc52_copy_to_clipboard(selected)
+		delete(selected)
+		state.status = "Copied history selection"
+		return true
+	}
+	state.status = "No selection to copy"
+	return true
+}
+
 app_input_paste_ends :: proc(state: ^App_State) -> bool {
 	terminator := "\x1b[201~"
 	if len(state.inputPaste) < len(terminator) {
@@ -1359,6 +1363,17 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 		case '0' ..= '9':
 			state.inputEscapeModifier = state.inputEscapeModifier * 10 + int(input - '0')
 			return false
+		case '~':
+			parameter := state.inputEscapeParameter
+			modifier := state.inputEscapeModifier
+			app_reset_input_escape(state)
+			if parameter == 2 && modifier == 5 {
+				return app_copy_active_selection(state)
+			}
+			if parameter == 2 && modifier == 2 {
+				return true
+			}
+			return true
 		case 'C', 'D', 'H', 'F':
 			extend := state.inputEscapeModifier == 2
 			app_reset_input_escape(state)

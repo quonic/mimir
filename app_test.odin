@@ -866,6 +866,31 @@ test_chat_input_pastes_multiline_utf8_and_extends_selection :: proc(t: ^testing.
 }
 
 @(test)
+test_chat_input_supports_ctrl_and_shift_insert :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	input_buffer_push_text(&state.input, "copy")
+	input_buffer_select_all(&state.input)
+	ctrlInsert := "\x1b[2;5~"
+	for index := 0; index < len(ctrlInsert); index += 1 {
+		app_handle_input_byte(&state, ctrlInsert[index])
+	}
+	assert(state.status == "Copied input selection", "expected Ctrl+Insert to copy selection")
+
+	shiftInsert := "\x1b[2;2~"
+	for index := 0; index < len(shiftInsert); index += 1 {
+		app_handle_input_byte(&state, shiftInsert[index])
+	}
+	paste := "\x1b[200~pasted\x1b[201~"
+	for index := 0; index < len(paste); index += 1 {
+		app_handle_input_byte(&state, paste[index])
+	}
+	assert(input_buffer_string(&state.input) == "pasted", "expected Shift+Insert paste payload")
+	_ = t
+}
+
+@(test)
 test_history_scrolls_with_page_keys_and_mouse_wheel :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
