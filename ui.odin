@@ -1055,8 +1055,10 @@ right_clipped_text :: proc(text: string, width: int) -> string {
 history_entry_line :: proc(entry: History_Entry, allocator := context.allocator) -> string {
 	builder: strings.Builder
 	strings.builder_init(&builder, allocator)
-	strings.write_string(&builder, history_role_label(entry.role))
-	strings.write_string(&builder, ": ")
+	if entry.role != .Assistant {
+		strings.write_string(&builder, history_role_label(entry.role))
+		strings.write_string(&builder, ": ")
+	}
 	strings.write_string(&builder, entry.content)
 	return strings.to_string(builder)
 }
@@ -1068,7 +1070,7 @@ history_role_label :: proc(role: History_Role) -> string {
 	case .User:
 		return "user"
 	case .Assistant:
-		return "assistant"
+		return ""
 	case .Tool:
 		return "tool"
 	}
