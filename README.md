@@ -42,6 +42,17 @@ On first startup, Mimir detects the local Ollama endpoint at
 For other providers and configuration details, see the
 [configuration documentation](docs/configuration.md).
 
+## Text Selection
+
+Drag to select text in the History or Input panel. In Input, `Shift` with the
+arrow, Home, or End keys extends the selection, and `Ctrl+A` selects all input.
+`Ctrl+C` copies the active selection; `Ctrl+X` cuts Input text and copies
+immutable History text. Pasting into Input supports multiline text when the
+terminal supports bracketed paste mode.
+
+Clipboard writes use OSC 52, which must be enabled by the terminal or terminal
+multiplexer for copied text to reach the system clipboard.
+
 ## Build From Source
 
 From the repository root:

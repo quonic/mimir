@@ -1,5 +1,6 @@
 package console
 
+import "core:encoding/base64"
 import "core:fmt"
 import "core:io"
 import "core:strings"
@@ -13,6 +14,31 @@ set_insert_mode_sequence :: proc(enabled: bool) -> string {
 
 set_insert_mode :: proc(enabled: bool) -> (int, io.Error) {
 	return write(set_insert_mode_sequence(enabled))
+}
+
+set_bracketed_paste_mode_sequence :: proc(enabled: bool) -> string {
+	if enabled {
+		return csi_prefix + "?2004h"
+	}
+	return csi_prefix + "?2004l"
+}
+
+set_bracketed_paste_mode :: proc(enabled: bool) -> (int, io.Error) {
+	return write(set_bracketed_paste_mode_sequence(enabled))
+}
+
+osc52_clipboard_sequence :: proc(text: string, allocator := context.allocator) -> string {
+	encoded := base64.encode(transmute([]byte)text, allocator = allocator)
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	strings.write_string(&builder, escape + "]52;c;")
+	strings.write_string(&builder, encoded)
+	strings.write_string(&builder, "\a")
+	return strings.to_string(builder)
+}
+
+osc52_copy_to_clipboard :: proc(text: string) -> (int, io.Error) {
+	return write(osc52_clipboard_sequence(text))
 }
 
 set_autowrap_sequence :: proc(enabled: bool) -> string {

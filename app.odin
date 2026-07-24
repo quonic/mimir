@@ -57,6 +57,19 @@ History_Role :: enum int {
 	Tool,
 }
 
+Mouse_Selection_Panel :: enum int {
+	None = 0,
+	Input,
+	History,
+}
+
+History_Selection :: struct {
+	anchorLine:   int,
+	anchorColumn: int,
+	line:         int,
+	column:       int,
+}
+
 History_Entry :: struct {
 	role:            History_Role,
 	content:         string,
@@ -125,7 +138,9 @@ Input_Escape_State :: enum int {
 	Escape,
 	CSI,
 	CSI_Parameter,
+	CSI_Modifier,
 	CSI_Mouse,
+	Paste,
 }
 
 App_State :: struct {
@@ -133,8 +148,10 @@ App_State :: struct {
 	input:                  Input_Buffer,
 	inputEscape:            Input_Escape_State,
 	inputEscapeParameter:   int,
+	inputEscapeModifier:    int,
 	inputMouseSequence:     [256]byte,
 	inputMouseSequenceLen:  int,
+	inputPaste:             [dynamic]byte,
 	inputUTF8Pending:       [utf8.UTF_MAX]byte,
 	inputUTF8PendingLen:    int,
 	inputHistory:           [dynamic]string,
@@ -147,6 +164,8 @@ App_State :: struct {
 	history:                [dynamic]History_Entry,
 	historyScrollOffset:    int,
 	historyRenderOnly:      bool,
+	mouseSelectionPanel:    Mouse_Selection_Panel,
+	historySelection:       History_Selection,
 	config:                 Mimir_Config,
 	configStringsOwned:     bool,
 	configHome:             string,
@@ -197,6 +216,7 @@ app_init_with_home :: proc(
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
 	state.input = input_buffer_init(allocator)
+	state.inputPaste = make([dynamic]byte, 0, 0, allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
 	state.cursorBlinkOn = true
@@ -321,6 +341,7 @@ app_enter_setup :: proc(state: ^App_State, status: string) {
 app_destroy :: proc(state: ^App_State) {
 	app_destroy_assistant_stream(state)
 	input_buffer_destroy(&state.input)
+	delete(state.inputPaste)
 	for entry in state.inputHistory {
 		delete(entry)
 	}
@@ -412,8 +433,10 @@ run_app :: proc() {
 
 	_, _ = console.write(console.terminal_app_start_sequence())
 	defer console.write(console.terminal_app_stop_sequence())
-	_, _ = console.set_mouse_tracking_sgr(.Button, true)
-	defer console.set_mouse_tracking_sgr(.Button, false)
+	_, _ = console.set_mouse_tracking_sgr(.Drag, true)
+	defer console.set_mouse_tracking_sgr(.Drag, false)
+	_, _ = console.set_bracketed_paste_mode(true)
+	defer console.set_bracketed_paste_mode(false)
 
 	app_refresh_terminal_size(&state)
 	render_app(&state)
@@ -509,6 +532,10 @@ app_wait_for_input :: proc(timeout_ms: int) -> (ready, ok: bool) {
 }
 
 app_flush_pending_input :: proc(state: ^App_State) -> bool {
+	if state.inputEscape == .Paste {
+		app_reset_input_paste(state)
+		return true
+	}
 	if state.inputEscape != .Ready {
 		app_reset_input_escape(state)
 		return true
@@ -526,6 +553,7 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 		History_Entry{role = role, content = strings.clone(content, context.allocator)},
 	)
 	state.historyScrollOffset = 0
+	state.historySelection = {}
 }
 
 app_history_panel :: proc(state: ^App_State) -> console.Region {
@@ -536,6 +564,85 @@ app_history_panel :: proc(state: ^App_State) -> console.Region {
 	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
 	return console.panel_interior(console.Panel{region = layout.historyPanel})
+}
+
+app_input_panel :: proc(state: ^App_State) -> console.Region {
+	input_width := state.terminal.columns - 2
+	if input_width < 1 {
+		input_width = 1
+	}
+	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
+	return console.panel_interior(console.Panel{region = layout.inputPanel})
+}
+
+input_grapheme_index_at_column :: proc(text: string, column: int) -> int {
+	if column <= 0 {
+		return 0
+	}
+
+	width := 0
+	grapheme := 0
+	for byteIndex := 0; byteIndex < len(text); {
+		if column <= width {
+			return grapheme
+		}
+		width += unicode_grapheme_width_at(text, byteIndex)
+		grapheme += 1
+		if column <= width {
+			return grapheme
+		}
+		next := unicode_next_grapheme_offset(text, byteIndex)
+		if next <= byteIndex {
+			break
+		}
+		byteIndex = next
+	}
+	return grapheme
+}
+
+app_input_grapheme_at :: proc(state: ^App_State, row, column: int) -> (int, bool) {
+	region := app_input_panel(state)
+	if row < region.top_row || row > region.bottom_row {
+		return 0, false
+	}
+
+	text := input_buffer_string(&state.input)
+	width := console.region_width(region)
+	currentRow := region.top_row
+	lineStartGrapheme := 0
+	lineStart := 0
+	for index := 0; index <= len(text) && currentRow <= region.bottom_row; index += 1 {
+		if index != len(text) && text[index] != '\n' && text[index] != '\r' {
+			continue
+		}
+
+		line := text[lineStart:index]
+		if len(line) == 0 && currentRow == row {
+			return lineStartGrapheme, true
+		}
+		for start := 0; start < len(line) && currentRow <= region.bottom_row; {
+			finish, next := wrapped_text_slice(line, start, width)
+			if currentRow == row {
+				relativeColumn := column - region.left_column
+				return lineStartGrapheme +
+					input_grapheme_index_at_column(line[start:finish], relativeColumn),
+					true
+			}
+			currentRow += 1
+			lineStartGrapheme += unicode_grapheme_count(line[start:next])
+			if next <= start {
+				break
+			}
+			start = next
+		}
+		if len(line) == 0 {
+			currentRow += 1
+		}
+		lineStartGrapheme += 1
+		lineStart = index + 1
+	}
+	return 0, false
 }
 
 app_scroll_history :: proc(state: ^App_State, rows: int) -> bool {
@@ -562,7 +669,113 @@ app_scroll_history :: proc(state: ^App_State, rows: int) -> bool {
 	}
 
 	state.historyRenderOnly = true
+	state.historySelection = {}
 	return true
+}
+
+app_has_history_selection :: proc(state: ^App_State) -> bool {
+	selection := state.historySelection
+	return selection.anchorLine != selection.line || selection.anchorColumn != selection.column
+}
+
+app_history_selection_bounds :: proc(state: ^App_State) -> (int, int, int, int) {
+	selection := state.historySelection
+	if selection.anchorLine < selection.line ||
+	   (selection.anchorLine == selection.line && selection.anchorColumn <= selection.column) {
+		return selection.anchorLine, selection.anchorColumn, selection.line, selection.column
+	}
+	return selection.line, selection.column, selection.anchorLine, selection.anchorColumn
+}
+
+history_visual_line :: proc(
+	state: ^App_State,
+	width, targetLine: int,
+	allocator := context.temp_allocator,
+) -> (
+	string,
+	bool,
+) {
+	lineNumber := 0
+	for entry in state.history {
+		text := history_entry_line(entry, allocator)
+		start := 0
+		for index := 0; index <= len(text); index += 1 {
+			if index != len(text) && text[index] != '\n' && text[index] != '\r' {
+				continue
+			}
+			logicalLine := text[start:index]
+			if len(logicalLine) == 0 {
+				if lineNumber == targetLine {
+					return "", true
+				}
+				lineNumber += 1
+			} else {
+				for wrappedStart := 0; wrappedStart < len(logicalLine); {
+					finish, next := wrapped_text_slice(logicalLine, wrappedStart, width)
+					if lineNumber == targetLine {
+						return logicalLine[wrappedStart:finish], true
+					}
+					lineNumber += 1
+					if next <= wrappedStart {
+						break
+					}
+					wrappedStart = next
+				}
+			}
+			start = index + 1
+		}
+	}
+	return "", false
+}
+
+app_history_selection_text :: proc(state: ^App_State, allocator := context.allocator) -> string {
+	if !app_has_history_selection(state) {
+		return ""
+	}
+
+	startLine, startColumn, endLine, endColumn := app_history_selection_bounds(state)
+	region := app_history_panel(state)
+	width := console.region_width(region)
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	for lineNumber := startLine; lineNumber <= endLine; lineNumber += 1 {
+		line, ok := history_visual_line(state, width, lineNumber, allocator)
+		if !ok {
+			break
+		}
+		selectionStart := 0
+		selectionEnd := unicode_text_width(line)
+		if lineNumber == startLine {
+			selectionStart = startColumn - region.left_column
+		}
+		if lineNumber == endLine {
+			selectionEnd = endColumn - region.left_column
+		}
+		if selectionStart < 0 {
+			selectionStart = 0
+		}
+		if selectionEnd < selectionStart {
+			selectionEnd = selectionStart
+		}
+		for byteIndex := 0; byteIndex < len(line); {
+			graphemeWidth := unicode_grapheme_width_at(line, byteIndex)
+			graphemeEnd := unicode_text_width(line[:byteIndex]) + graphemeWidth
+			graphemeStart := graphemeEnd - graphemeWidth
+			if graphemeEnd > selectionStart && graphemeStart < selectionEnd {
+				next := unicode_next_grapheme_offset(line, byteIndex)
+				strings.write_string(&builder, line[byteIndex:next])
+			}
+			next := unicode_next_grapheme_offset(line, byteIndex)
+			if next <= byteIndex {
+				break
+			}
+			byteIndex = next
+		}
+		if lineNumber < endLine {
+			strings.write_byte(&builder, '\n')
+		}
+	}
+	return strings.to_string(builder)
 }
 
 app_scroll_history_page :: proc(state: ^App_State, direction: int) -> bool {
@@ -571,7 +784,7 @@ app_scroll_history_page :: proc(state: ^App_State, direction: int) -> bool {
 
 app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 	event, event_err := console.parse_sgr_mouse_event_response(sequence)
-	if event_err != .None || event.kind != .Wheel {
+	if event_err != .None {
 		return false
 	}
 
@@ -581,21 +794,108 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 	}
 	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
-	panel := layout.historyPanel
-	if event.row < panel.top_row ||
-	   event.row > panel.bottom_row ||
-	   event.column < panel.left_column ||
-	   event.column > panel.right_column {
-		return false
+	if event.kind == .Wheel {
+		panel := layout.historyPanel
+		if event.row < panel.top_row ||
+		   event.row > panel.bottom_row ||
+		   event.column < panel.left_column ||
+		   event.column > panel.right_column {
+			return false
+		}
+		switch event.button {
+		case .Wheel_Up:
+			return app_scroll_history(state, HISTORY_WHEEL_SCROLL_ROWS)
+		case .Wheel_Down:
+			return app_scroll_history(state, -HISTORY_WHEEL_SCROLL_ROWS)
+		case .None, .Left, .Middle, .Right, .Wheel_Left, .Wheel_Right:
+			return false
+		}
 	}
 
-	switch event.button {
-	case .Wheel_Up:
-		return app_scroll_history(state, HISTORY_WHEEL_SCROLL_ROWS)
-	case .Wheel_Down:
-		return app_scroll_history(state, -HISTORY_WHEEL_SCROLL_ROWS)
-	case .None, .Left, .Middle, .Right, .Wheel_Left, .Wheel_Right:
-		return false
+	input := console.panel_interior(console.Panel{region = layout.inputPanel})
+	history := console.panel_interior(console.Panel{region = layout.historyPanel})
+	switch event.kind {
+	case .Press:
+		if event.button != .Left {
+			return false
+		}
+		if event.row >= history.top_row &&
+		   event.row <= history.bottom_row &&
+		   event.column >= history.left_column &&
+		   event.column <= history.right_column {
+			firstVisible :=
+				history_line_count(state, console.region_width(history)) -
+				console.region_height(history) -
+				state.historyScrollOffset
+			if firstVisible < 0 {
+				firstVisible = 0
+			}
+			line := firstVisible + event.row - history.top_row
+			state.historySelection = History_Selection {
+				anchorLine   = line,
+				anchorColumn = event.column,
+				line         = line,
+				column       = event.column,
+			}
+			input_buffer_clear_selection(&state.input)
+			state.mouseSelectionPanel = .History
+			return true
+		}
+		if event.row < input.top_row ||
+		   event.row > input.bottom_row ||
+		   event.column < input.left_column ||
+		   event.column > input.right_column {
+			return false
+		}
+		grapheme, ok := app_input_grapheme_at(state, event.row, event.column)
+		if !ok {
+			return false
+		}
+		input_buffer_select_range(&state.input, grapheme, grapheme)
+		state.historySelection = {}
+		state.mouseSelectionPanel = .Input
+		return true
+	case .Motion:
+		if state.mouseSelectionPanel == .History &&
+		   event.row >= history.top_row &&
+		   event.row <= history.bottom_row &&
+		   event.column >= history.left_column &&
+		   event.column <= history.right_column {
+			firstVisible :=
+				history_line_count(state, console.region_width(history)) -
+				console.region_height(history) -
+				state.historyScrollOffset
+			if firstVisible < 0 {
+				firstVisible = 0
+			}
+			state.historySelection.line = firstVisible + event.row - history.top_row
+			state.historySelection.column = event.column + 1
+			return true
+		}
+		if state.mouseSelectionPanel != .Input ||
+		   event.row < input.top_row ||
+		   event.row > input.bottom_row ||
+		   event.column < input.left_column ||
+		   event.column > input.right_column {
+			return false
+		}
+		grapheme, ok := app_input_grapheme_at(state, event.row, event.column + 1)
+		if !ok {
+			return false
+		}
+		input_buffer_extend_selection_to(&state.input, grapheme)
+		return true
+	case .Release:
+		if state.mouseSelectionPanel == .History {
+			state.mouseSelectionPanel = .None
+			return true
+		}
+		if state.mouseSelectionPanel != .Input {
+			return false
+		}
+		state.mouseSelectionPanel = .None
+		return true
+	case .Wheel:
 	}
 	return false
 }
@@ -615,9 +915,26 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	switch input {
 	case 1:
 		app_reset_input_utf8_pending(state)
-		input_buffer_move_cursor_start(&state.input)
+		input_buffer_select_all(&state.input)
 		return true
-	case 3, 4:
+	case 3:
+		app_reset_input_utf8_pending(state)
+		if input_buffer_has_selection(&state.input) {
+			_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
+			state.status = "Copied input selection"
+			return true
+		}
+		if app_has_history_selection(state) {
+			selected := app_history_selection_text(state)
+			_, _ = console.osc52_copy_to_clipboard(selected)
+			delete(selected)
+			state.status = "Copied history selection"
+			return true
+		}
+		state.shouldQuit = true
+		state.status = "Exiting"
+		return true
+	case 4:
 		app_reset_input_utf8_pending(state)
 		state.shouldQuit = true
 		state.status = "Exiting"
@@ -626,6 +943,22 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 		app_reset_input_utf8_pending(state)
 		input_buffer_move_cursor_end(&state.input)
 		return true
+	case 24:
+		app_reset_input_utf8_pending(state)
+		if input_buffer_has_selection(&state.input) {
+			_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
+			app_reset_input_history_browse(state)
+			input_buffer_delete_selection(&state.input)
+			state.status = "Cut input selection"
+			return true
+		}
+		if app_has_history_selection(state) {
+			selected := app_history_selection_text(state)
+			_, _ = console.osc52_copy_to_clipboard(selected)
+			delete(selected)
+			state.status = "Copied history selection"
+			return true
+		}
 	case 8, 127:
 		app_reset_input_utf8_pending(state)
 		app_reset_input_history_browse(state)
@@ -885,7 +1218,66 @@ app_utf8_sequence_length :: proc(input: byte) -> int {
 app_reset_input_escape :: proc(state: ^App_State) {
 	state.inputEscape = .Ready
 	state.inputEscapeParameter = 0
+	state.inputEscapeModifier = 0
 	state.inputMouseSequenceLen = 0
+}
+
+app_reset_input_paste :: proc(state: ^App_State) {
+	clear(&state.inputPaste)
+	app_reset_input_escape(state)
+}
+
+app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -> bool {
+	if extend {
+		cursor := input_buffer_cursor_position(&state.input)
+		switch input {
+		case 'C':
+			input_buffer_extend_selection_to(&state.input, cursor + 1)
+		case 'D':
+			input_buffer_extend_selection_to(&state.input, cursor - 1)
+		case 'H':
+			input_buffer_extend_selection_to(&state.input, 0)
+		case 'F':
+			input_buffer_extend_selection_to(
+				&state.input,
+				unicode_grapheme_count(input_buffer_string(&state.input)),
+			)
+		case:
+			return false
+		}
+		return true
+	}
+
+	switch input {
+	case 'C':
+		return input_buffer_move_cursor_right(&state.input)
+	case 'D':
+		return input_buffer_move_cursor_left(&state.input)
+	case 'H':
+		input_buffer_move_cursor_start(&state.input)
+		return true
+	case 'F':
+		input_buffer_move_cursor_end(&state.input)
+		return true
+	}
+	return false
+}
+
+app_input_paste_ends :: proc(state: ^App_State) -> bool {
+	terminator := "\x1b[201~"
+	if len(state.inputPaste) < len(terminator) {
+		return false
+	}
+	start := len(state.inputPaste) - len(terminator)
+	return string(state.inputPaste[start:]) == terminator
+}
+
+app_finish_input_paste :: proc(state: ^App_State) {
+	terminator_length := len("\x1b[201~")
+	text := string(state.inputPaste[:len(state.inputPaste) - terminator_length])
+	app_reset_input_history_browse(state)
+	input_buffer_push_text(&state.input, text)
+	app_reset_input_paste(state)
 }
 
 app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
@@ -905,20 +1297,9 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 		case 'B':
 			app_reset_input_escape(state)
 			return app_input_history_next(state)
-		case 'C':
+		case 'C', 'D', 'H', 'F':
 			app_reset_input_escape(state)
-			return input_buffer_move_cursor_right(&state.input)
-		case 'D':
-			app_reset_input_escape(state)
-			return input_buffer_move_cursor_left(&state.input)
-		case 'H':
-			app_reset_input_escape(state)
-			input_buffer_move_cursor_start(&state.input)
-			return true
-		case 'F':
-			app_reset_input_escape(state)
-			input_buffer_move_cursor_end(&state.input)
-			return true
+			return app_handle_cursor_escape(state, input, false)
 		case '0' ..= '9':
 			state.inputEscapeParameter = int(input - '0')
 			state.inputEscape = .CSI_Parameter
@@ -947,6 +1328,10 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 			parameter := state.inputEscapeParameter
 			app_reset_input_escape(state)
 			switch parameter {
+			case 200:
+				clear(&state.inputPaste)
+				state.inputEscape = .Paste
+				return false
 			case 5:
 				return app_scroll_history_page(state, 1)
 			case 6:
@@ -962,6 +1347,23 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 			case:
 				return true
 			}
+		case ';':
+			state.inputEscapeModifier = 0
+			state.inputEscape = .CSI_Modifier
+			return false
+		case:
+			app_reset_input_escape(state)
+			return true
+		}
+	case .CSI_Modifier:
+		switch input {
+		case '0' ..= '9':
+			state.inputEscapeModifier = state.inputEscapeModifier * 10 + int(input - '0')
+			return false
+		case 'C', 'D', 'H', 'F':
+			extend := state.inputEscapeModifier == 2
+			app_reset_input_escape(state)
+			return app_handle_cursor_escape(state, input, extend)
 		case:
 			app_reset_input_escape(state)
 			return true
@@ -986,6 +1388,13 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 			app_reset_input_escape(state)
 			return false
 		}
+	case .Paste:
+		append(&state.inputPaste, input)
+		if !app_input_paste_ends(state) {
+			return false
+		}
+		app_finish_input_paste(state)
+		return true
 	case .Ready:
 	}
 	return false
@@ -1043,6 +1452,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 	}
 	clear(&state.history)
 	state.historyScrollOffset = 0
+	state.historySelection = {}
 
 	if state.configHome == "" || state.workingDirectory == "" {
 		state.status = "Input history cleared"

@@ -33,6 +33,30 @@ test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_input_buffer_replaces_and_deletes_grapheme_selection :: proc(t: ^testing.T) {
+	buffer := input_buffer_init(context.temp_allocator)
+	defer input_buffer_destroy(&buffer)
+
+	input_buffer_push_text(&buffer, "aébc")
+	input_buffer_extend_selection_to(&buffer, 1)
+	assert(input_buffer_has_selection(&buffer), "expected selection after extending from end")
+	assert(input_buffer_selection_text(&buffer) == "ébc", "expected selected UTF-8 graphemes")
+
+	input_buffer_push_text(&buffer, "X")
+	assert(input_buffer_string(&buffer) == "aX", "expected inserted text to replace selection")
+	assert(!input_buffer_has_selection(&buffer), "expected replacement to clear selection")
+
+	input_buffer_select_all(&buffer)
+	assert(input_buffer_backspace(&buffer), "expected backspace to delete the selection")
+	assert(input_buffer_string(&buffer) == "", "expected selection deletion to clear text")
+	assert(
+		input_buffer_cursor_position(&buffer) == 0,
+		"expected selection deletion to place cursor at start",
+	)
+	_ = t
+}
+
+@(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -730,8 +754,16 @@ test_chat_input_supports_home_end_delete_and_ctrl_navigation :: proc(t: ^testing
 	defer app_destroy(&state)
 
 	input_buffer_push_text(&state.input, "abcd")
-	assert(app_handle_input_byte(&state, 1), "expected Ctrl+A to move to start")
-	assert(input_buffer_cursor_position(&state.input) == 0, "expected Ctrl+A at start")
+	assert(app_handle_input_byte(&state, 1), "expected Ctrl+A to select input")
+	assert(input_buffer_has_selection(&state.input), "expected Ctrl+A selection")
+	assert(input_buffer_selection_text(&state.input) == "abcd", "expected Ctrl+A to select all")
+	assert(!app_handle_input_byte(&state, 0x1b), "expected left arrow escape prefix to wait")
+	assert(!app_handle_input_byte(&state, '['), "expected left arrow CSI prefix to wait")
+	assert(app_handle_input_byte(&state, 'D'), "expected left arrow to collapse selection")
+	assert(
+		input_buffer_cursor_position(&state.input) == 0,
+		"expected left arrow at selection start",
+	)
 	assert(app_handle_input_byte(&state, 5), "expected Ctrl+E to move to end")
 	assert(input_buffer_cursor_position(&state.input) == 4, "expected Ctrl+E at end")
 
@@ -765,7 +797,6 @@ test_chat_input_supports_home_end_delete_and_ctrl_navigation :: proc(t: ^testing
 	assert(app_handle_input_byte(&state, '~'), "expected alternate Home to move cursor")
 	assert(input_buffer_cursor_position(&state.input) == 0, "expected alternate Home at start")
 
-	assert(app_handle_input_byte(&state, 1), "expected Ctrl+A to move to start")
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'C'), "expected right arrow to move cursor")
@@ -798,6 +829,28 @@ test_chat_input_discards_incomplete_numeric_csi_sequence :: proc(t: ^testing.T) 
 		input_buffer_string(&state.input) == "x",
 		"expected discarded CSI bytes to stay out of input",
 	)
+	_ = t
+}
+
+@(test)
+test_chat_input_pastes_multiline_utf8_and_extends_selection :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	paste := "\x1b[200~one\né\x1b[201~"
+	for index := 0; index < len(paste); index += 1 {
+		app_handle_input_byte(&state, paste[index])
+	}
+	assert(input_buffer_string(&state.input) == "one\né", "expected bracketed paste text")
+	assert(input_buffer_line_count(&state.input) == 2, "expected pasted newline to remain input")
+
+	assert(!app_handle_input_byte(&state, 0x1b), "expected shift-left escape prefix")
+	assert(!app_handle_input_byte(&state, '['), "expected shift-left CSI prefix")
+	assert(!app_handle_input_byte(&state, '1'), "expected modified CSI parameter")
+	assert(!app_handle_input_byte(&state, ';'), "expected modified CSI separator")
+	assert(!app_handle_input_byte(&state, '2'), "expected shift modifier")
+	assert(app_handle_input_byte(&state, 'D'), "expected shift-left to extend selection")
+	assert(input_buffer_selection_text(&state.input) == "é", "expected selected final grapheme")
 	_ = t
 }
 
@@ -848,6 +901,80 @@ test_history_scrolls_with_page_keys_and_mouse_wheel :: proc(t: ^testing.T) {
 		"expected wheel input outside the history panel to be ignored",
 	)
 	assert(state.historyScrollOffset == 0, "expected ignored wheel input to retain the viewport")
+	_ = t
+}
+
+@(test)
+test_input_panel_mouse_drag_selects_graphemes :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.terminal = console.Terminal_Size {
+		rows    = 12,
+		columns = 20,
+	}
+	input_buffer_push_text(&state.input, "abcdef")
+
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<0;2;10M"),
+		"expected input press to start selection",
+	)
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<32;4;10M"),
+		"expected input drag to extend selection",
+	)
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<0;4;10m"),
+		"expected input release to finish selection",
+	)
+	assert(input_buffer_selection_text(&state.input) == "abc", "expected dragged input text")
+	_ = t
+}
+
+@(test)
+test_history_panel_mouse_drag_copies_literal_display_text :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.terminal = console.Terminal_Size {
+		rows    = 12,
+		columns = 20,
+	}
+
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<0;2;2M"),
+		"expected history press to start selection",
+	)
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<32;7;2M"),
+		"expected history drag to extend selection",
+	)
+	assert(
+		app_handle_mouse_sequence(&state, "\x1b[<0;7;2m"),
+		"expected history release to finish selection",
+	)
+	assert(app_has_history_selection(&state), "expected active history selection")
+	assert(
+		app_history_selection_text(&state, context.temp_allocator) == "system",
+		"expected history selection to copy literal role label text",
+	)
+	_ = t
+}
+
+@(test)
+test_history_selection_renders_highlight :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.historySelection = History_Selection {
+		anchorLine   = 0,
+		anchorColumn = 2,
+		line         = 0,
+		column       = 8,
+	}
+
+	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[103ms\x1b[0m"),
+		"expected selected history grapheme highlight",
+	)
 	_ = t
 }
 

@@ -42,6 +42,36 @@ test_cursor_sequences :: proc(t: ^testing.T) {
 	)
 	assert_sequence(
 		t,
+		set_bracketed_paste_mode_sequence(true),
+		"\x1b[?2004h",
+		"expected bracketed paste mode to enable",
+	)
+	assert_sequence(
+		t,
+		set_bracketed_paste_mode_sequence(false),
+		"\x1b[?2004l",
+		"expected bracketed paste mode to disable",
+	)
+	assert_sequence(
+		t,
+		osc52_clipboard_sequence("Mimir"),
+		"\x1b]52;c;TWltaXI=\a",
+		"expected OSC 52 sequence to encode clipboard text",
+	)
+	assert_sequence(
+		t,
+		osc52_clipboard_sequence("é"),
+		"\x1b]52;c;w6k=\a",
+		"expected OSC 52 sequence to preserve UTF-8 clipboard text",
+	)
+	assert_sequence(
+		t,
+		osc52_clipboard_sequence(""),
+		"\x1b]52;c;\a",
+		"expected OSC 52 sequence to support clearing the clipboard",
+	)
+	assert_sequence(
+		t,
 		cursor_right_sequence(0),
 		"\x1b[1C",
 		"expected cursor_right_sequence to clamp to one column",

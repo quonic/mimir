@@ -355,6 +355,74 @@ render_history :: proc(batch: ^console.Batch, region: console.Region, state: ^Ap
 		}
 		entry_first_line = entry_last_line
 	}
+	render_history_selection(batch, region, state, first_visible_line)
+}
+
+render_history_selection :: proc(
+	batch: ^console.Batch,
+	region: console.Region,
+	state: ^App_State,
+	firstVisibleLine: int,
+) {
+	if !app_has_history_selection(state) {
+		return
+	}
+
+	startLine, startColumn, endLine, endColumn := app_history_selection_bounds(state)
+	originalStartLine := startLine
+	originalEndLine := endLine
+	visibleEnd := firstVisibleLine + console.region_height(region)
+	if startLine < firstVisibleLine {
+		startLine = firstVisibleLine
+	}
+	if endLine >= visibleEnd {
+		endLine = visibleEnd - 1
+	}
+	for lineNumber := startLine; lineNumber <= endLine; lineNumber += 1 {
+		text, ok := history_visual_line(
+			state,
+			console.region_width(region),
+			lineNumber,
+			context.temp_allocator,
+		)
+		if !ok {
+			continue
+		}
+
+		selectionStart := 0
+		selectionEnd := unicode_text_width(text)
+		if lineNumber == originalStartLine {
+			selectionStart = startColumn - region.left_column
+		}
+		if lineNumber == originalEndLine {
+			selectionEnd = endColumn - region.left_column
+		}
+		if selectionStart < 0 {
+			selectionStart = 0
+		}
+		if selectionEnd < selectionStart {
+			continue
+		}
+
+		column := 0
+		for byteIndex := 0; byteIndex < len(text); {
+			next := unicode_next_grapheme_offset(text, byteIndex)
+			if next <= byteIndex {
+				break
+			}
+			graphemeWidth := unicode_grapheme_width_at(text, byteIndex)
+			if column + graphemeWidth > selectionStart && column < selectionEnd {
+				console.batch_move_to(
+					batch,
+					region.top_row + lineNumber - firstVisibleLine,
+					region.left_column + column,
+				)
+				render_input_selection_cell(batch, text[byteIndex:next])
+			}
+			column += graphemeWidth
+			byteIndex = next
+		}
+	}
 }
 
 history_line_count :: proc(state: ^App_State, width: int) -> int {
@@ -717,11 +785,20 @@ config_modal_footer :: proc(state: ^App_State) -> string {
 
 render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
 	text := input_buffer_string(&state.input)
+	selectionStart := input_buffer_selection_start(&state.input)
+	selectionEnd := input_buffer_selection_end(&state.input)
 	if !state.cursorBlinkOn {
-		write_text_lines(batch, region, text)
+		render_input_with_cursor(batch, region, text, -1, selectionStart, selectionEnd)
 		return
 	}
-	render_input_with_cursor(batch, region, text, input_buffer_cursor_position(&state.input))
+	render_input_with_cursor(
+		batch,
+		region,
+		text,
+		input_buffer_cursor_position(&state.input),
+		selectionStart,
+		selectionEnd,
+	)
 }
 
 render_input_with_cursor :: proc(
@@ -729,6 +806,7 @@ render_input_with_cursor :: proc(
 	region: console.Region,
 	text: string,
 	cursorPosition: int,
+	selectionStart, selectionEnd: int,
 ) {
 	width := console.region_width(region)
 	if width <= 0 {
@@ -746,7 +824,15 @@ render_input_with_cursor :: proc(
 			   cursorPosition <= lineStartGrapheme + lineGraphemes {
 				cursorInLine = cursorPosition - lineStartGrapheme
 			}
-			row += render_wrapped_input_line(batch, region, row, text[start:index], cursorInLine)
+			row += render_wrapped_input_line(
+				batch,
+				region,
+				row,
+				text[start:index],
+				cursorInLine,
+				selectionStart - lineStartGrapheme,
+				selectionEnd - lineStartGrapheme,
+			)
 			start = index + 1
 			lineStartGrapheme += lineGraphemes + 1
 		}
@@ -759,6 +845,7 @@ render_wrapped_input_line :: proc(
 	startRow: int,
 	text: string,
 	cursorInLine: int,
+	selectionStart, selectionEnd: int,
 ) -> int {
 	width := console.region_width(region)
 	if width <= 0 || startRow > region.bottom_row {
@@ -788,7 +875,18 @@ render_wrapped_input_line :: proc(
 				cursorInSlice = sliceGraphemes
 			}
 		}
-		render_input_slice(batch, region, row, text, start, finish, next, cursorInSlice)
+		render_input_slice(
+			batch,
+			region,
+			row,
+			text,
+			start,
+			finish,
+			next,
+			cursorInSlice,
+			selectionStart - startGrapheme,
+			selectionEnd - startGrapheme,
+		)
 		row += 1
 		rows_written += 1
 		if next <= start {
@@ -805,12 +903,33 @@ render_input_slice :: proc(
 	region: console.Region,
 	row: int,
 	text: string,
-	start, finish, next, cursorInLine: int,
+	start, finish, next, cursorInLine, selectionStart, selectionEnd: int,
 ) {
 	width := console.region_width(region)
 	console.batch_move_to(batch, row, region.left_column)
 	slice := text[start:finish]
 	sliceGraphemes := unicode_grapheme_count(slice)
+	if selectionEnd > selectionStart {
+		for grapheme := 0; grapheme < sliceGraphemes; grapheme += 1 {
+			graphemeStart, graphemeFinish := unicode_grapheme_byte_range(slice, grapheme)
+			if grapheme == cursorInLine {
+				render_input_cursor_cell(batch, slice[graphemeStart:graphemeFinish])
+			} else if grapheme >= selectionStart && grapheme < selectionEnd {
+				render_input_selection_cell(batch, slice[graphemeStart:graphemeFinish])
+			} else {
+				console.batch_write_text(batch, slice[graphemeStart:graphemeFinish])
+			}
+		}
+		if cursorInLine == sliceGraphemes {
+			cursorColumn := unicode_text_width(slice)
+			if cursorColumn >= width {
+				cursorColumn = width - 1
+				console.batch_move_to(batch, row, region.left_column + cursorColumn)
+			}
+			render_input_cursor_cell(batch, " ")
+		}
+		return
+	}
 	if cursorInLine < 0 || cursorInLine > sliceGraphemes {
 		console.batch_write_text(batch, text[start:finish])
 		return
@@ -841,6 +960,19 @@ render_input_cursor_cell :: proc(batch: ^console.Batch, text: string) {
 		console.Style {
 			foreground = .Black,
 			background = .Bright_Cyan,
+			use_foreground = true,
+			use_background = true,
+		},
+		text,
+	)
+}
+
+render_input_selection_cell :: proc(batch: ^console.Batch, text: string) {
+	console.batch_write_styled_text(
+		batch,
+		console.Style {
+			foreground = .Black,
+			background = .Bright_Yellow,
 			use_foreground = true,
 			use_background = true,
 		},
