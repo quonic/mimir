@@ -724,8 +724,8 @@ history_visual_line :: proc(
 	bool,
 ) {
 	lineNumber := 0
-	for entry in state.history {
-		text := history_entry_line(entry, allocator)
+	for index := 0; index < len(state.history); index += 1 {
+		text := history_display_line(state, index, allocator)
 		start := 0
 		for index := 0; index <= len(text); index += 1 {
 			if index != len(text) && text[index] != '\n' && text[index] != '\r' {

@@ -40,6 +40,7 @@ Anthropic_Response :: struct {
 Anthropic_Stream_Content_Delta :: struct {
 	type:         string,
 	text:         string,
+	thinking:     string,
 	partial_json: string,
 }
 
@@ -64,6 +65,7 @@ Anthropic_Stream_Response :: struct {
 	delta:         struct {
 		type:         string,
 		text:         string,
+		thinking:     string,
 		partial_json: string,
 		stop_reason:  string,
 	},
@@ -304,6 +306,13 @@ parse_anthropic_stream_event :: proc(
 			return !chat_stream_callback_call(
 					callbackState,
 					Chat_Stream_Delta{content = wire.delta.text},
+				),
+				.None
+		}
+		if wire.delta.type == "thinking_delta" && wire.delta.thinking != "" {
+			return !chat_stream_callback_call(
+					callbackState,
+					Chat_Stream_Delta{content = wire.delta.thinking, isThinking = true},
 				),
 				.None
 		}

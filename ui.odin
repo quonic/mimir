@@ -330,8 +330,7 @@ render_history :: proc(batch: ^console.Batch, region: console.Region, state: ^Ap
 	entry_first_line := 0
 	row := region.top_row
 	for index := 0; index < len(state.history) && row <= region.bottom_row; index += 1 {
-		entry := &state.history[index]
-		entry_line_count := history_entry_line_count(entry, width)
+		entry_line_count := history_entry_line_count(state, index, width)
 		entry_last_line := entry_first_line + entry_line_count
 		if entry_last_line > first_visible_line && entry_first_line < last_visible_line {
 			skip_lines := first_visible_line - entry_first_line
@@ -343,7 +342,7 @@ render_history :: proc(batch: ^console.Batch, region: console.Region, state: ^Ap
 			if visible_lines > remaining_visible {
 				visible_lines = remaining_visible
 			}
-			line := history_entry_line(entry^, context.temp_allocator)
+			line := history_display_line(state, index, context.temp_allocator)
 			row += write_text_lines_from_row_window(
 				batch,
 				region,
@@ -428,20 +427,38 @@ render_history_selection :: proc(
 history_line_count :: proc(state: ^App_State, width: int) -> int {
 	total := 0
 	for index := 0; index < len(state.history); index += 1 {
-		total += history_entry_line_count(&state.history[index], width)
+		total += history_entry_line_count(state, index, width)
 	}
 	return total
 }
 
-history_entry_line_count :: proc(entry: ^History_Entry, width: int) -> int {
+history_entry_line_count :: proc(state: ^App_State, index, width: int) -> int {
+	entry := &state.history[index]
 	if entry.cachedLineWidth == width && entry.cachedLineCount > 0 {
 		return entry.cachedLineCount
 	}
 
-	line := history_entry_line(entry^, context.temp_allocator)
+	line := history_display_line(state, index, context.temp_allocator)
 	entry.cachedLineWidth = width
 	entry.cachedLineCount = wrapped_text_line_count(line, width)
 	return entry.cachedLineCount
+}
+
+history_display_line :: proc(
+	state: ^App_State,
+	index: int,
+	allocator := context.allocator,
+) -> string {
+	if state.stream.active && index == state.stream.assistantIndex {
+		spinnerFrame := app_assistant_stream_spinner_frame(state)
+		if spinnerFrame != "" {
+			return history_entry_line(
+				History_Entry{role = .Assistant, content = spinnerFrame},
+				allocator,
+			)
+		}
+	}
+	return history_entry_line(state.history[index], allocator)
 }
 
 render_setup :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {

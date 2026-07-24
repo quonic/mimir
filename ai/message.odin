@@ -60,6 +60,7 @@ Chat_Stream_Delta :: struct {
 	content:      string,
 	model:        string,
 	finishReason: string,
+	isThinking:   bool,
 	toolCall:     Tool_Call,
 	hasToolCall:  bool,
 	toolCallDone: bool,

@@ -9,6 +9,7 @@ import "core:testing"
 
 Test_Stream_State :: struct {
 	parts:        [dynamic]string,
+	partThinking: [dynamic]bool,
 	toolCalls:    [dynamic]Tool_Call,
 	model:        string,
 	finishReason: string,
@@ -24,6 +25,7 @@ testStopStreamState: Test_Stream_State
 
 reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	delete(state.parts)
+	delete(state.partThinking)
 	for &call in state.toolCalls {
 		tool_call_destroy(&call)
 	}
@@ -61,6 +63,7 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 	state.calls += 1
 	if delta.content != "" {
 		append(&state.parts, delta.content)
+		append(&state.partThinking, delta.isThinking)
 	}
 	if delta.hasToolCall {
 		append(&state.toolCalls, tool_call_clone(delta.toolCall))
@@ -569,6 +572,31 @@ test_parse_openai_stream_reasoning_delta :: proc(t: ^testing.T) {
 		testOpenAIStreamState.parts[0] == "Thinking",
 		"expected reasoning delta to be surfaced as content",
 	)
+	assert(
+		testOpenAIStreamState.partThinking[0],
+		"expected reasoning delta to be marked as thinking",
+	)
+	_ = t
+}
+
+@(test)
+test_parse_openai_stream_content_precedes_reasoning :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOpenAIStreamState)
+	defer reset_test_stream_state(&testOpenAIStreamState)
+
+	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"Answer\",\"reasoning\":\"Thinking\"}}]}\n\n"
+	err := parse_sse_stream_body(payload, record_openai_stream_delta, parse_openai_stream_event)
+
+	assert(err == .None, "expected OpenAI stream body to parse")
+	assert(len(testOpenAIStreamState.parts) == 1, "expected one OpenAI content delta")
+	assert(
+		testOpenAIStreamState.parts[0] == "Answer",
+		"expected OpenAI content to take precedence",
+	)
+	assert(
+		!testOpenAIStreamState.partThinking[0],
+		"expected normal content delta to not be marked as thinking",
+	)
 	_ = t
 }
 
@@ -629,11 +657,39 @@ test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
 		"expected Anthropic stream to emit text delta",
 	)
 	assert(testAnthropicStreamState.parts[0] == "Hi", "expected Anthropic text delta to match")
+	assert(
+		!testAnthropicStreamState.partThinking[0],
+		"expected Anthropic text delta to not be marked as thinking",
+	)
 	assert(testAnthropicStreamState.model == "claude-test", "expected Anthropic stream model")
 	assert(testAnthropicStreamState.finishReason == "end_turn", "expected Anthropic finish reason")
 	assert(testAnthropicStreamState.done, "expected Anthropic stream to mark done")
 	assert(testAnthropicStreamState.usage.inputTokens == 11, "expected Anthropic input tokens")
 	assert(testAnthropicStreamState.usage.outputTokens == 2, "expected Anthropic output tokens")
+	_ = t
+}
+
+@(test)
+test_parse_anthropic_stream_thinking_delta :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testAnthropicStreamState)
+	defer reset_test_stream_state(&testAnthropicStreamState)
+
+	payload :=
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Thinking\"}}\n\n"
+	err := parse_sse_stream_body(
+		payload,
+		record_anthropic_stream_delta,
+		parse_anthropic_stream_event,
+	)
+
+	assert(err == .None, "expected Anthropic thinking stream body to parse")
+	assert(len(testAnthropicStreamState.parts) == 1, "expected one Anthropic thinking delta")
+	assert(testAnthropicStreamState.parts[0] == "Thinking", "expected Anthropic thinking text")
+	assert(
+		testAnthropicStreamState.partThinking[0],
+		"expected Anthropic thinking delta to be marked as thinking",
+	)
 	_ = t
 }
 
@@ -692,11 +748,39 @@ test_parse_ollama_stream_body :: proc(t: ^testing.T) {
 	assert(len(testOllamaStreamState.parts) == 2, "expected Ollama stream to emit text deltas")
 	assert(testOllamaStreamState.parts[0] == "o", "expected first Ollama delta to match")
 	assert(testOllamaStreamState.parts[1] == "k", "expected second Ollama delta to match")
+	assert(
+		!testOllamaStreamState.partThinking[0] && !testOllamaStreamState.partThinking[1],
+		"expected Ollama content deltas to not be marked as thinking",
+	)
 	assert(testOllamaStreamState.model == "llama3.2", "expected Ollama stream model")
 	assert(testOllamaStreamState.finishReason == "stop", "expected Ollama finish reason")
 	assert(testOllamaStreamState.done, "expected Ollama stream to mark done")
 	assert(testOllamaStreamState.usage.inputTokens == 10, "expected Ollama prompt tokens")
 	assert(testOllamaStreamState.usage.outputTokens == 2, "expected Ollama output tokens")
+	_ = t
+}
+
+@(test)
+test_parse_ollama_stream_thinking_delta :: proc(t: ^testing.T) {
+	reset_test_stream_state(&testOllamaStreamState)
+	defer reset_test_stream_state(&testOllamaStreamState)
+
+	payload :=
+		`{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"Thinking"},"done":false}` +
+		"\n"
+	err := parse_json_lines_stream_body(
+		payload,
+		record_ollama_stream_delta,
+		parse_ollama_stream_event,
+	)
+
+	assert(err == .None, "expected Ollama thinking stream body to parse")
+	assert(len(testOllamaStreamState.parts) == 1, "expected one Ollama thinking delta")
+	assert(testOllamaStreamState.parts[0] == "Thinking", "expected Ollama thinking text")
+	assert(
+		testOllamaStreamState.partThinking[0],
+		"expected Ollama thinking delta to be marked as thinking",
+	)
 	_ = t
 }
 

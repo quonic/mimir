@@ -431,8 +431,10 @@ parse_openai_stream_event :: proc(
 	}
 
 	content := choice.delta.content
-	if content == "" {
+	isThinking := false
+	if content == "" && choice.delta.reasoning != "" {
 		content = choice.delta.reasoning
+		isThinking = true
 	}
 
 	if content == "" && choice.finish_reason == "" {
@@ -445,6 +447,7 @@ parse_openai_stream_event :: proc(
 				content = content,
 				model = wire.model,
 				finishReason = choice.finish_reason,
+				isThinking = isThinking,
 				done = choice.finish_reason != "",
 			},
 		),

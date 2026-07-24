@@ -9,6 +9,7 @@ import http "../http"
 Ollama_Message :: struct {
 	role:       string,
 	content:    string,
+	thinking:   string,
 	tool_calls: []Ollama_Tool_Call,
 }
 
@@ -324,7 +325,10 @@ parse_ollama_stream_event :: proc(
 		}
 	}
 
-	if wire.message.content == "" && len(wire.message.tool_calls) == 0 && !wire.done {
+	if wire.message.content == "" &&
+	   wire.message.thinking == "" &&
+	   len(wire.message.tool_calls) == 0 &&
+	   !wire.done {
 		return false, .None
 	}
 
@@ -332,12 +336,19 @@ parse_ollama_stream_event :: proc(
 	if !wire.done {
 		usage = {}
 	}
+	content := wire.message.content
+	isThinking := false
+	if content == "" && wire.message.thinking != "" {
+		content = wire.message.thinking
+		isThinking = true
+	}
 	return !chat_stream_callback_call(
 			callbackState,
 			Chat_Stream_Delta {
-				content = wire.message.content,
+				content = content,
 				model = wire.model,
 				finishReason = wire.done_reason,
+				isThinking = isThinking,
 				done = wire.done,
 				usage = usage,
 			},

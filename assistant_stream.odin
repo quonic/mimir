@@ -7,11 +7,14 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:time"
 
 MAX_TOOL_CONTINUATIONS :: 8
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
 SEARCH_CODE_MAX_RESULTS :: 10
+SPINNER_FRAME_INTERVAL :: 100 * time.Millisecond
+SPINNER_FRAMES :: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 Assistant_Stream_State :: struct {
 	mutex:                   sync.Mutex,
@@ -27,6 +30,10 @@ Assistant_Stream_State :: struct {
 	finished:                bool,
 	cancelRequested:         bool,
 	canceled:                bool,
+	thinking:                bool,
+	spinnerVisible:          bool,
+	spinnerFrameIndex:       int,
+	spinnerLastFrame:        time.Tick,
 	toolCalls:               [dynamic]ai.Tool_Call,
 	conversation:            [dynamic]ai.Message,
 	continuationCount:       int,
@@ -52,6 +59,11 @@ Context_Window_Cache_Entry :: struct {
 	providerName: string,
 	model:        string,
 	tokens:       int,
+}
+
+Spinner_Update :: struct {
+	dirty:             bool,
+	visibilityChanged: bool,
 }
 
 AI_Tool_Call_Arguments :: struct {
@@ -174,6 +186,14 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 	if dirty {
 		state.historyRenderOnly = true
 	}
+	spinnerUpdate := app_update_assistant_stream_spinner(&state.stream)
+	if spinnerUpdate.dirty {
+		dirty = true
+		state.historyRenderOnly = true
+		if spinnerUpdate.visibilityChanged {
+			app_invalidate_assistant_stream_history_entry(state)
+		}
+	}
 	if state.stream.worker != nil && thread.is_done(state.stream.worker) {
 		thread.join(state.stream.worker)
 		thread.destroy(state.stream.worker)
@@ -199,6 +219,11 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 			case:
 				state.status = "Assistant response complete"
 			}
+		}
+		if app_clear_assistant_stream_thinking(&state.stream) {
+			dirty = true
+			state.historyRenderOnly = true
+			app_invalidate_assistant_stream_history_entry(state)
 		}
 
 		dirty = app_sync_assistant_history_entry(state) || dirty
@@ -300,7 +325,12 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 		}
 
 		if delta.content != "" {
-			assistant_stream_append_partial(stream, delta.content)
+			if delta.isThinking {
+				stream.thinking = true
+			} else {
+				stream.thinking = false
+				assistant_stream_append_partial(stream, delta.content)
+			}
 		}
 
 		if delta.finishReason != "" {
@@ -311,6 +341,7 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 		}
 
 		if delta.hasToolCall {
+			stream.thinking = false
 			append(&stream.toolCalls, ai.tool_call_clone(delta.toolCall, stream.bufferAllocator))
 		}
 		if delta.usage.hasInputTokens {
@@ -324,6 +355,9 @@ assistant_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: r
 
 		if delta.done && stream.cancelRequested {
 			stream.canceled = true
+		}
+		if delta.done {
+			stream.thinking = false
 		}
 	}
 	return true
@@ -751,6 +785,10 @@ app_reset_assistant_stream_state :: proc(stream: ^Assistant_Stream_State) {
 	stream.finished = false
 	stream.cancelRequested = false
 	stream.canceled = false
+	stream.thinking = false
+	stream.spinnerVisible = false
+	stream.spinnerFrameIndex = 0
+	stream.spinnerLastFrame = {}
 	stream.usage = {}
 	stream.contextWindowTokens = 0
 }
@@ -763,6 +801,69 @@ app_clear_assistant_stream_buffers :: proc(stream: ^Assistant_Stream_State) {
 		delete(stream.finishReason, stream.bufferAllocator)
 		stream.finishReason = ""
 	}
+}
+
+app_update_assistant_stream_spinner :: proc(stream: ^Assistant_Stream_State) -> Spinner_Update {
+	if !sync.mutex_guard(&stream.mutex) {
+		return {}
+	}
+
+	if !stream.thinking {
+		if stream.spinnerVisible {
+			stream.spinnerVisible = false
+			stream.spinnerFrameIndex = 0
+			stream.spinnerLastFrame = {}
+			return Spinner_Update{dirty = true, visibilityChanged = true}
+		}
+		return {}
+	}
+
+	if !stream.spinnerVisible {
+		stream.spinnerVisible = true
+		stream.spinnerFrameIndex = 0
+		stream.spinnerLastFrame = time.tick_now()
+		return Spinner_Update{dirty = true, visibilityChanged = true}
+	}
+
+	if time.tick_since(stream.spinnerLastFrame) >= SPINNER_FRAME_INTERVAL {
+		stream.spinnerFrameIndex = (stream.spinnerFrameIndex + 1) % len(SPINNER_FRAMES)
+		stream.spinnerLastFrame = time.tick_now()
+		return Spinner_Update{dirty = true}
+	}
+	return {}
+}
+
+app_clear_assistant_stream_thinking :: proc(stream: ^Assistant_Stream_State) -> bool {
+	if !sync.mutex_guard(&stream.mutex) {
+		return false
+	}
+
+	wasVisible := stream.spinnerVisible
+	stream.thinking = false
+	stream.spinnerVisible = false
+	stream.spinnerFrameIndex = 0
+	stream.spinnerLastFrame = {}
+	return wasVisible
+}
+
+app_invalidate_assistant_stream_history_entry :: proc(state: ^App_State) {
+	index := state.stream.assistantIndex
+	if index < 0 || index >= len(state.history) {
+		return
+	}
+	state.history[index].cachedLineWidth = 0
+	state.history[index].cachedLineCount = 0
+}
+
+app_assistant_stream_spinner_frame :: proc(state: ^App_State) -> string {
+	if !sync.mutex_guard(&state.stream.mutex) {
+		return ""
+	}
+	if !state.stream.spinnerVisible {
+		return ""
+	}
+	frames := SPINNER_FRAMES
+	return frames[state.stream.spinnerFrameIndex]
 }
 
 assistant_stream_append_partial :: proc(stream: ^Assistant_Stream_State, content: string) {

@@ -1145,6 +1145,104 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_thinking_spinner_hides_reasoning_and_yields_to_content :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append_history(&state, .Assistant, "")
+	state.stream.assistantIndex = len(state.history) - 1
+	state.stream.active = true
+
+	assert(
+		assistant_stream_delta_callback(
+			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
+			rawptr(&state.stream),
+		),
+		"expected thinking delta callback to continue streaming",
+	)
+	assert(
+		len(state.stream.partialBuffer) == 0,
+		"expected thinking text to stay out of the partial response buffer",
+	)
+	assert(app_poll_assistant_stream(&state), "expected thinking state to request a redraw")
+	assert(state.historyRenderOnly, "expected thinking state to request a history-only redraw")
+	assert(
+		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
+		"assistant: " + SPINNER_FRAMES[0],
+		"expected first spinner frame in the pending assistant entry",
+	)
+
+	state.historyRenderOnly = false
+	assert(
+		assistant_stream_delta_callback(
+			ai.Chat_Stream_Delta{content = "Visible answer"},
+			rawptr(&state.stream),
+		),
+		"expected content delta callback to continue streaming",
+	)
+	assert(app_poll_assistant_stream(&state), "expected content delta to request a redraw")
+	assert(
+		state.history[state.stream.assistantIndex].content == "Visible answer",
+		"expected only normal content in assistant history",
+	)
+	assert(
+		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
+		"assistant: Visible answer",
+		"expected normal content to replace the spinner",
+	)
+	_ = t
+}
+
+@(test)
+test_thinking_spinner_invalidates_history_cache_and_clears :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append_history(&state, .Assistant, "")
+	state.stream.assistantIndex = len(state.history) - 1
+	state.stream.active = true
+	_ = history_entry_line_count(&state, state.stream.assistantIndex, 20)
+	assert(
+		state.history[state.stream.assistantIndex].cachedLineCount > 0,
+		"expected history line count to be cached",
+	)
+
+	assert(
+		assistant_stream_delta_callback(
+			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
+			rawptr(&state.stream),
+		),
+		"expected thinking delta callback to continue streaming",
+	)
+	assert(
+		app_poll_assistant_stream(&state),
+		"expected spinner visibility change to request a redraw",
+	)
+	assert(
+		state.history[state.stream.assistantIndex].cachedLineCount == 0,
+		"expected spinner visibility change to invalidate the wrapping cache",
+	)
+	state.stream.spinnerLastFrame = {}
+	spinnerUpdate := app_update_assistant_stream_spinner(&state.stream)
+	assert(spinnerUpdate.dirty, "expected elapsed spinner interval to request a redraw")
+	assert(
+		!spinnerUpdate.visibilityChanged,
+		"expected frame changes to preserve spinner visibility",
+	)
+	assert(
+		app_assistant_stream_spinner_frame(&state) == SPINNER_FRAMES[1],
+		"expected elapsed spinner interval to advance to the next frame",
+	)
+	assert(
+		app_clear_assistant_stream_thinking(&state.stream),
+		"expected visible spinner state to clear",
+	)
+	assert(
+		app_assistant_stream_spinner_frame(&state) == "",
+		"expected cleared stream state to hide the spinner",
+	)
+	_ = t
+}
+
+@(test)
 test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
