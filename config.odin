@@ -55,6 +55,8 @@ Mimir_Config_Wire :: struct {
 	selectedModel:     string,
 	embeddingProvider: string,
 	embeddingModel:    string,
+	safetyProvider:    string,
+	safetyModel:       string,
 	providers:         []Provider_Config_Wire,
 	contextWindows:    []Context_Window_Config_Wire,
 	mcpServers:        []MCP_Server_Config,
@@ -86,6 +88,8 @@ Mimir_Config :: struct {
 	selectedModel:       string,
 	embeddingProvider:   string,
 	embeddingModel:      string,
+	safetyProvider:      string,
+	safetyModel:         string,
 	providers:           [dynamic]Provider_Config,
 	contextWindows:      [dynamic]Context_Window_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
@@ -263,6 +267,12 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	if config.embeddingModel != "" {
 		delete(config.embeddingModel, config.allocationAllocator)
 	}
+	if config.safetyProvider != "" {
+		delete(config.safetyProvider, config.allocationAllocator)
+	}
+	if config.safetyModel != "" {
+		delete(config.safetyModel, config.allocationAllocator)
+	}
 	for &provider in config.providers {
 		provider_config_destroy(&provider, config.allocationAllocator)
 	}
@@ -434,6 +444,8 @@ parse_config_from_json :: proc(
 	config.selectedModel = strings.clone(wire.selectedModel, allocator)
 	config.embeddingProvider = strings.clone(wire.embeddingProvider, allocator)
 	config.embeddingModel = strings.clone(wire.embeddingModel, allocator)
+	config.safetyProvider = strings.clone(wire.safetyProvider, allocator)
+	config.safetyModel = strings.clone(wire.safetyModel, allocator)
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
 	config.contextWindows = make(
 		[dynamic]Context_Window_Config,
@@ -664,6 +676,12 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"embeddingModel\": ")
 	write_json_string(&builder, config.embeddingModel)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"safetyProvider\": ")
+	write_json_string(&builder, config.safetyProvider)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"safetyModel\": ")
+	write_json_string(&builder, config.safetyModel)
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"providers\": [")
 	for provider, index in config.providers {

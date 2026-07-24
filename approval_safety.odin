@@ -34,30 +34,21 @@ Approval_Safety_Worker :: struct {
 	request: ai.Chat_Request,
 }
 
+Approval_Safety_Model :: struct {
+	provider: Provider_Config,
+	model:    string,
+}
+
 app_start_approval_safety :: proc(state: ^App_State) {
 	approval := &state.approval.safety
 	app_reset_approval_safety(approval, state.dispatcher.allocator)
 
-	providerName := state.config.selectedProvider
-	if providerName == "" {
+	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
+	if !safetyModelOK {
 		approval.unavailable = true
 		return
 	}
-	provider, providerOK := app_find_provider(state.config, providerName)
-	if !providerOK || !provider.enabled {
-		approval.unavailable = true
-		return
-	}
-
-	model := state.config.selectedModel
-	if model == "" {
-		model = provider.model
-	}
-	if model == "" {
-		approval.unavailable = true
-		return
-	}
-	client, clientErr := ai.new_client(provider.name, provider.apiKey)
+	client, clientErr := ai.new_client(safetyModel.provider.name, safetyModel.provider.apiKey)
 	if clientErr != .None {
 		approval.unavailable = true
 		return
@@ -81,7 +72,7 @@ app_start_approval_safety :: proc(state: ^App_State) {
 	worker.state = approval
 	worker.client = client
 	worker.request = ai.Chat_Request {
-		model       = strings.clone(model, state.dispatcher.allocator),
+		model       = strings.clone(safetyModel.model, state.dispatcher.allocator),
 		messages    = messages[:],
 		temperature = 0.1,
 		maxTokens   = 64,
@@ -92,6 +83,33 @@ app_start_approval_safety :: proc(state: ^App_State) {
 	approval.worker = thread.create(approval_safety_worker_proc)
 	approval.worker.data = rawptr(worker)
 	thread.start(approval.worker)
+}
+
+approval_safety_model_from_config :: proc(config: Mimir_Config) -> (Approval_Safety_Model, bool) {
+	providerName := config.selectedProvider
+	model := config.selectedModel
+	explicitSafetyModel := config.safetyProvider != "" || config.safetyModel != ""
+	if explicitSafetyModel {
+		if config.safetyProvider == "" || config.safetyModel == "" {
+			return Approval_Safety_Model{}, false
+		}
+		providerName = config.safetyProvider
+		model = config.safetyModel
+	}
+	if providerName == "" {
+		return Approval_Safety_Model{}, false
+	}
+	provider, providerOK := app_find_provider(config, providerName)
+	if !providerOK || !provider.enabled {
+		return Approval_Safety_Model{}, false
+	}
+	if model == "" && !explicitSafetyModel {
+		model = provider.model
+	}
+	if model == "" {
+		return Approval_Safety_Model{}, false
+	}
+	return Approval_Safety_Model{provider = provider, model = model}, true
 }
 
 approval_safety_prompt :: proc(command, workingDirectory: string) -> string {

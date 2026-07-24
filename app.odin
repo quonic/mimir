@@ -90,6 +90,7 @@ Config_Category :: enum int {
 	Providers = 0,
 	Chat_Model,
 	Embedding_Model,
+	Safety_Model,
 }
 
 Config_Focus :: enum int {
@@ -125,6 +126,7 @@ Config_Setting_ID :: enum int {
 	Remove_Provider,
 	Chat_Model,
 	Embedding_Model,
+	Safety_Model,
 }
 
 Config_Setting :: struct {
@@ -189,6 +191,8 @@ App_State :: struct {
 	modelNameOwned:         bool,
 	embeddingProviderOwned: bool,
 	embeddingModelOwned:    bool,
+	safetyProviderOwned:    bool,
+	safetyModelOwned:       bool,
 	configCategory:         Config_Category,
 	configFocus:            Config_Focus,
 	configInput:            Config_Input_State,
@@ -411,6 +415,12 @@ app_destroy :: proc(state: ^App_State) {
 		}
 		if state.embeddingModelOwned && state.config.embeddingModel != "" {
 			delete(state.config.embeddingModel)
+		}
+		if state.safetyProviderOwned && state.config.safetyProvider != "" {
+			delete(state.config.safetyProvider)
+		}
+		if state.safetyModelOwned && state.config.safetyModel != "" {
+			delete(state.config.safetyModel)
 		}
 	}
 	app_clear_model_entries(state)
@@ -1810,6 +1820,17 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 				)
 			}
 		}
+	case .Safety_Model:
+		app_rebuild_model_entries(state)
+		for _, index in state.models {
+			if !app_model_entry_supports_chat(state.models[index]) {
+				continue
+			}
+			append(
+				&state.configSettings,
+				Config_Setting{id = .Safety_Model, kind = .Single_Select, modelIndex = index},
+			)
+		}
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
@@ -1884,8 +1905,8 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 	if state.configFocus == .Categories {
 		category := int(state.configCategory) + delta
 		if category < int(Config_Category.Providers) {
-			category = int(Config_Category.Embedding_Model)
-		} else if category > int(Config_Category.Embedding_Model) {
+			category = int(Config_Category.Safety_Model)
+		} else if category > int(Config_Category.Safety_Model) {
 			category = int(Config_Category.Providers)
 		}
 		state.configCategory = Config_Category(category)
@@ -1946,6 +1967,8 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 		app_select_config_model(state, setting.modelIndex)
 	case .Embedding_Model:
 		app_select_config_embedding_model(state, setting.modelIndex)
+	case .Safety_Model:
+		app_select_config_safety_model(state, setting.modelIndex)
 	}
 	return true
 }
@@ -2112,6 +2135,14 @@ app_commit_config_edit :: proc(state: ^App_State) {
 			state.config.selectedProvider = strings.clone(text, context.allocator)
 			state.modelProviderOwned = true
 		}
+		if state.config.safetyProvider == oldName {
+			if (state.configStringsOwned || state.safetyProviderOwned) &&
+			   state.config.safetyProvider != "" {
+				delete(state.config.safetyProvider)
+			}
+			state.config.safetyProvider = strings.clone(text, context.allocator)
+			state.safetyProviderOwned = true
+		}
 	} else if setting.id == .Provider_Endpoint {
 		if state.config.providers[setting.providerIndex].endpointOwned {
 			delete(
@@ -2217,6 +2248,10 @@ app_remove_config_provider :: proc(state: ^App_State, providerIndex: int) {
 	}
 	if state.config.providers[providerIndex].name == state.config.selectedProvider {
 		state.status = "Choose another active model before removing this provider"
+		return
+	}
+	if state.config.providers[providerIndex].name == state.config.safetyProvider {
+		state.status = "Choose another safety model before removing this provider"
 		return
 	}
 	provider_config_destroy(&state.config.providers[providerIndex], context.allocator)
@@ -2363,6 +2398,30 @@ app_select_config_embedding_model :: proc(state: ^App_State, modelIndex: int) {
 	state.embeddingProviderOwned = true
 	state.embeddingModelOwned = true
 	app_apply_config_change(state, "Embedding model selected and saved")
+}
+
+app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
+	if modelIndex < 0 || modelIndex >= len(state.models) {
+		return
+	}
+
+	entry := state.models[modelIndex]
+	if !app_model_entry_supports_chat(entry) {
+		state.status = "Selected model does not support chat tools"
+		return
+	}
+	if (state.configStringsOwned || state.safetyProviderOwned) &&
+	   state.config.safetyProvider != "" {
+		delete(state.config.safetyProvider)
+	}
+	if (state.configStringsOwned || state.safetyModelOwned) && state.config.safetyModel != "" {
+		delete(state.config.safetyModel)
+	}
+	state.config.safetyProvider = strings.clone(entry.providerName, context.allocator)
+	state.config.safetyModel = strings.clone(entry.model, context.allocator)
+	state.safetyProviderOwned = true
+	state.safetyModelOwned = true
+	app_apply_config_change(state, "Safety model selected and saved")
 }
 
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {

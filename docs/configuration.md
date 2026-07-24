@@ -53,6 +53,8 @@ The initial configuration shape is:
   "selectedModel": "",
   "embeddingProvider": "",
   "embeddingModel": "",
+  "safetyProvider": "",
+  "safetyModel": "",
   "contextWindows": [
     {
       "providerName": "ollama",
@@ -81,6 +83,14 @@ The initial configuration shape is:
 are intentionally independent. Select an embedding-capable provider and model
 in the `Embedding Model` settings category before using `search_code`; Mimir
 does not choose a default embedding model.
+
+`safetyProvider` and `safetyModel` configure the model that evaluates shell
+commands in the approval dialog. Select a chat-capable provider and model in
+the `Safety Model` settings category to use an independent model for those
+assessments. When both values are empty, Mimir falls back to the chat provider
+and model for compatibility with existing configurations. A partial or invalid
+explicit safety selection leaves safety advice unavailable rather than falling
+back silently.
 
 `contextWindows` optionally records a nonnegative manual context capacity for a
 specific provider/model pair. A value of `0` means the capacity is unknown. For

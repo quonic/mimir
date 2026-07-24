@@ -126,6 +126,45 @@ test_approval_safety_prompt_uses_only_command_details :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_safety_model_prefers_explicit_selection :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.selectedModel = "chat-model"
+	state.config.safetyProvider = "ollama"
+	state.config.safetyModel = "safety-model"
+
+	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
+	assert(safetyModelOK, "expected explicit safety model to resolve")
+	assert(safetyModel.provider.name == "ollama", "expected configured safety provider")
+	assert(safetyModel.model == "safety-model", "expected configured safety model")
+	_ = t
+}
+
+@(test)
+test_approval_safety_model_falls_back_to_chat_selection :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.selectedModel = "chat-model"
+
+	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
+	assert(safetyModelOK, "expected empty safety selection to use chat model")
+	assert(safetyModel.provider.name == DEFAULT_CONFIG_PROVIDER, "expected chat provider fallback")
+	assert(safetyModel.model == "chat-model", "expected chat model fallback")
+	_ = t
+}
+
+@(test)
+test_approval_safety_model_rejects_partial_selection :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.safetyProvider = "ollama"
+
+	_, safetyModelOK := approval_safety_model_from_config(state.config)
+	assert(!safetyModelOK, "expected partial safety selection to be unavailable")
+	_ = t
+}
+
+@(test)
 test_approval_safety_display_text_compacts_model_response :: proc(t: ^testing.T) {
 	advice := approval_safety_display_text(
 		"  Safe: Reads repository status only.  \nVerdict: Safe.\n",
@@ -1369,6 +1408,54 @@ test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^test
 		state.config.embeddingModel == "embedding",
 		"expected embedding selection to accept capability",
 	)
+	_ = t
+}
+
+@(test)
+test_safety_model_selection_requires_chat_capability :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("embedding", context.allocator),
+			supportsEmbeddings = true,
+		},
+	)
+
+	app_select_config_safety_model(&state, 0)
+	assert(
+		state.config.safetyProvider == "",
+		"expected rejected safety selection to keep provider",
+	)
+	assert(state.config.safetyModel == "", "expected rejected safety selection to keep model")
+	assert(
+		state.status == "Selected model does not support chat tools",
+		"expected safety selection capability rejection",
+	)
+	_ = t
+}
+
+@(test)
+test_safety_model_selection_accepts_chat_capability :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("safety", context.allocator),
+			supportsChat = true,
+		},
+	)
+
+	app_select_config_safety_model(&state, 0)
+	assert(state.config.safetyProvider == "ollama", "expected selected safety provider")
+	assert(state.config.safetyModel == "safety", "expected selected safety model")
+	assert(state.status == "Safety model selected and saved", "expected safety selection status")
 	_ = t
 }
 
