@@ -552,6 +552,11 @@ test_parse_slash_command :: proc(t: ^testing.T) {
 	config := parse_slash_command("/config provider ollama")
 	assert(config.kind == .Config, "expected /config to map to Config command")
 	assert(config.args == "provider ollama", "expected command args to be preserved")
+	models := parse_slash_command("/models")
+	assert(models.kind == .Unknown, "expected /models to be unsupported")
+
+	skills := parse_slash_command("/skills")
+	assert(skills.kind == .Unknown, "expected /skills to be unsupported")
 
 	unknown := parse_slash_command("/wat")
 	assert(unknown.kind == .Unknown, "expected unknown slash command to be marked unknown")
@@ -564,6 +569,26 @@ test_parse_slash_command :: proc(t: ^testing.T) {
 
 	clear := parse_slash_command("/clear")
 	assert(clear.kind == .Clear, "expected /clear to map to Clear command")
+	_ = t
+}
+
+@(test)
+test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	app_run_command(&state, parse_slash_command("/models"))
+	assert(state.status == "Unknown command", "expected /models to be unsupported")
+
+	app_run_command(&state, parse_slash_command("/skills"))
+	assert(state.status == "Unknown command", "expected /skills to be unsupported")
+
+	app_run_command(&state, parse_slash_command("/help"))
+	assert(
+		state.history[len(state.history) - 1].content ==
+		"Commands: /exit, /config, /help, /stop, /clear",
+		"expected help to list only supported commands",
+	)
 	_ = t
 }
 
@@ -896,102 +921,6 @@ test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_models_command_opens_selectable_modal_entries :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.providers[0].type = .OpenAI
-	state.config.providers[0].endpoint = "https://api.example.com/ollama"
-	state.config.providers[0].model = "llama3.2"
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "local",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/local",
-			model = "mistral",
-			enabled = true,
-		},
-	)
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "openai",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/openai",
-			model = "gpt-4o-mini",
-			enabled = true,
-		},
-	)
-
-	app_run_command(&state, parse_slash_command("/models"))
-
-	assert(state.mode == .Models, "expected /models to enter model selection mode")
-	assert(len(state.models) == 3, "expected models from configured providers")
-	assert(state.models[0].providerName == "ollama", "expected default provider model first")
-	assert(state.models[1].model == "mistral", "expected second provider model")
-	assert(state.models[2].providerName == "openai", "expected configured provider model")
-	_ = t
-}
-
-@(test)
-test_ollama_model_entries_filter_chat_and_embedding_capabilities :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-
-	append(
-		&state.models,
-		Model_Select_Entry {
-			providerName = strings.clone("ollama", context.allocator),
-			providerType = .Ollama,
-			model = strings.clone("embedding", context.allocator),
-			supportsEmbeddings = true,
-		},
-	)
-	append(
-		&state.models,
-		Model_Select_Entry {
-			providerName = strings.clone("ollama", context.allocator),
-			providerType = .Ollama,
-			model = strings.clone("chat", context.allocator),
-			supportsChat = true,
-		},
-	)
-	append(
-		&state.models,
-		Model_Select_Entry {
-			providerName = strings.clone("ollama", context.allocator),
-			providerType = .Ollama,
-			model = strings.clone("all", context.allocator),
-			supportsChat = true,
-			supportsEmbeddings = true,
-		},
-	)
-
-	assert(
-		!app_model_entry_supports_chat(state.models[0]),
-		"expected embedding-only model to reject chat",
-	)
-	assert(
-		!app_model_entry_supports_embeddings(state.models[1]),
-		"expected chat-only model to reject embeddings",
-	)
-	assert(
-		app_model_entry_supports_chat(state.models[2]),
-		"expected all-capability model to support chat",
-	)
-	assert(
-		app_model_entry_supports_embeddings(state.models[2]),
-		"expected all-capability model to support embeddings",
-	)
-
-	app_remove_non_chat_model_entries(&state)
-	assert(len(state.models) == 2, "expected chat selector to exclude embedding-only model")
-	assert(state.models[0].model == "chat", "expected chat-capable model to remain first")
-	assert(state.models[1].model == "all", "expected all-capability model to remain")
-	_ = t
-}
-
-@(test)
 test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1026,33 +955,6 @@ test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^test
 		state.config.embeddingModel == "embedding",
 		"expected embedding selection to accept capability",
 	)
-	_ = t
-}
-
-@(test)
-test_models_modal_render_contains_choices :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.providers[0].type = .OpenAI
-	state.config.providers[0].model = "llama3.2"
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "local",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/local",
-			model = "mistral",
-			enabled = true,
-		},
-	)
-
-	app_show_models(&state)
-	sequence := render_app_frame_sequence(&state, 18, 80, context.temp_allocator)
-
-	assert(contains_string(sequence, " Select Model "), "expected modal title")
-	assert(contains_string(sequence, "Use arrows/j/k, Enter, Esc"), "expected modal help")
-	assert(contains_string(sequence, ">   ollama / llama3.2"), "expected cursor marker")
-	assert(contains_string(sequence, "local / mistral"), "expected second model row")
 	_ = t
 }
 
@@ -1114,122 +1016,6 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 		state.config.providers[0].endpoint == "http://localhost:11434/v1",
 		"expected committed endpoint",
 	)
-	_ = t
-}
-
-@(test)
-test_models_modal_navigation_supports_keys_and_arrows :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.providers[0].type = .OpenAI
-	state.config.providers[0].model = "llama3.2"
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "local",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/local",
-			model = "mistral",
-			enabled = true,
-		},
-	)
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "openai",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/openai",
-			model = "qwen",
-			enabled = true,
-		},
-	)
-	app_show_models(&state)
-
-	assert(app_handle_input_byte(&state, 'j'), "expected j to move cursor")
-	assert(state.modelCursor == 1, "expected j to move down")
-	assert(app_handle_input_byte(&state, 'k'), "expected k to move cursor")
-	assert(state.modelCursor == 0, "expected k to move up")
-	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
-	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
-	assert(app_handle_input_byte(&state, 'B'), "expected down arrow to move cursor")
-	assert(state.modelCursor == 1, "expected down arrow to move down")
-	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
-	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
-	assert(app_handle_input_byte(&state, 'A'), "expected up arrow to move cursor")
-	assert(state.modelCursor == 0, "expected up arrow to move up")
-	_ = t
-}
-
-@(test)
-test_models_modal_selects_provider_model_pair :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.providers[0].type = .OpenAI
-	state.config.providers[0].endpoint = "https://api.example.com/ollama"
-	state.config.providers[0].model = "llama3.2"
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "openai",
-			type = .OpenAI,
-			endpoint = "https://api.example.com",
-			model = "gpt-4o-mini",
-			enabled = true,
-		},
-	)
-	app_show_models(&state)
-
-	app_move_model_cursor(&state, 1)
-	assert(app_handle_input_byte(&state, '\r'), "expected Enter to select model")
-
-	assert(state.mode == .Chat, "expected selection to return to chat")
-	assert(state.config.selectedProvider == "openai", "expected provider selection")
-	assert(state.config.selectedModel == "gpt-4o-mini", "expected model selection")
-	assert(state.config.providers[1].model == "gpt-4o-mini", "expected provider model update")
-	assert(state.status == "Model selected", "expected runtime selection status")
-	_ = t
-}
-
-@(test)
-test_models_modal_escape_cancels_without_selection :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.selectedModel = "llama3.2"
-	state.config.providers[0].type = .OpenAI
-	state.config.providers[0].model = "llama3.2"
-	append(
-		&state.config.providers,
-		Provider_Config {
-			name = "local",
-			type = .OpenAI,
-			endpoint = "https://api.example.com/local",
-			model = "mistral",
-			enabled = true,
-		},
-	)
-	app_show_models(&state)
-	app_move_model_cursor(&state, 1)
-
-	assert(!app_handle_input_byte(&state, 0x1b), "expected Escape to wait for idle flush")
-	assert(app_flush_pending_input(&state), "expected idle flush to cancel Escape")
-
-	assert(state.mode == .Chat, "expected Escape to return to chat")
-	assert(state.config.selectedModel == "llama3.2", "expected selection to remain unchanged")
-	assert(state.status == "Model selection canceled", "expected cancel status")
-	_ = t
-}
-
-@(test)
-test_models_command_reports_when_no_models_exist :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	state.config.providers[0].enabled = false
-
-	app_show_models(&state)
-
-	assert(state.mode == .Chat, "expected no-models case to remain in chat")
-	assert(len(state.models) == 0, "expected no model entries")
-	assert(state.status == "No models found", "expected no-models status")
 	_ = t
 }
 

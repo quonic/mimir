@@ -102,9 +102,7 @@ render_app_frame_sequence :: proc(
 		state,
 	)
 	render_input(&batch, console.panel_interior(console.Panel{region = layout.inputPanel}), state)
-	if state.mode == .Models {
-		render_models_modal(&batch, layout.historyPanel, state)
-	} else if state.mode == .Config {
+	if state.mode == .Config {
 		render_config_modal(&batch, layout.historyPanel, state)
 	} else if state.mode == .Approval {
 		render_approval_modal(&batch, layout.historyPanel, state)
@@ -384,37 +382,6 @@ render_setup :: proc(batch: ^console.Batch, region: console.Region, state: ^App_
 		text = "Setup\nEnter optional API key, or press Enter to skip."
 	}
 	write_text_lines(batch, region, text)
-}
-
-render_models_modal :: proc(batch: ^console.Batch, parent: console.Region, state: ^App_State) {
-	modal := model_modal_region(parent)
-	console.batch_draw_panel(
-		batch,
-		console.Panel{region = modal, title = " Select Model ", fill_interior = true},
-	)
-
-	interior := console.panel_interior(console.Panel{region = modal})
-	width := console.region_width(interior)
-	if width <= 0 {
-		return
-	}
-
-	row := interior.top_row
-	write_clipped_line(batch, row, interior.left_column, width, "Use arrows/j/k, Enter, Esc")
-	row += 1
-	if row <= interior.bottom_row {
-		row += 1
-	}
-
-	for entry, index in state.models {
-		if row > interior.bottom_row {
-			break
-		}
-
-		line := model_modal_entry_line(state, entry, index, context.temp_allocator)
-		write_clipped_line(batch, row, interior.left_column, width, line)
-		row += 1
-	}
 }
 
 render_config_modal :: proc(batch: ^console.Batch, parent: console.Region, state: ^App_State) {
@@ -746,70 +713,6 @@ config_modal_footer :: proc(state: ^App_State) -> string {
 		return "Enter save  Esc cancel  Ctrl-A/Ctrl-E move cursor"
 	}
 	return "Arrows move  Tab change pane  Enter select/edit  Esc close"
-}
-
-model_modal_region :: proc(parent: console.Region) -> console.Region {
-	normalized := console.region_normalized(parent)
-	parent_width := console.region_width(normalized)
-	parent_height := console.region_height(normalized)
-
-	width := 64
-	if parent_width - 4 < width {
-		width = parent_width - 4
-	}
-	if width < 24 {
-		width = parent_width
-	}
-	if width < 1 {
-		width = 1
-	}
-
-	height := 16
-	if parent_height - 2 < height {
-		height = parent_height - 2
-	}
-	if height < 5 {
-		height = parent_height
-	}
-	if height < 1 {
-		height = 1
-	}
-
-	top := normalized.top_row + (parent_height - height) / 2
-	left := normalized.left_column + (parent_width - width) / 2
-	return console.Region {
-		top_row = top,
-		left_column = left,
-		bottom_row = top + height - 1,
-		right_column = left + width - 1,
-	}
-}
-
-model_modal_entry_line :: proc(
-	state: ^App_State,
-	entry: Model_Select_Entry,
-	index: int,
-	allocator := context.allocator,
-) -> string {
-	cursor := "  "
-	if index == state.modelCursor {
-		cursor = "> "
-	}
-	active := " "
-	if entry.providerName == state.config.selectedProvider &&
-	   entry.model == state.config.selectedModel {
-		active = "*"
-	}
-
-	builder: strings.Builder
-	strings.builder_init(&builder, allocator)
-	strings.write_string(&builder, cursor)
-	strings.write_string(&builder, active)
-	strings.write_byte(&builder, ' ')
-	strings.write_string(&builder, entry.providerName)
-	strings.write_string(&builder, " / ")
-	strings.write_string(&builder, entry.model)
-	return strings.to_string(builder)
 }
 
 render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {

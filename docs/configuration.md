@@ -40,7 +40,7 @@ and optional API key, then saves the resulting configuration after a successful
 probe.
 
 Mimir probes existing Ollama providers at startup to refresh their model lists
-for commands such as `/models`. A malformed configuration enters setup mode
+for selection through `/config`. A malformed configuration enters setup mode
 without overwriting the existing file.
 
 ## Configuration Format

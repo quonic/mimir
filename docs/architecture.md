@@ -11,7 +11,7 @@ three parts:
 - A one-line status bar fixed to the final terminal row.
 
 Slash commands are reserved for application commands. Initial command targets
-include `/exit`, `/config`, `/help`, `/models`, `/skills`, `/stop`, and `/clear`.
+include `/exit`, `/config`, `/help`, `/stop`, and `/clear`.
 
 ## Input and Terminal Behavior
 

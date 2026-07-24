@@ -5,8 +5,6 @@ Slash_Command :: enum int {
 	Exit,
 	Config,
 	Help,
-	Models,
-	Skills,
 	Stop,
 	Clear,
 	Unknown,
@@ -53,10 +51,6 @@ slash_command_kind :: proc(name: string) -> Slash_Command {
 		return .Config
 	case "help":
 		return .Help
-	case "models":
-		return .Models
-	case "skills":
-		return .Skills
 	case "stop", "cancel":
 		return .Stop
 	case "clear":

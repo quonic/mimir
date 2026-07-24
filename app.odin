@@ -18,7 +18,6 @@ HISTORY_WHEEL_SCROLL_ROWS :: 3
 App_Mode :: enum int {
 	Chat = 0,
 	Config,
-	Models,
 	Setup,
 	Approval,
 }
@@ -71,12 +70,6 @@ Model_Select_Entry :: struct {
 	model:              string,
 	supportsChat:       bool,
 	supportsEmbeddings: bool,
-}
-
-Model_Input_State :: enum int {
-	Ready = 0,
-	Escape,
-	CSI,
 }
 
 Config_Category :: enum int {
@@ -171,8 +164,6 @@ App_State :: struct {
 	codeIndexReady:         bool,
 	stream:                 Assistant_Stream_State,
 	models:                 [dynamic]Model_Select_Entry,
-	modelCursor:            int,
-	modelInput:             Model_Input_State,
 	modelProviderOwned:     bool,
 	modelNameOwned:         bool,
 	embeddingProviderOwned: bool,
@@ -518,10 +509,6 @@ app_wait_for_input :: proc(timeout_ms: int) -> (ready, ok: bool) {
 }
 
 app_flush_pending_input :: proc(state: ^App_State) -> bool {
-	if state.mode == .Models && state.modelInput == .Escape {
-		app_cancel_model_selection(state)
-		return true
-	}
 	if state.inputEscape != .Ready {
 		app_reset_input_escape(state)
 		return true
@@ -616,9 +603,6 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	if state.mode == .Approval {
 		return app_handle_approval_input(state, input)
-	}
-	if state.mode == .Models {
-		return app_handle_models_input(state, input)
 	}
 	if state.mode == .Config {
 		return app_handle_config_input(state, input)
@@ -1155,16 +1139,8 @@ app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
 	case .Config:
 		app_show_config(state)
 	case .Help:
-		append_history(
-			state,
-			.Assistant,
-			"Commands: /exit, /config, /help, /models, /skills, /stop, /clear",
-		)
+		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
-	case .Models:
-		app_show_models(state)
-	case .Skills:
-		state.status = "Skill discovery is not wired yet"
 	case .Stop:
 		app_cancel_assistant_stream(state)
 	case .Clear:
@@ -2025,46 +2001,12 @@ app_search_code :: proc(
 	return code_index_search_text(&state.codeIndex, client, query, maximumResults, allocator)
 }
 
-app_show_models :: proc(state: ^App_State) {
-	if app_assistant_stream_active(state) {
-		state.status = "Assistant stream active; use /stop before changing models"
-		return
-	}
-
-	app_rebuild_model_entries(state, context.allocator)
-	app_remove_non_chat_model_entries(state)
-	if len(state.models) == 0 {
-		state.mode = .Chat
-		state.status = "No models found"
-		return
-	}
-
-	state.modelCursor = app_current_model_index(state)
-	state.modelInput = .Ready
-	state.mode = .Models
-	state.status = "Select model: arrows/j/k, Enter, Esc"
-}
-
-app_remove_non_chat_model_entries :: proc(state: ^App_State) {
-	for index := len(state.models) - 1; index >= 0; index -= 1 {
-		entry := state.models[index]
-		if app_model_entry_supports_chat(entry) {
-			continue
-		}
-		delete(entry.providerName)
-		delete(entry.model)
-		ordered_remove(&state.models, index)
-	}
-}
-
 app_clear_model_entries :: proc(state: ^App_State) {
 	for entry in state.models {
 		delete(entry.providerName)
 		delete(entry.model)
 	}
 	clear(&state.models)
-	state.modelCursor = 0
-	state.modelInput = .Ready
 }
 
 app_rebuild_model_entries :: proc(state: ^App_State, allocator := context.allocator) {
@@ -2115,126 +2057,6 @@ app_append_model_entry :: proc(
 			supportsEmbeddings = provider.type == .OpenAI || ai.model_supports_embeddings(model),
 		},
 	)
-}
-
-app_current_model_index :: proc(state: ^App_State) -> int {
-	for entry, index in state.models {
-		if entry.providerName == state.config.selectedProvider &&
-		   entry.model == state.config.selectedModel {
-			return index
-		}
-	}
-	return 0
-}
-
-app_handle_models_input :: proc(state: ^App_State, input: byte) -> bool {
-	switch state.modelInput {
-	case .Escape:
-		if input == '[' {
-			state.modelInput = .CSI
-			return false
-		}
-		state.modelInput = .Ready
-		app_cancel_model_selection(state)
-		return true
-	case .CSI:
-		state.modelInput = .Ready
-		switch input {
-		case 'A':
-			app_move_model_cursor(state, -1)
-			return true
-		case 'B':
-			app_move_model_cursor(state, 1)
-			return true
-		case:
-			return false
-		}
-	case .Ready:
-	}
-
-	switch input {
-	case 0x1b:
-		state.modelInput = .Escape
-		return false
-	case 'j', 'J':
-		app_move_model_cursor(state, 1)
-		return true
-	case 'k', 'K':
-		app_move_model_cursor(state, -1)
-		return true
-	case '\r':
-		app_select_model_entry(state)
-		return true
-	case 3, 4:
-		state.shouldQuit = true
-		state.status = "Exiting"
-		return true
-	}
-	return false
-}
-
-app_move_model_cursor :: proc(state: ^App_State, delta: int) {
-	if len(state.models) == 0 {
-		state.modelCursor = 0
-		return
-	}
-
-	state.modelCursor += delta
-	if state.modelCursor < 0 {
-		state.modelCursor = len(state.models) - 1
-	} else if state.modelCursor >= len(state.models) {
-		state.modelCursor = 0
-	}
-	state.status = "Select model: arrows/j/k, Enter, Esc"
-}
-
-app_cancel_model_selection :: proc(state: ^App_State) {
-	state.mode = .Chat
-	state.modelInput = .Ready
-	state.status = "Model selection canceled"
-}
-
-app_select_model_entry :: proc(state: ^App_State) {
-	if len(state.models) == 0 || state.modelCursor < 0 || state.modelCursor >= len(state.models) {
-		state.mode = .Chat
-		state.status = "No model selected"
-		return
-	}
-
-	entry := state.models[state.modelCursor]
-	if state.modelProviderOwned && state.config.selectedProvider != "" {
-		delete(state.config.selectedProvider)
-	}
-	if state.modelNameOwned && state.config.selectedModel != "" {
-		delete(state.config.selectedModel)
-	}
-	state.config.selectedProvider = strings.clone(entry.providerName, context.allocator)
-	state.config.selectedModel = strings.clone(entry.model, context.allocator)
-	state.modelProviderOwned = true
-	state.modelNameOwned = true
-
-	for &provider in state.config.providers {
-		if provider.name == entry.providerName {
-			if provider.modelOwned && provider.model != "" {
-				delete(provider.model, context.allocator)
-			}
-			provider.model = strings.clone(entry.model, context.allocator)
-			provider.modelOwned = true
-			break
-		}
-	}
-
-	state.mode = .Chat
-	state.modelInput = .Ready
-	if state.configHome != "" {
-		if save_config_to_file(state.configHome, state.config) == .None {
-			state.status = "Model selected and saved"
-		} else {
-			state.status = "Model selected; config save failed"
-		}
-		return
-	}
-	state.status = "Model selected"
 }
 
 app_find_provider :: proc(config: Mimir_Config, name: string) -> (Provider_Config, bool) {
