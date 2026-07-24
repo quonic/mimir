@@ -41,6 +41,7 @@ Approval_State :: struct {
 	callOwned:     bool,
 	prepared:      Tool_Dispatch_Result,
 	preparedOwned: bool,
+	safety:        Approval_Safety_State,
 	choice:        Approval_Choice,
 	input:         Approval_Input_State,
 }
@@ -462,6 +463,9 @@ run_app :: proc() {
 				frameDirty = false
 			}
 		}
+		if state.mode == .Approval && app_poll_approval_safety(&state) {
+			frameDirty = true
+		}
 		if frameDirty {
 			render_app(&state)
 		} else if historyDirty {
@@ -677,12 +681,16 @@ app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
 	state.approval.preparedOwned = true
 	state.approval.choice = .Allow_Once
 	state.approval.input = .Ready
+	if prepared.action.effect == .Execute {
+		app_start_approval_safety(state)
+	}
 	state.mode = .Approval
 	state.status = "Permission approval required"
 	return true
 }
 
 app_clear_approval :: proc(state: ^App_State) {
+	app_destroy_approval_safety(&state.approval.safety)
 	if state.approval.callOwned {
 		tool_call_destroy(&state.approval.call, state.dispatcher.allocator)
 	}
@@ -703,6 +711,10 @@ app_move_approval_choice :: proc(state: ^App_State, delta: int) {
 }
 
 app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
+	if !app_approval_safety_ready(state) {
+		return false
+	}
+
 	switch state.approval.input {
 	case .Escape:
 		if input == '[' {

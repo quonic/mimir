@@ -159,6 +159,39 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			write_clipped_line(batch, row, interior.left_column, width, displayServer)
 		}
 		row += 2
+		if action.effect == .Execute {
+			adviceRegion := interior
+			adviceRegion.top_row = row
+			adviceRegion.bottom_row = interior.bottom_row - 4
+			if state.approval.safety.active {
+				write_clipped_line(
+					batch,
+					row,
+					interior.left_column,
+					width,
+					"Safety advice: assessing command...",
+				)
+				row += 1
+			} else if state.approval.safety.unavailable {
+				write_clipped_line(
+					batch,
+					row,
+					interior.left_column,
+					width,
+					"Safety advice: unavailable",
+				)
+				row += 1
+			} else {
+				advice := app_approval_safety_response(state)
+				if advice != "" {
+					write_clipped_line(batch, row, interior.left_column, width, "Safety advice:")
+					row += 1
+					adviceRegion.top_row = row
+					row += write_wrapped_line(batch, adviceRegion, row, advice)
+				}
+			}
+			row += 1
+		}
 	}
 
 	labels := [4]string{"Allow once", "Allow session", "Allow always", "Deny"}
@@ -167,7 +200,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			break
 		}
 		prefix := "  "
-		if int(state.approval.choice) == index {
+		if app_approval_safety_ready(state) && int(state.approval.choice) == index {
 			prefix = "> "
 		}
 		line := strings.concatenate({prefix, label}, context.temp_allocator)

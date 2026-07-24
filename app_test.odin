@@ -87,6 +87,69 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 }
 
 @(test)
+test_approval_safety_prompt_uses_only_command_details :: proc(t: ^testing.T) {
+	prompt := approval_safety_prompt("git status", "/workspace/project")
+	assert(strings.contains(prompt, "git status"), "expected command in safety prompt")
+	assert(
+		strings.contains(prompt, "/workspace/project"),
+		"expected working directory in safety prompt",
+	)
+	assert(
+		!strings.contains(prompt, "prior conversation"),
+		"expected prompt to exclude prior conversation",
+	)
+	_ = t
+}
+
+@(test)
+test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		"expected write call to open approval modal",
+	)
+	state.approval.safety.active = true
+	assert(
+		!app_handle_approval_input(&state, '4'),
+		"expected pending safety analysis to ignore choice",
+	)
+	assert(
+		!app_handle_approval_input(&state, '\r'),
+		"expected pending safety analysis to ignore approval",
+	)
+	assert(state.mode == .Approval, "expected pending analysis to keep modal open")
+	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
+
+	state.approval.safety.active = false
+	state.approval.safety.unavailable = true
+	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
+	assert(app_handle_approval_input(&state, '\r'), "expected unavailable advice to allow denial")
+	assert(state.mode == .Chat, "expected denial after unavailable advice to close modal")
+	_ = t
+}
+
+@(test)
+test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "run_command", command = "git status"}),
+		"expected command call to open approval modal",
+	)
+	state.approval.safety.active = false
+	state.approval.safety.unavailable = true
+	sequence := render_app_frame_sequence(&state, 24, 80, context.temp_allocator)
+	assert(
+		contains_string(sequence, "Safety advice: unavailable"),
+		"expected unavailable safety advice in command approval modal",
+	)
+	_ = t
+}
+
+@(test)
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
