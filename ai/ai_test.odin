@@ -858,14 +858,26 @@ test_parse_openai_models_response :: proc(t: ^testing.T) {
 
 @(test)
 test_parse_ollama_models_response :: proc(t: ^testing.T) {
-	payload := `{"models":[{"name":"qwen3.6"},{"name":"gemma4"}]}`
+	payload := `{"models":[{"name":"completion-only","capabilities":["completion"]},{"name":"chat","capabilities":["completion","tools"]},{"name":"embedding","capabilities":["embedding"]},{"name":"all","capabilities":["completion","tools","embedding"]},{"name":"unknown"}]}`
 	models, err := parse_ollama_models_response(payload)
-	defer free_model_list(models)
+	defer models_destroy(&models)
 
 	assert(err == .None, "expected valid Ollama models response payload to parse")
-	assert(len(models) == 2, "expected Ollama models response to return two model names")
-	assert(models[0] == "qwen3.6", "expected first Ollama model name to match payload")
-	assert(models[1] == "gemma4", "expected second Ollama model name to match payload")
+	assert(len(models) == 5, "expected Ollama models response to return all models")
+	assert(models[0].name == "completion-only", "expected first Ollama model name to match")
+	assert(!model_supports_chat(models[0]), "expected completion-only model to reject chat")
+	assert(model_supports_chat(models[1]), "expected completion and tools model to support chat")
+	assert(model_supports_embeddings(models[2]), "expected embedding model to support embeddings")
+	assert(model_supports_chat(models[3]), "expected all-capability model to support chat")
+	assert(
+		model_supports_embeddings(models[3]),
+		"expected all-capability model to support embeddings",
+	)
+	assert(!model_supports_chat(models[4]), "expected missing capabilities to reject chat")
+	assert(
+		!model_supports_embeddings(models[4]),
+		"expected missing capabilities to reject embeddings",
+	)
 	_ = t
 }
 
@@ -909,7 +921,7 @@ test_parse_anthropic_models_response :: proc(t: ^testing.T) {
 @(test)
 test_probe_ollama_endpoint_rejects_invalid_url :: proc(t: ^testing.T) {
 	models, err := probe_ollama_endpoint("localhost:11434", context.temp_allocator)
-	defer free_model_list(models)
+	defer models_destroy(&models)
 
 	assert(err == .Invalid_Request, "expected invalid Ollama endpoint URL to reject")
 	assert(len(models) == 0, "expected invalid Ollama endpoint to return no models")

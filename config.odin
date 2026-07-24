@@ -308,7 +308,7 @@ register_config_interfaces :: proc(
 					provider.endpoint,
 					models[:],
 				)
-				delete(models)
+				ai.models_destroy(&models, allocator)
 				continue
 			}
 			result.ollamaProbeFailed = true

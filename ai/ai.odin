@@ -4,12 +4,18 @@ package ai
 // Anthropic, OpenAI-compatible, and native Ollama interfaces.
 
 import http "../http"
+import "core:strings"
 
 Interface :: struct {
 	name:     string,
 	type:     Interface_Type,
 	endpoint: http.URL,
-	models:   [dynamic]string,
+	models:   [dynamic]Model,
+}
+
+Model :: struct {
+	name:         string,
+	capabilities: [dynamic]string,
 }
 
 Interface_Type :: enum {
@@ -42,8 +48,8 @@ Interfaces: [dynamic]Interface
 
 clear_interfaces :: proc() {
 	for iface in Interfaces {
-		for model in iface.models {
-			delete(model)
+		for &model in iface.models {
+			model_destroy(&model)
 		}
 		delete(iface.models)
 	}
@@ -62,7 +68,7 @@ add_interface_with_models :: proc(
 	name: string,
 	type: Interface_Type,
 	endpoint: string,
-	models: []string,
+	models: []Model,
 ) {
 	url := http.url_parse(endpoint)
 	if url.host == "" {
@@ -75,7 +81,7 @@ add_interface_with_models :: proc(
 		endpoint = url,
 	}
 	for model in models {
-		append(&entry.models, model)
+		append(&entry.models, model_clone(model))
 	}
 
 	append(&Interfaces, entry)
@@ -118,18 +124,62 @@ probe_ollama_endpoint :: proc(
 	endpoint: string,
 	allocator := context.allocator,
 ) -> (
-	[dynamic]string,
+	[dynamic]Model,
 	AI_Error,
 ) {
 	url := http.url_parse(endpoint)
 	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
-		return [dynamic]string{}, .Invalid_Request
+		return [dynamic]Model{}, .Invalid_Request
 	}
 
-	return list_models(
+	return list_ollama_models(
 		Client{iface = Interface{name = "ollama", type = .Ollama, endpoint = url}},
 		allocator,
 	)
+}
+
+model_clone :: proc(model: Model, allocator := context.allocator) -> Model {
+	clone := Model {
+		name = strings.clone(model.name, allocator),
+	}
+	for capability in model.capabilities {
+		append(&clone.capabilities, strings.clone(capability, allocator))
+	}
+	return clone
+}
+
+model_destroy :: proc(model: ^Model, allocator := context.allocator) {
+	if model.name != "" {
+		delete(model.name, allocator)
+	}
+	for capability in model.capabilities {
+		delete(capability, allocator)
+	}
+	delete(model.capabilities)
+}
+
+models_destroy :: proc(models: ^[dynamic]Model, allocator := context.allocator) {
+	for &model in models^ {
+		model_destroy(&model, allocator)
+	}
+	delete(models^)
+}
+
+model_has_capability :: proc(model: Model, capability: string) -> bool {
+	for candidate in model.capabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
+}
+
+model_supports_chat :: proc(model: Model) -> bool {
+	return model_has_capability(model, "completion") && model_has_capability(model, "tools")
+}
+
+model_supports_embeddings :: proc(model: Model) -> bool {
+	return model_has_capability(model, "embedding")
 }
 
 model_supported :: proc(iface: Interface, model: string) -> bool {
@@ -138,7 +188,7 @@ model_supported :: proc(iface: Interface, model: string) -> bool {
 	}
 
 	for candidate in iface.models {
-		if candidate == model {
+		if candidate.name == model {
 			return true
 		}
 	}

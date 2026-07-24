@@ -195,7 +195,17 @@ list_models :: proc(
 		return list_anthropic_models(client, allocator)
 	}
 	if client.iface.type == .Ollama {
-		return list_ollama_models(client, allocator)
+		models, err := list_ollama_models(client, allocator)
+		if err != .None {
+			return [dynamic]string{}, err
+		}
+		defer models_destroy(&models)
+
+		names: [dynamic]string
+		for model in models {
+			append(&names, strings.clone(model.name, allocator))
+		}
+		return names, .None
 	}
 
 	return [dynamic]string{}, .Unsupported_Interface
@@ -576,12 +586,12 @@ list_ollama_models :: proc(
 	client: Client,
 	allocator := context.allocator,
 ) -> (
-	[dynamic]string,
+	[dynamic]Model,
 	AI_Error,
 ) {
 	target, ok := compose_endpoint_target(client.iface.endpoint, OLLAMA_MODELS_PATH)
 	if !ok {
-		return [dynamic]string{}, .Invalid_Request
+		return [dynamic]Model{}, .Invalid_Request
 	}
 
 	extraHeaders: [dynamic][2]string
@@ -594,7 +604,7 @@ list_ollama_models :: proc(
 
 	body, status, errKind := do_json_get(target, extraHeaders[:])
 	if errKind != .None {
-		return [dynamic]string{}, errKind
+		return [dynamic]Model{}, errKind
 	}
 	defer if body != "" {delete(body)}
 
@@ -603,7 +613,7 @@ list_ollama_models :: proc(
 	}
 
 	_ = parse_ollama_error_message(body)
-	return [dynamic]string{}, map_status_to_error(status)
+	return [dynamic]Model{}, map_status_to_error(status)
 }
 
 compose_endpoint_target :: proc(endpoint: http.URL, pathSuffix: string) -> (string, bool) {

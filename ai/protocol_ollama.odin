@@ -55,7 +55,8 @@ Ollama_Chat_Response :: struct {
 }
 
 Ollama_Model :: struct {
-	name: string,
+	name:         string,
+	capabilities: []string,
 }
 
 Ollama_Models_Response :: struct {
@@ -365,19 +366,25 @@ parse_ollama_models_response :: proc(
 	body: string,
 	allocator := context.allocator,
 ) -> (
-	[dynamic]string,
+	[dynamic]Model,
 	AI_Error,
 ) {
 	wire: Ollama_Models_Response
 	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
 	if decodeErr != nil {
-		return [dynamic]string{}, .Invalid_Response
+		return [dynamic]Model{}, .Invalid_Response
 	}
 
-	models: [dynamic]string
+	models: [dynamic]Model
 	for model in wire.models {
 		if model.name != "" {
-			append(&models, strings.clone(model.name, allocator))
+			entry := Model {
+				name = strings.clone(model.name, allocator),
+			}
+			for capability in model.capabilities {
+				append(&entry.capabilities, strings.clone(capability, allocator))
+			}
+			append(&models, entry)
 		}
 	}
 

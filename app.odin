@@ -66,9 +66,11 @@ History_Entry :: struct {
 }
 
 Model_Select_Entry :: struct {
-	providerName: string,
-	providerType: ai.Interface_Type,
-	model:        string,
+	providerName:       string,
+	providerType:       ai.Interface_Type,
+	model:              string,
+	supportsChat:       bool,
+	supportsEmbeddings: bool,
 }
 
 Model_Input_State :: enum int {
@@ -298,11 +300,17 @@ app_create_default_config_from_ollama :: proc(
 	if err != .None {
 		return false
 	}
-	defer delete(models)
+	defer ai.models_destroy(&models, allocator)
 
 	if len(models) > 0 {
-		state.config.selectedModel = strings.clone(models[0], allocator)
-		state.config.providers[0].model = strings.clone(models[0], allocator)
+		for model in models {
+			if !ai.model_supports_chat(model) {
+				continue
+			}
+			state.config.selectedModel = strings.clone(model.name, allocator)
+			state.config.providers[0].model = strings.clone(model.name, allocator)
+			break
+		}
 	}
 
 	if save_config_to_file(home, state.config) == .None {
@@ -1197,7 +1205,7 @@ app_complete_setup :: proc(state: ^App_State) {
 		state.status = "Setup: Ollama unavailable; enter endpoint to retry"
 		return
 	}
-	defer delete(models)
+	defer ai.models_destroy(&models)
 
 	delete(state.config.providers)
 	delete(state.config.mcpServers)
@@ -1208,10 +1216,14 @@ app_complete_setup :: proc(state: ^App_State) {
 	state.config.providers[0].endpointOwned = true
 	state.config.providers[0].apiKey = strings.clone(state.setupAPIKey, context.allocator)
 	state.config.providers[0].apiKeyOwned = true
-	if len(models) > 0 {
-		state.config.selectedModel = strings.clone(models[0], context.allocator)
-		state.config.providers[0].model = strings.clone(models[0], context.allocator)
+	for model in models {
+		if !ai.model_supports_chat(model) {
+			continue
+		}
+		state.config.selectedModel = strings.clone(model.name, context.allocator)
+		state.config.providers[0].model = strings.clone(model.name, context.allocator)
 		state.config.providers[0].modelOwned = true
+		break
 	}
 
 	ai.clear_interfaces()
@@ -1328,6 +1340,9 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 	case .Chat_Model:
 		app_rebuild_model_entries(state)
 		for _, index in state.models {
+			if !app_model_entry_supports_chat(state.models[index]) {
+				continue
+			}
 			append(
 				&state.configSettings,
 				Config_Setting{id = .Chat_Model, kind = .Single_Select, modelIndex = index},
@@ -1780,7 +1795,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		state.status = "Provider model refresh failed"
 		return
 	}
-	defer delete(models)
+	defer ai.models_destroy(&models)
 	contextClient, contextClientErr := ai.new_client_with_endpoint(
 		.Ollama,
 		provider.endpoint,
@@ -1791,14 +1806,14 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		for model in models {
 			contextWindowTokens, contextWindowErr := ai.get_ollama_model_context_window(
 				contextClient,
-				model,
+				model.name,
 			)
 			if contextWindowErr == .None && contextWindowTokens > 0 {
 				contextWindowsChanged =
 					config_update_context_window_tokens(
 						&state.config,
 						provider.name,
-						model,
+						model.name,
 						contextWindowTokens,
 					) ||
 					contextWindowsChanged
@@ -1844,6 +1859,10 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 		return
 	}
 	entry := state.models[modelIndex]
+	if !app_model_entry_supports_chat(entry) {
+		state.status = "Selected model does not support chat tools"
+		return
+	}
 	if state.modelProviderOwned && state.config.selectedProvider != "" {
 		delete(state.config.selectedProvider)
 	}
@@ -1867,8 +1886,12 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 	app_apply_config_change(state, "Model selected and saved")
 }
 
+app_model_entry_supports_chat :: proc(entry: Model_Select_Entry) -> bool {
+	return entry.supportsChat
+}
+
 app_model_entry_supports_embeddings :: proc(entry: Model_Select_Entry) -> bool {
-	return entry.providerType == .OpenAI || entry.providerType == .Ollama
+	return entry.supportsEmbeddings
 }
 
 app_select_config_embedding_model :: proc(state: ^App_State, modelIndex: int) {
@@ -1878,7 +1901,7 @@ app_select_config_embedding_model :: proc(state: ^App_State, modelIndex: int) {
 
 	entry := state.models[modelIndex]
 	if !app_model_entry_supports_embeddings(entry) {
-		state.status = "Selected provider does not support embeddings"
+		state.status = "Selected model does not support embeddings"
 		return
 	}
 	if state.embeddingProviderOwned && state.config.embeddingProvider != "" {
@@ -2009,6 +2032,7 @@ app_show_models :: proc(state: ^App_State) {
 	}
 
 	app_rebuild_model_entries(state, context.allocator)
+	app_remove_non_chat_model_entries(state)
 	if len(state.models) == 0 {
 		state.mode = .Chat
 		state.status = "No models found"
@@ -2019,6 +2043,18 @@ app_show_models :: proc(state: ^App_State) {
 	state.modelInput = .Ready
 	state.mode = .Models
 	state.status = "Select model: arrows/j/k, Enter, Esc"
+}
+
+app_remove_non_chat_model_entries :: proc(state: ^App_State) {
+	for index := len(state.models) - 1; index >= 0; index -= 1 {
+		entry := state.models[index]
+		if app_model_entry_supports_chat(entry) {
+			continue
+		}
+		delete(entry.providerName)
+		delete(entry.model)
+		ordered_remove(&state.models, index)
+	}
 }
 
 app_clear_model_entries :: proc(state: ^App_State) {
@@ -2053,12 +2089,12 @@ app_rebuild_model_entries :: proc(state: ^App_State, allocator := context.alloca
 					app_append_model_entry(state, provider, model, allocator)
 				}
 				added = len(models) > 0
-				delete(models)
+				ai.models_destroy(&models, allocator)
 			}
 		}
 
 		if !added && provider.model != "" {
-			app_append_model_entry(state, provider, provider.model, allocator)
+			app_append_model_entry(state, provider, ai.Model{name = provider.model}, allocator)
 		}
 	}
 }
@@ -2066,7 +2102,7 @@ app_rebuild_model_entries :: proc(state: ^App_State, allocator := context.alloca
 app_append_model_entry :: proc(
 	state: ^App_State,
 	provider: Provider_Config,
-	model: string,
+	model: ai.Model,
 	allocator := context.allocator,
 ) {
 	append(
@@ -2074,7 +2110,9 @@ app_append_model_entry :: proc(
 		Model_Select_Entry {
 			providerName = strings.clone(provider.name, allocator),
 			providerType = provider.type,
-			model = strings.clone(model, allocator),
+			model = strings.clone(model.name, allocator),
+			supportsChat = provider.type != .Ollama || ai.model_supports_chat(model),
+			supportsEmbeddings = provider.type == .OpenAI || ai.model_supports_embeddings(model),
 		},
 	)
 }
@@ -2233,12 +2271,18 @@ app_select_first_available_model :: proc(state: ^App_State, allocator := context
 		return
 	}
 
-	state.config.selectedModel = strings.clone(iface.models[0], allocator)
-	for &provider in state.config.providers {
-		if provider.name == state.config.selectedProvider && provider.model == "" {
-			provider.model = strings.clone(iface.models[0], allocator)
-			return
+	for model in iface.models {
+		if iface.type == .Ollama && !ai.model_supports_chat(model) {
+			continue
 		}
+		state.config.selectedModel = strings.clone(model.name, allocator)
+		for &provider in state.config.providers {
+			if provider.name == state.config.selectedProvider && provider.model == "" {
+				provider.model = strings.clone(model.name, allocator)
+				return
+			}
+		}
+		return
 	}
 }
 

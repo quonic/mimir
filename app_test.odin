@@ -934,6 +934,102 @@ test_models_command_opens_selectable_modal_entries :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_ollama_model_entries_filter_chat_and_embedding_capabilities :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("embedding", context.allocator),
+			supportsEmbeddings = true,
+		},
+	)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("chat", context.allocator),
+			supportsChat = true,
+		},
+	)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("all", context.allocator),
+			supportsChat = true,
+			supportsEmbeddings = true,
+		},
+	)
+
+	assert(
+		!app_model_entry_supports_chat(state.models[0]),
+		"expected embedding-only model to reject chat",
+	)
+	assert(
+		!app_model_entry_supports_embeddings(state.models[1]),
+		"expected chat-only model to reject embeddings",
+	)
+	assert(
+		app_model_entry_supports_chat(state.models[2]),
+		"expected all-capability model to support chat",
+	)
+	assert(
+		app_model_entry_supports_embeddings(state.models[2]),
+		"expected all-capability model to support embeddings",
+	)
+
+	app_remove_non_chat_model_entries(&state)
+	assert(len(state.models) == 2, "expected chat selector to exclude embedding-only model")
+	assert(state.models[0].model == "chat", "expected chat-capable model to remain first")
+	assert(state.models[1].model == "all", "expected all-capability model to remain")
+	_ = t
+}
+
+@(test)
+test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	originalProvider := state.config.selectedProvider
+	originalModel := state.config.selectedModel
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			providerType = .Ollama,
+			model = strings.clone("embedding", context.allocator),
+			supportsEmbeddings = true,
+		},
+	)
+
+	app_select_config_model(&state, 0)
+	assert(
+		state.config.selectedProvider == originalProvider,
+		"expected rejected chat selection to keep provider",
+	)
+	assert(
+		state.config.selectedModel == originalModel,
+		"expected rejected chat selection to keep model",
+	)
+	assert(
+		state.status == "Selected model does not support chat tools",
+		"expected chat rejection status",
+	)
+
+	app_select_config_embedding_model(&state, 0)
+	assert(
+		state.config.embeddingModel == "embedding",
+		"expected embedding selection to accept capability",
+	)
+	_ = t
+}
+
+@(test)
 test_models_modal_render_contains_choices :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
