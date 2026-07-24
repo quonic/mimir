@@ -126,6 +126,34 @@ test_approval_safety_prompt_uses_only_command_details :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_approval_safety_display_text_compacts_model_response :: proc(t: ^testing.T) {
+	advice := approval_safety_display_text(
+		"  Safe: Reads repository status only.  \nVerdict: Safe.\n",
+		context.temp_allocator,
+	)
+	assert(
+		advice == "Safe: Reads repository status only.",
+		"expected advice to retain only its first trimmed line",
+	)
+	_ = t
+}
+
+@(test)
+test_approval_safety_display_text_truncates_at_grapheme_boundary :: proc(t: ^testing.T) {
+	repeated := strings.repeat("é", APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES, context.temp_allocator)
+	defer delete(repeated, context.temp_allocator)
+	response := strings.concatenate({"Safe: ", repeated}, context.temp_allocator)
+	defer delete(response, context.temp_allocator)
+	advice := approval_safety_display_text(response, context.temp_allocator)
+	assert(
+		unicode_grapheme_count(advice) == APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES,
+		"expected advice to be limited to the display grapheme count",
+	)
+	assert(strings.has_suffix(advice, "..."), "expected truncated advice to end with an ellipsis")
+	_ = t
+}
+
+@(test)
 test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -169,6 +197,33 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 	assert(
 		contains_string(sequence, "Safety advice: unavailable"),
 		"expected unavailable safety advice in command approval modal",
+	)
+	_ = t
+}
+
+@(test)
+test_approval_modal_renders_compact_safety_advice :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_show_approval(&state, Tool_Call{id = "run_command", command = "git status"}),
+		"expected command call to open approval modal",
+	)
+	state.approval.safety.active = false
+	state.approval.safety.unavailable = false
+	append(
+		&state.approval.safety.response,
+		"Safe: Reads repository status only.\nRepeated verbose advice.",
+	)
+	sequence := render_app_frame_sequence(&state, 24, 80, context.temp_allocator)
+	assert(
+		contains_string(sequence, "Safe: Reads repository status only."),
+		"expected approval modal to display compact safety advice",
+	)
+	assert(
+		!contains_string(sequence, "Repeated verbose advice."),
+		"expected approval modal to omit later safety advice lines",
 	)
 	_ = t
 }
@@ -1167,7 +1222,7 @@ test_thinking_spinner_hides_reasoning_and_yields_to_content :: proc(t: ^testing.
 	assert(state.historyRenderOnly, "expected thinking state to request a history-only redraw")
 	assert(
 		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
-		"assistant: " + SPINNER_FRAMES[0],
+		SPINNER_FRAMES[0],
 		"expected first spinner frame in the pending assistant entry",
 	)
 
@@ -1186,7 +1241,7 @@ test_thinking_spinner_hides_reasoning_and_yields_to_content :: proc(t: ^testing.
 	)
 	assert(
 		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
-		"assistant: Visible answer",
+		"Visible answer",
 		"expected normal content to replace the spinner",
 	)
 	_ = t
@@ -1420,7 +1475,7 @@ test_render_app_frame_contains_panels_and_status :: proc(t: ^testing.T) {
 	state.status = "Testing"
 	input_buffer_push_text(&state.input, "hello\nthere")
 
-	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
+	sequence := render_app_frame_sequence(&state, 12, 80, context.temp_allocator)
 	assert(
 		contains_string(sequence, console.clear_screen_home_sequence()),
 		"expected full frame render to clear the screen",
@@ -1428,7 +1483,7 @@ test_render_app_frame_contains_panels_and_status :: proc(t: ^testing.T) {
 	assert(contains_string(sequence, HISTORY_TITLE), "expected history panel title")
 	assert(contains_string(sequence, INPUT_TITLE), "expected input panel title")
 	assert(
-		contains_string(sequence, "system: Mimir the terminal harness is ready."),
+		contains_string(sequence, "Mimir the terminal harness is ready."),
 		"expected history text",
 	)
 	assert(contains_string(sequence, "hello"), "expected input text first line")
@@ -1446,7 +1501,7 @@ test_render_history_preserves_multiline_assistant_content :: proc(t: ^testing.T)
 
 	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
 
-	assert(contains_string(sequence, "assistant: first line"), "expected first assistant line")
+	assert(contains_string(sequence, "first line"), "expected first assistant line")
 	assert(contains_string(sequence, "second line"), "expected later assistant lines")
 	_ = t
 }
