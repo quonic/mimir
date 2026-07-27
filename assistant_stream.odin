@@ -1,3 +1,4 @@
+#+vet explicit-allocators
 package main
 
 import agent "./agent"
@@ -150,7 +151,7 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	append_history(state, .Assistant, "")
 	assistantIndex := len(state.history) - 1
 
-	workerData := new(Assistant_Stream_Worker)
+	workerData := new(Assistant_Stream_Worker, context.allocator)
 	workerData.stream = &state.stream
 	workerData.client = client
 	workerData.toolDefinitions = app_tool_definitions_for_provider(
@@ -204,7 +205,7 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 
 		if state.stream.workerData != nil {
 			app_destroy_assistant_stream_worker(state.stream.workerData)
-			free(state.stream.workerData)
+			free(state.stream.workerData, context.allocator)
 			state.stream.workerData = nil
 		}
 
@@ -274,7 +275,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	}
 	if state.stream.workerData != nil {
 		app_destroy_assistant_stream_worker(state.stream.workerData)
-		free(state.stream.workerData)
+		free(state.stream.workerData, context.allocator)
 		state.stream.workerData = nil
 	}
 	state.stream.active = false
@@ -520,7 +521,7 @@ tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	outputOwned := app_tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
-		delete(output)
+		delete(output, context.allocator)
 		output = ownedOutput
 	}
 	if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
@@ -815,7 +816,7 @@ app_sync_assistant_history_entry :: proc(state: ^App_State) -> bool {
 		return false
 	}
 	if entry.content != "" {
-		delete(entry.content)
+		delete(entry.content, context.allocator)
 	}
 	entry.content = strings.clone(partial, context.allocator)
 	entry.cachedLineWidth = 0
@@ -1010,7 +1011,7 @@ app_clear_context_window_cache :: proc(stream: ^Assistant_Stream_State) {
 
 app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
-		delete(worker.request.model)
+		delete(worker.request.model, context.allocator)
 	}
 	delete(worker.toolDefinitions)
 }
