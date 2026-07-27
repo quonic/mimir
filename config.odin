@@ -138,6 +138,24 @@ history_cache_dir :: proc(home: string, allocator := context.allocator) -> strin
 	return strings.to_string(builder)
 }
 
+config_write_decimal :: proc(builder: ^strings.Builder, value: int) {
+	if value == 0 {
+		strings.write_byte(builder, '0')
+		return
+	}
+	digits: [20]byte
+	length := 0
+	remaining := value
+	for remaining > 0 {
+		digits[length] = byte(remaining % 10) + '0'
+		length += 1
+		remaining /= 10
+	}
+	for index := length - 1; index >= 0; index -= 1 {
+		strings.write_byte(builder, digits[index])
+	}
+}
+
 input_history_path :: proc(
 	home: string,
 	workingDirectory: string,
@@ -733,7 +751,7 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		strings.write_string(&builder, ",\n      \"model\": ")
 		write_json_string(&builder, entry.model)
 		strings.write_string(&builder, ",\n      \"tokens\": ")
-		code_index_write_decimal(&builder, entry.tokens)
+		config_write_decimal(&builder, entry.tokens)
 		strings.write_string(&builder, "\n    }")
 	}
 	if len(config.contextWindows) > 0 {
