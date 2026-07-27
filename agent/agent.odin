@@ -21,6 +21,7 @@ Agent_Error :: enum int {
 	Not_Found,
 	Parent_Not_Found,
 	Parent_Not_Active,
+	Invalid_Stream_Request,
 	Tool_Resolution_Not_Found,
 	Tool_Resolution_Invalid,
 }

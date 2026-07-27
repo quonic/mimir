@@ -216,3 +216,29 @@ test_runtime_post_tool_stream_uses_a_new_assistant_buffer :: proc(t: ^testing.T)
 	assert(completeEvent.content == "second", "expected only continuation result")
 	_ = t
 }
+
+@(test)
+test_stream_request_clone_owns_messages_and_tool_definitions :: proc(t: ^testing.T) {
+	messages := []ai.Message{{role = .User, content = "inspect the project"}}
+	tools := []ai.Tool_Definition {
+		{name = "read_file", description = "Read a project file", parametersJSON = `{}`},
+	}
+	request := runtime_stream_request_clone(
+		"test-model",
+		messages,
+		tools,
+		0.2,
+		4096,
+		context.temp_allocator,
+	)
+	defer runtime_stream_request_destroy(&request, context.temp_allocator)
+
+	assert(request.model == "test-model", "expected cloned model")
+	assert(len(request.messages) == 1, "expected cloned message")
+	assert(request.messages[0].content == "inspect the project", "expected cloned message content")
+	assert(len(request.tools) == 1, "expected cloned tool")
+	assert(request.tools[0].name == "read_file", "expected cloned tool name")
+	assert(request.temperature == 0.2, "expected cloned temperature")
+	assert(request.maxTokens == 4096, "expected cloned max tokens")
+	_ = t
+}

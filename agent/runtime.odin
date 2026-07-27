@@ -13,6 +13,7 @@ Agent_Instance :: struct {
 	conversation:   [dynamic]ai.Message,
 	partialBuffer:  [dynamic]byte,
 	queuedTools:    [dynamic]Tool_Request,
+	stream:         ^Stream_Worker_State,
 	finalResult:    string,
 	pendingTool:    Tool_Request,
 	pendingToolSet: bool,
@@ -35,6 +36,7 @@ runtime_init :: proc(allocator := context.allocator) -> Runtime {
 
 runtime_destroy :: proc(runtime: ^Runtime) {
 	for &instance in runtime.instances {
+		runtime_destroy_stream(&instance)
 		agent_start_options_destroy(&instance.options, runtime.allocator)
 		for &event in instance.events {
 			agent_event_destroy(&event, runtime.allocator)
@@ -302,6 +304,9 @@ runtime_cancel_at_index :: proc(runtime: ^Runtime, index: int) -> Agent_Error {
 		if childOK && !agent_state_is_terminal(runtime.instances[childIndex].state) {
 			_ = runtime_cancel_at_index(runtime, childIndex)
 		}
+	}
+	if runtime_request_stream_cancel(instance) {
+		return .None
 	}
 	instance.state = .Canceled
 	runtime_emit_event(runtime, index, Agent_Event{type = .Canceled})

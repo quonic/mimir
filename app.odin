@@ -185,6 +185,7 @@ App_State :: struct {
 	skills:                 Skill_Registry,
 	codeIndex:              Code_Index,
 	codeIndexReady:         bool,
+	agentHost:              Agent_Host,
 	stream:                 Assistant_Stream_State,
 	toolExecution:          Tool_Execution_State,
 	models:                 [dynamic]Model_Select_Entry,
@@ -222,6 +223,7 @@ app_init_with_home :: proc(
 	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
+	state.agentHost = agent_host_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
 	state.input = input_buffer_init(allocator)
@@ -349,6 +351,7 @@ app_enter_setup :: proc(state: ^App_State, status: string) {
 
 app_destroy :: proc(state: ^App_State) {
 	app_destroy_assistant_stream(state)
+	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
 	input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
