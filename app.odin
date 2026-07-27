@@ -1878,10 +1878,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			)
 		}
 	case .Advanced:
-		append(
-			&state.configSettings,
-			Config_Setting{id = .Tool_Continuations, kind = .Text},
-		)
+		append(&state.configSettings, Config_Setting{id = .Tool_Continuations, kind = .Text})
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
@@ -2062,10 +2059,7 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	if setting.id == .Tool_Continuations {
-		input_buffer_set_text(
-			&state.configEdit,
-			fmt.tprintf("%d", state.config.toolContinuations),
-		)
+		input_buffer_set_text(&state.configEdit, fmt.tprintf("%d", state.config.toolContinuations))
 		state.configEditingSetting = setting
 		state.configEditing = true
 		state.configUTF8PendingLen = 0

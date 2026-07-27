@@ -1567,10 +1567,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	app_rebuild_config_settings(&state)
 
 	assert(len(state.configSettings) == 1, "expected one advanced setting")
-	assert(
-		state.configSettings[0].id == .Tool_Continuations,
-		"expected tool continuation setting",
-	)
+	assert(state.configSettings[0].id == .Tool_Continuations, "expected tool continuation setting")
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
 	assert(state.configEditing, "expected continuation setting edit mode")
 	input_buffer_set_text(&state.configEdit, "2500")

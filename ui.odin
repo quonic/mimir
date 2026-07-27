@@ -593,9 +593,7 @@ render_config_categories :: proc(
 		return
 	}
 	write_clipped_line(batch, region.top_row, region.left_column, width, "Categories")
-	for categoryIndex := 0;
-	    categoryIndex <= int(Config_Category.Advanced);
-	    categoryIndex += 1 {
+	for categoryIndex := 0; categoryIndex <= int(Config_Category.Advanced); categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
 		row := region.top_row + 2 + categoryIndex
 		if row > region.bottom_row {
