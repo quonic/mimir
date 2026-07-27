@@ -70,3 +70,28 @@ test_agent_host_projects_streamed_text_into_one_history_entry :: proc(t: ^testin
 	assert(state.status == "Assistant response complete", "expected completion status")
 	_ = t
 }
+
+@(test)
+test_agent_host_denies_invalid_tool_requests_and_resumes_agent :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request{id = "call-1", name = "unknown_tool", arguments = `{}`},
+		) ==
+		.None,
+		"expected tool request",
+	)
+	assert(app_poll_agent_host(&state), "expected tool event to be dispatched")
+	assert(state.status == "Tool call denied", "expected denied tool status")
+	agentState, agentOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(agentOK && agentState == .Streaming, "expected denied tool to resume the agent")
+	_ = t
+}

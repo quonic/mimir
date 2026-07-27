@@ -44,7 +44,7 @@ runtime_destroy :: proc(runtime: ^Runtime) {
 		delete(instance.events)
 		delete(instance.children)
 		for &message in instance.conversation {
-			ai.message_destroy(&message, runtime.allocator)
+			runtime_message_destroy(&message, runtime.allocator)
 		}
 		delete(instance.conversation)
 		delete(instance.partialBuffer)
@@ -57,6 +57,14 @@ runtime_destroy :: proc(runtime: ^Runtime) {
 	}
 	delete(runtime.instances)
 	runtime^ = {}
+}
+
+runtime_message_destroy :: proc(message: ^ai.Message, allocator := context.allocator) {
+	for &result in message.toolResults {
+		delete(result.content, allocator)
+		result.content = ""
+	}
+	ai.message_destroy(message, allocator)
 }
 
 runtime_start_background :: proc(
@@ -149,7 +157,7 @@ runtime_set_conversation :: proc(
 		return .Invalid_State
 	}
 	for &message in instance.conversation {
-		ai.message_destroy(&message, runtime.allocator)
+		runtime_message_destroy(&message, runtime.allocator)
 	}
 	clear(&instance.conversation)
 	for message in messages {

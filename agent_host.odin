@@ -94,8 +94,7 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 		state.historyRenderOnly = true
 		return true
 	case .Tool_Requested:
-		state.status = "Tool call awaiting dispatch"
-		return true
+		return app_dispatch_agent_tool_request(state, event)
 	case .Completed:
 		state.status = "Assistant response complete"
 		state.agentHost.historyIndex = -1
@@ -116,6 +115,48 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 		return false
 	}
 	return false
+}
+
+app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Event) -> bool {
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = event.toolRequest.id,
+			name = event.toolRequest.name,
+			arguments = event.toolRequest.arguments,
+		},
+		state.dispatcher.allocator,
+	)
+	if !callOK {
+		_ = agent.runtime_resolve_tool(
+			&state.agentHost.runtime,
+			event.agentID,
+			event.requestID,
+			.Denied,
+			"Tool call arguments are invalid.",
+		)
+		state.status = "Tool call rejected"
+		return true
+	}
+	defer tool_call_destroy(&call, state.dispatcher.allocator)
+
+	decision := tool_dispatch_decide(&state.dispatcher, call)
+	if decision == .Denied {
+		_ = agent.runtime_resolve_tool(
+			&state.agentHost.runtime,
+			event.agentID,
+			event.requestID,
+			.Denied,
+			"Permission denied.",
+		)
+		state.status = "Tool call denied"
+		return true
+	}
+	if decision == .Approval_Required {
+		state.status = "Tool call awaiting approval"
+		return true
+	}
+	state.status = "Tool call awaiting execution"
+	return true
 }
 
 app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
