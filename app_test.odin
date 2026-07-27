@@ -1,6 +1,7 @@
 package main
 
 import "ai"
+import "code_index"
 import "console"
 import "core:os"
 import "core:strings"
@@ -471,10 +472,10 @@ test_app_decodes_search_code_tool_arguments :: proc(t: ^testing.T) {
 
 @(test)
 test_app_search_code_results_json_serializes_references :: proc(t: ^testing.T) {
-	results := [1]Code_Search_Result {
+	results := [1]code_index.Code_Search_Result {
 		{id = "src/main.odin:10-20", metadata = "src/main.odin:10-20"},
 	}
-	index := Code_Index {
+	index := code_index.Code_Index {
 		projectRoot = "/project",
 	}
 	output := app_search_code_results_json(&index, results[:], context.temp_allocator)

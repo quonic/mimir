@@ -1,9 +1,9 @@
-package main
+package code_index
 
+import vdb "../vdb"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import vdb "vdb"
 
 @(test)
 test_code_index_discovers_git_project_root :: proc(t: ^testing.T) {
@@ -30,24 +30,24 @@ test_code_index_discovers_git_project_root :: proc(t: ^testing.T) {
 
 @(test)
 test_code_index_cache_path_is_model_specific :: proc(t: ^testing.T) {
-	home := "/tmp/mimir-home"
+	cacheDir := "/tmp/mimir-cache"
 	root := "/tmp/mimir-project"
 	first := code_index_cache_path(
-		home,
+		cacheDir,
 		root,
 		"ollama",
 		"nomic-embed-text",
 		context.temp_allocator,
 	)
 	second := code_index_cache_path(
-		home,
+		cacheDir,
 		root,
 		"ollama",
 		"nomic-embed-text",
 		context.temp_allocator,
 	)
 	third := code_index_cache_path(
-		home,
+		cacheDir,
 		root,
 		"ollama",
 		"mxbai-embed-large",
@@ -60,6 +60,47 @@ test_code_index_cache_path_is_model_specific :: proc(t: ^testing.T) {
 	assert(first != "", "expected cache path for configured embedding model")
 	assert(first == second, "expected deterministic cache path")
 	assert(first != third, "expected embedding model to isolate cache files")
+	_ = t
+}
+
+@(test)
+test_code_index_init_uses_caller_cache_directory :: proc(t: ^testing.T) {
+	project, projectError := os.make_directory_temp(
+		"",
+		"mimir-code-index-project-",
+		context.temp_allocator,
+	)
+	assert(projectError == nil, "expected temporary project directory")
+	defer os.remove_all(project)
+	gitDirectory := strings.concatenate({project, "/.git"}, context.temp_allocator)
+	defer delete(gitDirectory, context.temp_allocator)
+	assert(os.make_directory_all(gitDirectory) == nil, "expected git marker directory")
+
+	cacheDir := "/tmp/mimir-code-index-cache"
+	index, initError := code_index_init(
+		project,
+		cacheDir,
+		"ollama",
+		"nomic-embed-text",
+		context.temp_allocator,
+	)
+	assert(initError == .None, "expected initialization with caller cache directory")
+	defer code_index_destroy(&index, context.temp_allocator)
+	assert(index.cacheDir == cacheDir, "expected caller cache directory to be retained")
+	assert(
+		strings.starts_with(index.cachePath, cacheDir),
+		"expected cache path below caller directory",
+	)
+
+	invalid, invalidError := code_index_init(
+		project,
+		"",
+		"ollama",
+		"nomic-embed-text",
+		context.temp_allocator,
+	)
+	assert(invalidError == .Invalid_Cache, "expected empty cache directory to be rejected")
+	defer code_index_destroy(&invalid, context.temp_allocator)
 	_ = t
 }
 
@@ -250,11 +291,21 @@ test_code_index_reads_bounded_result_excerpt :: proc(t: ^testing.T) {
 
 @(test)
 test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
-	home, homeError := os.make_directory_temp("", "mimir-code-index-home-", context.temp_allocator)
-	assert(homeError == nil, "expected temporary home directory")
-	defer os.remove_all(home)
+	cacheDir, cacheDirError := os.make_directory_temp(
+		"",
+		"mimir-code-index-cache-",
+		context.temp_allocator,
+	)
+	assert(cacheDirError == nil, "expected temporary cache directory")
+	defer os.remove_all(cacheDir)
 
-	project := strings.concatenate({home, "/project"}, context.temp_allocator)
+	project, projectError := os.make_directory_temp(
+		"",
+		"mimir-code-index-project-",
+		context.temp_allocator,
+	)
+	assert(projectError == nil, "expected temporary project directory")
+	defer os.remove_all(project)
 	defer delete(project, context.temp_allocator)
 	gitDirectory := strings.concatenate({project, "/.git"}, context.temp_allocator)
 	defer delete(gitDirectory, context.temp_allocator)
@@ -262,7 +313,7 @@ test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
 
 	index, initError := code_index_init(
 		project,
-		home,
+		cacheDir,
 		"ollama",
 		"nomic-embed-text",
 		context.temp_allocator,
@@ -282,7 +333,7 @@ test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
 
 	loaded, loadedInitError := code_index_init(
 		project,
-		home,
+		cacheDir,
 		"ollama",
 		"nomic-embed-text",
 		context.temp_allocator,

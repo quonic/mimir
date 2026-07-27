@@ -3,6 +3,7 @@ package main
 
 import agent "./agent"
 import "ai"
+import "code_index"
 import "console"
 import "core:c"
 import "core:fmt"
@@ -187,7 +188,7 @@ App_State :: struct {
 	approval:               Approval_State,
 	mcp:                    MCP_Registry,
 	skills:                 Skill_Registry,
-	codeIndex:              Code_Index,
+	codeIndex:              code_index.Code_Index,
 	codeIndexReady:         bool,
 	agentHost:              Agent_Host,
 	stream:                 Assistant_Stream_State,
@@ -375,7 +376,7 @@ app_destroy :: proc(state: ^App_State) {
 		tool_dispatcher_destroy(&state.dispatcher)
 	}
 	if state.codeIndexReady {
-		code_index_destroy(&state.codeIndex, context.allocator)
+		code_index.code_index_destroy(&state.codeIndex, context.allocator)
 	}
 	if state.configStringsOwned {
 		config_destroy(&state.config)
@@ -2481,7 +2482,7 @@ app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 
 app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator) {
 	if state.codeIndexReady {
-		code_index_destroy(&state.codeIndex, allocator)
+		code_index.code_index_destroy(&state.codeIndex, allocator)
 		state.codeIndexReady = false
 	}
 	if state.configHome == "" ||
@@ -2491,9 +2492,11 @@ app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator
 		return
 	}
 
-	index, initError := code_index_init(
+	cacheDir := history_cache_dir(state.configHome, allocator)
+	defer delete(cacheDir, allocator)
+	index, initError := code_index.code_index_init(
 		state.workingDirectory,
-		state.configHome,
+		cacheDir,
 		state.config.embeddingProvider,
 		state.config.embeddingModel,
 		allocator,
@@ -2503,7 +2506,7 @@ app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator
 	}
 	state.codeIndex = index
 	state.codeIndexReady = true
-	_ = code_index_load(&state.codeIndex, allocator)
+	_ = code_index.code_index_load(&state.codeIndex, allocator)
 }
 
 app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
@@ -2537,17 +2540,17 @@ app_ensure_code_index :: proc(state: ^App_State, allocator := context.allocator)
 	if clientError != .None {
 		return clientError
 	}
-	rebuildError := code_index_rebuild(
+	rebuildError := code_index.code_index_rebuild(
 		&state.codeIndex,
 		client,
-		CODE_INDEX_DEFAULT_CHUNK_LINES,
-		CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
+		code_index.CODE_INDEX_DEFAULT_CHUNK_LINES,
+		code_index.CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
 		allocator,
 	)
 	if rebuildError != .None {
 		return rebuildError
 	}
-	if code_index_save(&state.codeIndex) != .None {
+	if code_index.code_index_save(&state.codeIndex) != .None {
 		return .Provider_Error
 	}
 	return .None
@@ -2559,10 +2562,10 @@ app_search_code :: proc(
 	maximumResults: int,
 	allocator := context.allocator,
 ) -> (
-	[dynamic]Code_Search_Result,
+	[dynamic]code_index.Code_Search_Result,
 	ai.AI_Error,
 ) {
-	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
 	ensureError := app_ensure_code_index(state, allocator)
 	if ensureError != .None {
 		return results, ensureError
@@ -2572,7 +2575,13 @@ app_search_code :: proc(
 		return results, clientError
 	}
 	delete(results)
-	return code_index_search_text(&state.codeIndex, client, query, maximumResults, allocator)
+	return code_index.code_index_search_text(
+		&state.codeIndex,
+		client,
+		query,
+		maximumResults,
+		allocator,
+	)
 }
 
 app_clear_model_entries :: proc(state: ^App_State) {

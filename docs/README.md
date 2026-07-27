@@ -4,3 +4,4 @@
 - [Architecture](architecture.md): terminal application behavior and current implementation details.
 - [Tools, MCP, and Skills](tools-mcp-skills.md): tool and skill registries and MCP status.
 - [AI Package](packages/ai.md): chat client interfaces and integration testing.
+- [Code Index Package](../code_index/README.md): workspace source indexing and semantic search.

@@ -1,10 +1,10 @@
-package main
+package code_index
 
-import "ai"
+import ai "../ai"
+import vdb "../vdb"
 import "core:hash"
 import "core:os"
 import "core:strings"
-import vdb "vdb"
 
 CODE_INDEX_SCHEMA_VERSION :: "1"
 CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
@@ -59,7 +59,7 @@ Code_Source :: struct {
 }
 
 code_index_init :: proc(
-	workingDirectory, home, embeddingProvider, embeddingModel: string,
+	workingDirectory, cacheDir, embeddingProvider, embeddingModel: string,
 	allocator := context.allocator,
 ) -> (
 	Code_Index,
@@ -71,18 +71,17 @@ code_index_init :: proc(
 	}
 	defer delete(projectRoot, allocator)
 
-	cacheDir := history_cache_dir(home, allocator)
+	if cacheDir == "" {
+		return Code_Index{}, .Invalid_Cache
+	}
 	cachePath := code_index_cache_path(
-		home,
+		cacheDir,
 		projectRoot,
 		embeddingProvider,
 		embeddingModel,
 		allocator,
 	)
-	if cacheDir == "" || cachePath == "" {
-		if cacheDir != "" {
-			delete(cacheDir, allocator)
-		}
+	if cachePath == "" {
 		return Code_Index{}, .Invalid_Cache
 	}
 
@@ -90,7 +89,7 @@ code_index_init :: proc(
 			projectRoot = strings.clone(projectRoot, allocator),
 			embeddingProvider = strings.clone(embeddingProvider, allocator),
 			embeddingModel = strings.clone(embeddingModel, allocator),
-			cacheDir = cacheDir,
+			cacheDir = strings.clone(cacheDir, allocator),
 			cachePath = cachePath,
 		},
 		.None
@@ -115,7 +114,7 @@ code_index_project_root :: proc(
 	workingDirectory: string,
 	allocator := context.allocator,
 ) -> string {
-	normalized, normalizedOK := permission_normalize_absolute_path(workingDirectory, allocator)
+	normalized, normalizedOK := code_index_normalize_absolute_path(workingDirectory, allocator)
 	if !normalizedOK {
 		return ""
 	}
@@ -153,17 +152,12 @@ code_index_parent_path :: proc(path: string, allocator := context.allocator) -> 
 }
 
 code_index_cache_path :: proc(
-	home, projectRoot, embeddingProvider, embeddingModel: string,
+	cacheDir, projectRoot, embeddingProvider, embeddingModel: string,
 	allocator := context.allocator,
 ) -> string {
-	cacheDir := history_cache_dir(home, allocator)
 	if cacheDir == "" || projectRoot == "" || embeddingProvider == "" || embeddingModel == "" {
-		if cacheDir != "" {
-			delete(cacheDir, allocator)
-		}
 		return ""
 	}
-	defer delete(cacheDir, allocator)
 
 	identity := strings.concatenate(
 		{
@@ -319,7 +313,7 @@ code_index_relative_path :: proc(
 	projectRoot, path: string,
 	allocator := context.allocator,
 ) -> string {
-	if !permission_path_is_within_project(projectRoot, path) || len(path) <= len(projectRoot) {
+	if !code_index_path_is_within_project(projectRoot, path) || len(path) <= len(projectRoot) {
 		return ""
 	}
 	return strings.clone(path[len(projectRoot) + 1:], allocator)
@@ -697,12 +691,12 @@ code_index_search_result_excerpt :: proc(
 	if !locationOK {
 		return ""
 	}
-	path, pathOK := permission_resolve_project_path(
+	path, pathOK := code_index_resolve_project_path(
 		index.projectRoot,
 		location.relativePath,
 		allocator,
 	)
-	if !pathOK || !permission_path_is_within_project(index.projectRoot, path) {
+	if !pathOK || !code_index_path_is_within_project(index.projectRoot, path) {
 		if path != "" {
 			delete(path, allocator)
 		}
@@ -810,4 +804,72 @@ code_index_save :: proc(index: ^Code_Index) -> Code_Index_Error {
 	}
 	index.dirty = false
 	return .None
+}
+
+code_index_normalize_absolute_path :: proc(
+	path: string,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
+	if len(path) == 0 {
+		return "", false
+	}
+	when ODIN_OS != .Windows {
+		if path[0] != '/' {
+			return "", false
+		}
+	}
+
+	parts := strings.split(path, "/", allocator)
+	defer delete(parts, allocator)
+	segments := make([dynamic]string, 0, len(parts), allocator)
+	defer delete(segments)
+	for part in parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			return "", false
+		}
+		append(&segments, part)
+	}
+	joined := strings.join(segments[:], "/", allocator)
+	defer delete(joined, allocator)
+	return strings.concatenate({"/", joined}, allocator), true
+}
+
+code_index_resolve_project_path :: proc(
+	projectRoot, requestedPath: string,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
+	root, rootOK := code_index_normalize_absolute_path(projectRoot, allocator)
+	if !rootOK || requestedPath == "" {
+		return "", false
+	}
+	defer delete(root, allocator)
+	if requestedPath[0] == '/' {
+		return code_index_normalize_absolute_path(requestedPath, allocator)
+	}
+	joined := strings.concatenate({root, "/", requestedPath}, allocator)
+	defer delete(joined, allocator)
+	return code_index_normalize_absolute_path(joined, allocator)
+}
+
+code_index_path_is_within_project :: proc(projectRoot, resolvedPath: string) -> bool {
+	if projectRoot == "/" {
+		return len(resolvedPath) > 0 && resolvedPath[0] == '/'
+	}
+	if resolvedPath == projectRoot {
+		return true
+	}
+	return(
+		len(resolvedPath) > len(projectRoot) &&
+		strings.starts_with(resolvedPath, projectRoot) &&
+		resolvedPath[len(projectRoot)] == '/' \
+	)
 }
