@@ -127,9 +127,7 @@ tool_result_destroy :: proc(result: ^Tool_Result, allocator := context.allocator
 		delete(result.toolCallID, allocator)
 	}
 	if result.content != "" {
-		// Don't delete this string, causes a double free error.
-		// delete(result.content, allocator)
-		result.content = ""
+		delete(result.content, allocator)
 	}
 	result^ = {}
 }

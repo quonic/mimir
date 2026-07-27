@@ -3,7 +3,6 @@ package main
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
-import "core:strconv"
 import "core:strings"
 
 // All tools take in strings and output strings.
@@ -54,6 +53,7 @@ run_command_tool_proc := proc(
 	proc_desc := os.Process_Desc {
 		command = {shell, "-c", command},
 	}
+	workingDirectoryOwned := false
 	if working_directory == "" {
 		{
 			gwd_err: os.Error
@@ -64,6 +64,7 @@ run_command_tool_proc := proc(
 					gwd_err,
 				)
 			}
+			workingDirectoryOwned = true
 		}
 	} else if !os.is_directory(working_directory) {
 		return fmt.aprintf(
@@ -72,6 +73,9 @@ run_command_tool_proc := proc(
 		)
 	} else {
 		proc_desc.working_dir = working_directory
+	}
+	defer if workingDirectoryOwned {
+		delete(proc_desc.working_dir, context.allocator)
 	}
 	proc_desc.env, _ = os.environ(context.allocator)
 	defer {

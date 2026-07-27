@@ -1,5 +1,7 @@
+#+vet explicit-allocators
 package main
 
+import agent "./agent"
 import "ai"
 import "console"
 import "core:c"
@@ -37,14 +39,16 @@ Approval_Input_State :: enum int {
 }
 
 Approval_State :: struct {
-	call:          Tool_Call,
-	callOwned:     bool,
-	prepared:      Tool_Dispatch_Result,
-	preparedOwned: bool,
-	historyIndex:  int,
-	safety:        Approval_Safety_State,
-	choice:        Approval_Choice,
-	input:         Approval_Input_State,
+	call:           Tool_Call,
+	callOwned:      bool,
+	prepared:       Tool_Dispatch_Result,
+	preparedOwned:  bool,
+	historyIndex:   int,
+	agentID:        agent.Agent_ID,
+	agentRequestID: string,
+	safety:         Approval_Safety_State,
+	choice:         Approval_Choice,
+	input:          Approval_Input_State,
 }
 
 App_Setup_Step :: enum int {
@@ -185,6 +189,7 @@ App_State :: struct {
 	skills:                 Skill_Registry,
 	codeIndex:              Code_Index,
 	codeIndexReady:         bool,
+	agentHost:              Agent_Host,
 	stream:                 Assistant_Stream_State,
 	toolExecution:          Tool_Execution_State,
 	models:                 [dynamic]Model_Select_Entry,
@@ -222,6 +227,7 @@ app_init_with_home :: proc(
 	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
 	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
 	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
+	state.agentHost = agent_host_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
 	state.input = input_buffer_init(allocator)
@@ -349,18 +355,19 @@ app_enter_setup :: proc(state: ^App_State, status: string) {
 
 app_destroy :: proc(state: ^App_State) {
 	app_destroy_assistant_stream(state)
+	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
 	input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
 	for entry in state.inputHistory {
-		delete(entry)
+		delete(entry, state.stream.bufferAllocator)
 	}
 	delete(state.inputHistory)
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft)
+		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
 	}
 	for entry in state.history {
-		delete(entry.content)
+		delete(entry.content, context.allocator)
 	}
 	delete(state.history)
 	app_clear_approval(state)
@@ -391,37 +398,37 @@ app_destroy :: proc(state: ^App_State) {
 		delete(state.config.permissionGrants)
 	}
 	ai.set_raw_http_log_home("")
-	delete(state.configHome)
+	delete(state.configHome, context.allocator)
 	if state.workingDirectory != "" {
-		delete(state.workingDirectory)
+		delete(state.workingDirectory, context.allocator)
 	}
 	if state.setupEndpoint != "" {
-		delete(state.setupEndpoint)
+		delete(state.setupEndpoint, context.allocator)
 	}
 	if state.setupAPIKey != "" {
-		delete(state.setupAPIKey)
+		delete(state.setupAPIKey, context.allocator)
 	}
 	delete(state.tools.definitions)
 	delete(state.mcp.servers)
 	delete(state.skills.skills)
 	if !state.configStringsOwned {
 		if state.modelProviderOwned && state.config.selectedProvider != "" {
-			delete(state.config.selectedProvider)
+			delete(state.config.selectedProvider, context.allocator)
 		}
 		if state.modelNameOwned && state.config.selectedModel != "" {
-			delete(state.config.selectedModel)
+			delete(state.config.selectedModel, context.allocator)
 		}
 		if state.embeddingProviderOwned && state.config.embeddingProvider != "" {
-			delete(state.config.embeddingProvider)
+			delete(state.config.embeddingProvider, context.allocator)
 		}
 		if state.embeddingModelOwned && state.config.embeddingModel != "" {
-			delete(state.config.embeddingModel)
+			delete(state.config.embeddingModel, context.allocator)
 		}
 		if state.safetyProviderOwned && state.config.safetyProvider != "" {
-			delete(state.config.safetyProvider)
+			delete(state.config.safetyProvider, context.allocator)
 		}
 		if state.safetyModelOwned && state.config.safetyModel != "" {
-			delete(state.config.safetyModel)
+			delete(state.config.safetyModel, context.allocator)
 		}
 	}
 	app_clear_model_entries(state)
@@ -433,10 +440,10 @@ app_destroy :: proc(state: ^App_State) {
 
 run_app :: proc() {
 	home, homeErr := os.user_home_dir(context.temp_allocator)
-	state := app_init_with_home("", false)
+	state := app_init_with_home("", false, context.allocator)
 	if homeErr == nil {
 		app_destroy(&state)
-		state = app_init_with_home(home, true)
+		state = app_init_with_home(home, true, context.allocator)
 	}
 	defer app_destroy(&state)
 
@@ -586,7 +593,7 @@ app_update_tool_history :: proc(state: ^App_State, historyIndex: int, toolID, st
 	}
 	entry := &state.history[historyIndex]
 	if entry.content != "" {
-		delete(entry.content)
+		delete(entry.content, context.allocator)
 	}
 	entry.content = strings.clone(fmt.tprintf("%s (%s)", toolID, status), context.allocator)
 	entry.cachedLineWidth = 0
@@ -978,9 +985,9 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 			return true
 		}
 		if app_has_history_selection(state) {
-			selected := app_history_selection_text(state)
+			selected := app_history_selection_text(state, context.allocator)
 			_, _ = console.osc52_copy_to_clipboard(selected)
-			delete(selected)
+			delete(selected, context.allocator)
 			state.status = "Copied history selection"
 			return true
 		}
@@ -1048,6 +1055,7 @@ app_clear_approval :: proc(state: ^App_State) {
 	if state.approval.preparedOwned {
 		tool_dispatch_result_destroy(&state.approval.prepared, state.dispatcher.allocator)
 	}
+	delete(state.approval.agentRequestID, state.dispatcher.allocator)
 	state.approval = {}
 }
 
@@ -1139,6 +1147,19 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if choice == .Deny {
 		output := "Permission denied."
+		if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
+			_ = agent.runtime_resolve_tool(
+				&state.agentHost.runtime,
+				state.approval.agentID,
+				state.approval.agentRequestID,
+				.Denied,
+				output,
+			)
+			state.status = "Tool call denied"
+			state.mode = .Chat
+			app_clear_approval(state)
+			return
+		}
 		app_update_tool_history(
 			state,
 			state.approval.historyIndex,
@@ -1199,7 +1220,18 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			"running",
 		)
 	}
-	started := app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
+	started := false
+	if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
+		started = app_start_agent_tool_execution(
+			state,
+			state.approval.call,
+			state.approval.historyIndex,
+			state.approval.agentID,
+			state.approval.agentRequestID,
+		)
+	} else {
+		started = app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
+	}
 	state.mode = .Chat
 	app_clear_approval(state)
 	if !started {
@@ -1324,9 +1356,9 @@ app_copy_active_selection :: proc(state: ^App_State) -> bool {
 		return true
 	}
 	if app_has_history_selection(state) {
-		selected := app_history_selection_text(state)
+		selected := app_history_selection_text(state, context.allocator)
 		_, _ = console.osc52_copy_to_clipboard(selected)
-		delete(selected)
+		delete(selected, context.allocator)
 		state.status = "Copied history selection"
 		return true
 	}
@@ -1490,7 +1522,7 @@ app_record_input_history :: proc(state: ^App_State, text: string) {
 		app_reset_input_history_browse(state)
 		return
 	}
-	append(&state.inputHistory, strings.clone(text, context.allocator))
+	append(&state.inputHistory, strings.clone(text, state.stream.bufferAllocator))
 	app_reset_input_history_browse(state)
 	if state.configHome != "" && state.workingDirectory != "" {
 		if save_input_history_to_file(
@@ -1523,13 +1555,14 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 
 app_clear_input_history :: proc(state: ^App_State) {
 	for &entry in state.inputHistory {
+		delete(entry, state.stream.bufferAllocator)
 		entry = ""
 	}
 	clear(&state.inputHistory)
 	app_reset_input_history_browse(state)
 	app_destroy_assistant_stream(state)
 	for &entry in state.history {
-		delete(entry.content)
+		delete(entry.content, context.allocator)
 		entry = {}
 	}
 	clear(&state.history)
@@ -1550,7 +1583,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 app_reset_input_history_browse :: proc(state: ^App_State) {
 	state.inputHistoryCursor = -1
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft)
+		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
 		state.inputHistoryDraft = ""
 	}
 }
@@ -1563,7 +1596,7 @@ app_input_history_previous :: proc(state: ^App_State) -> bool {
 	if state.inputHistoryCursor < 0 {
 		current := input_buffer_string(&state.input)
 		if current != "" {
-			state.inputHistoryDraft = strings.clone(current, context.allocator)
+			state.inputHistoryDraft = strings.clone(current, state.stream.bufferAllocator)
 		}
 		state.inputHistoryCursor = len(state.inputHistory) - 1
 	} else if state.inputHistoryCursor > 0 {
@@ -1594,7 +1627,7 @@ app_input_history_next :: proc(state: ^App_State) -> bool {
 
 app_submit_input :: proc(state: ^App_State) {
 	text := input_buffer_submit(&state.input, context.allocator)
-	defer delete(text)
+	defer delete(text, context.allocator)
 	if state.mode == .Setup {
 		app_submit_setup_input(state, text)
 		return
@@ -1652,14 +1685,14 @@ app_submit_setup_input :: proc(state: ^App_State, text: string) {
 			endpoint = DEFAULT_CONFIG_ENDPOINT
 		}
 		if state.setupEndpoint != "" {
-			delete(state.setupEndpoint)
+			delete(state.setupEndpoint, context.allocator)
 		}
 		state.setupEndpoint = strings.clone(endpoint, context.allocator)
 		state.setupStep = .API_Key
 		state.status = "Setup: enter optional API key, or press Enter"
 	case .API_Key:
 		if state.setupAPIKey != "" {
-			delete(state.setupAPIKey)
+			delete(state.setupAPIKey, context.allocator)
 		}
 		state.setupAPIKey = strings.clone(text, context.allocator)
 		app_complete_setup(state)
@@ -1673,7 +1706,7 @@ app_complete_setup :: proc(state: ^App_State) {
 		state.status = "Setup: Ollama unavailable; enter endpoint to retry"
 		return
 	}
-	defer ai.models_destroy(&models)
+	defer ai.models_destroy(&models, context.allocator)
 
 	delete(state.config.providers)
 	delete(state.config.mcpServers)
@@ -1806,7 +1839,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			Config_Setting{id = .Remove_Provider, kind = .Button, providerIndex = providerIndex},
 		)
 	case .Chat_Model:
-		app_rebuild_model_entries(state)
+		app_rebuild_model_entries(state, context.allocator)
 		for _, index in state.models {
 			if !app_model_entry_supports_chat(state.models[index]) {
 				continue
@@ -1817,7 +1850,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			)
 		}
 	case .Embedding_Model:
-		app_rebuild_model_entries(state)
+		app_rebuild_model_entries(state, context.allocator)
 		for _, index in state.models {
 			if app_model_entry_supports_embeddings(state.models[index]) {
 				append(
@@ -1831,7 +1864,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			}
 		}
 	case .Safety_Model:
-		app_rebuild_model_entries(state)
+		app_rebuild_model_entries(state, context.allocator)
 		for _, index in state.models {
 			if !app_model_entry_supports_chat(state.models[index]) {
 				continue
@@ -2140,7 +2173,7 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		state.config.providers[setting.providerIndex].nameOwned = true
 		if state.config.selectedProvider == oldName {
 			if state.modelProviderOwned && state.config.selectedProvider != "" {
-				delete(state.config.selectedProvider)
+				delete(state.config.selectedProvider, context.allocator)
 			}
 			state.config.selectedProvider = strings.clone(text, context.allocator)
 			state.modelProviderOwned = true
@@ -2148,7 +2181,7 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		if state.config.safetyProvider == oldName {
 			if (state.configStringsOwned || state.safetyProviderOwned) &&
 			   state.config.safetyProvider != "" {
-				delete(state.config.safetyProvider)
+				delete(state.config.safetyProvider, context.allocator)
 			}
 			state.config.safetyProvider = strings.clone(text, context.allocator)
 			state.safetyProviderOwned = true
@@ -2191,7 +2224,7 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		state.config.providers[setting.providerIndex].modelOwned = true
 		if state.config.providers[setting.providerIndex].name == state.config.selectedProvider {
 			if state.modelNameOwned && state.config.selectedModel != "" {
-				delete(state.config.selectedModel)
+				delete(state.config.selectedModel, context.allocator)
 			}
 			state.config.selectedModel = strings.clone(text, context.allocator)
 			state.modelNameOwned = true
@@ -2288,7 +2321,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		state.status = "Provider model refresh failed"
 		return
 	}
-	defer ai.models_destroy(&models)
+	defer ai.models_destroy(&models, context.allocator)
 	contextClient, contextClientErr := ai.new_client_with_endpoint(
 		.Ollama,
 		provider.endpoint,
@@ -2357,10 +2390,10 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 		return
 	}
 	if state.modelProviderOwned && state.config.selectedProvider != "" {
-		delete(state.config.selectedProvider)
+		delete(state.config.selectedProvider, context.allocator)
 	}
 	if state.modelNameOwned && state.config.selectedModel != "" {
-		delete(state.config.selectedModel)
+		delete(state.config.selectedModel, context.allocator)
 	}
 	state.config.selectedProvider = strings.clone(entry.providerName, context.allocator)
 	state.config.selectedModel = strings.clone(entry.model, context.allocator)
@@ -2398,10 +2431,10 @@ app_select_config_embedding_model :: proc(state: ^App_State, modelIndex: int) {
 		return
 	}
 	if state.embeddingProviderOwned && state.config.embeddingProvider != "" {
-		delete(state.config.embeddingProvider)
+		delete(state.config.embeddingProvider, context.allocator)
 	}
 	if state.embeddingModelOwned && state.config.embeddingModel != "" {
-		delete(state.config.embeddingModel)
+		delete(state.config.embeddingModel, context.allocator)
 	}
 	state.config.embeddingProvider = strings.clone(entry.providerName, context.allocator)
 	state.config.embeddingModel = strings.clone(entry.model, context.allocator)
@@ -2422,10 +2455,10 @@ app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
 	}
 	if (state.configStringsOwned || state.safetyProviderOwned) &&
 	   state.config.safetyProvider != "" {
-		delete(state.config.safetyProvider)
+		delete(state.config.safetyProvider, context.allocator)
 	}
 	if (state.configStringsOwned || state.safetyModelOwned) && state.config.safetyModel != "" {
-		delete(state.config.safetyModel)
+		delete(state.config.safetyModel, context.allocator)
 	}
 	state.config.safetyProvider = strings.clone(entry.providerName, context.allocator)
 	state.config.safetyModel = strings.clone(entry.model, context.allocator)
@@ -2436,13 +2469,13 @@ app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
 
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 	ai.clear_interfaces()
-	register_config_interfaces(state.config, false)
-	app_rebuild_model_entries(state)
+	register_config_interfaces(state.config, false, context.allocator)
+	app_rebuild_model_entries(state, context.allocator)
 	if state.configHome != "" && save_config_to_file(state.configHome, state.config) != .None {
 		state.status = "Config changed; save failed"
 		return
 	}
-	app_rebuild_code_index(state)
+	app_rebuild_code_index(state, context.allocator)
 	state.status = successStatus
 }
 
@@ -2544,8 +2577,8 @@ app_search_code :: proc(
 
 app_clear_model_entries :: proc(state: ^App_State) {
 	for entry in state.models {
-		delete(entry.providerName)
-		delete(entry.model)
+		delete(entry.providerName, context.allocator)
+		delete(entry.model, context.allocator)
 	}
 	clear(&state.models)
 }

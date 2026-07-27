@@ -29,6 +29,7 @@ set_bracketed_paste_mode :: proc(enabled: bool) -> (int, io.Error) {
 
 osc52_clipboard_sequence :: proc(text: string, allocator := context.allocator) -> string {
 	encoded := base64.encode(transmute([]byte)text, allocator = allocator)
+	defer delete(encoded, allocator)
 	builder: strings.Builder
 	strings.builder_init(&builder, allocator)
 	strings.write_string(&builder, escape + "]52;c;")
@@ -38,7 +39,9 @@ osc52_clipboard_sequence :: proc(text: string, allocator := context.allocator) -
 }
 
 osc52_copy_to_clipboard :: proc(text: string) -> (int, io.Error) {
-	return write(osc52_clipboard_sequence(text))
+	sequence := osc52_clipboard_sequence(text)
+	defer delete(sequence)
+	return write(sequence)
 }
 
 set_autowrap_sequence :: proc(enabled: bool) -> string {

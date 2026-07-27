@@ -1,5 +1,7 @@
+#+vet explicit-allocators
 package main
 
+import agent "./agent"
 import "ai"
 import "core:encoding/json"
 import "core:fmt"
@@ -43,16 +45,18 @@ Assistant_Stream_State :: struct {
 }
 
 Tool_Execution_State :: struct {
-	mutex:        sync.Mutex,
-	allocator:    mem.Allocator,
-	worker:       ^thread.Thread,
-	app:          ^App_State,
-	call:         Tool_Call,
-	result:       string,
-	resultOwned:  bool,
-	historyIndex: int,
-	active:       bool,
-	finished:     bool,
+	mutex:          sync.Mutex,
+	allocator:      mem.Allocator,
+	worker:         ^thread.Thread,
+	app:            ^App_State,
+	call:           Tool_Call,
+	result:         string,
+	resultOwned:    bool,
+	historyIndex:   int,
+	agentID:        agent.Agent_ID,
+	agentRequestID: string,
+	active:         bool,
+	finished:       bool,
 }
 
 Context_Window_Cache_Entry :: struct {
@@ -147,7 +151,7 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	append_history(state, .Assistant, "")
 	assistantIndex := len(state.history) - 1
 
-	workerData := new(Assistant_Stream_Worker)
+	workerData := new(Assistant_Stream_Worker, context.allocator)
 	workerData.stream = &state.stream
 	workerData.client = client
 	workerData.toolDefinitions = app_tool_definitions_for_provider(
@@ -201,7 +205,7 @@ app_poll_assistant_stream :: proc(state: ^App_State) -> bool {
 
 		if state.stream.workerData != nil {
 			app_destroy_assistant_stream_worker(state.stream.workerData)
-			free(state.stream.workerData)
+			free(state.stream.workerData, context.allocator)
 			state.stream.workerData = nil
 		}
 
@@ -271,7 +275,7 @@ app_destroy_assistant_stream :: proc(state: ^App_State) {
 	}
 	if state.stream.workerData != nil {
 		app_destroy_assistant_stream_worker(state.stream.workerData)
-		free(state.stream.workerData)
+		free(state.stream.workerData, context.allocator)
 		state.stream.workerData = nil
 	}
 	state.stream.active = false
@@ -293,6 +297,7 @@ app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
 	if execution.resultOwned {
 		delete(execution.result, execution.allocator)
 	}
+	delete(execution.agentRequestID, execution.allocator)
 	execution^ = {}
 }
 
@@ -456,6 +461,42 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 }
 
 app_start_tool_execution :: proc(state: ^App_State, call: Tool_Call, historyIndex: int) -> bool {
+	return app_start_tool_execution_for_agent(state, call, historyIndex, agent.Agent_ID(0), "")
+}
+
+app_start_agent_tool_execution :: proc(
+	state: ^App_State,
+	call: Tool_Call,
+	historyIndex: int,
+	agentID: agent.Agent_ID,
+	requestID: string,
+) -> bool {
+	if agent.agent_id_is_none(agentID) || requestID == "" {
+		return false
+	}
+	if agent.runtime_resolve_tool(&state.agentHost.runtime, agentID, requestID, .Allowed, "") !=
+	   .None {
+		return false
+	}
+	started := app_start_tool_execution_for_agent(state, call, historyIndex, agentID, requestID)
+	if !started {
+		_ = agent.runtime_finish_tool(
+			&state.agentHost.runtime,
+			agentID,
+			"Tool call could not start.",
+			true,
+		)
+	}
+	return started
+}
+
+app_start_tool_execution_for_agent :: proc(
+	state: ^App_State,
+	call: Tool_Call,
+	historyIndex: int,
+	agentID: agent.Agent_ID,
+	requestID: string,
+) -> bool {
 	execution := &state.toolExecution
 	if execution.active || call.id == "" {
 		return false
@@ -463,6 +504,8 @@ app_start_tool_execution :: proc(state: ^App_State, call: Tool_Call, historyInde
 	execution.app = state
 	execution.call = tool_call_clone(call, execution.allocator)
 	execution.historyIndex = historyIndex
+	execution.agentID = agentID
+	execution.agentRequestID = strings.clone(requestID, execution.allocator)
 	execution.active = true
 	execution.finished = false
 	execution.worker = thread.create(tool_execution_worker_proc)
@@ -478,7 +521,7 @@ tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	outputOwned := app_tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
-		delete(output)
+		delete(output, context.allocator)
 		output = ownedOutput
 	}
 	if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {
@@ -510,20 +553,29 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	outputOwned := execution.resultOwned
 	toolCallID := execution.call.callID
 	toolID := execution.call.id
+	agentID := execution.agentID
+	agentRequestID := execution.agentRequestID
 	isError := app_tool_output_is_error(output)
 	if isError {
 		app_update_tool_history(state, execution.historyIndex, toolID, "failed")
 	} else {
 		app_update_tool_history(state, execution.historyIndex, toolID, "completed")
 	}
-	app_record_tool_execution_result(state, toolCallID, output)
+	if !agent.agent_id_is_none(agentID) && agentRequestID != "" {
+		_ = agent.runtime_finish_tool(&state.agentHost.runtime, agentID, output, isError)
+	} else {
+		app_record_tool_execution_result(state, toolCallID, output)
+	}
 	app_destroy_tool_output_if_owned(output, outputOwned, execution.allocator)
 	tool_call_destroy(&execution.call, execution.allocator)
+	delete(execution.agentRequestID, execution.allocator)
 	execution.call = {}
 	execution.result = ""
 	execution.resultOwned = false
 	execution.app = nil
 	execution.historyIndex = -1
+	execution.agentID = agent.Agent_ID(0)
+	execution.agentRequestID = ""
 	execution.active = false
 	execution.finished = false
 	if isError {
@@ -531,7 +583,9 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	} else {
 		state.status = "Tool call completed"
 	}
-	app_start_tool_continuation_if_ready(state)
+	if agent.agent_id_is_none(agentID) || agentRequestID == "" {
+		app_start_tool_continuation_if_ready(state)
+	}
 	return true
 }
 
@@ -762,7 +816,7 @@ app_sync_assistant_history_entry :: proc(state: ^App_State) -> bool {
 		return false
 	}
 	if entry.content != "" {
-		delete(entry.content)
+		delete(entry.content, context.allocator)
 	}
 	entry.content = strings.clone(partial, context.allocator)
 	entry.cachedLineWidth = 0
@@ -957,7 +1011,7 @@ app_clear_context_window_cache :: proc(stream: ^Assistant_Stream_State) {
 
 app_destroy_assistant_stream_worker :: proc(worker: ^Assistant_Stream_Worker) {
 	if worker.request.model != "" {
-		delete(worker.request.model)
+		delete(worker.request.model, context.allocator)
 	}
 	delete(worker.toolDefinitions)
 }

@@ -116,6 +116,7 @@ config_dir :: proc(home: string, allocator := context.allocator) -> string {
 
 config_path :: proc(home: string, allocator := context.allocator) -> string {
 	dir := config_dir(home, allocator)
+	defer delete(dir, allocator)
 	if dir == "" {
 		return ""
 	}
@@ -143,6 +144,7 @@ input_history_path :: proc(
 	allocator := context.allocator,
 ) -> string {
 	dir := history_cache_dir(home, allocator)
+	defer delete(dir, allocator)
 	if dir == "" || workingDirectory == "" {
 		return ""
 	}
@@ -150,6 +152,7 @@ input_history_path :: proc(
 		"%s/history-%016x.json",
 		dir,
 		hash.fnv64a(transmute([]byte)workingDirectory),
+		allocator = allocator,
 	)
 }
 
@@ -526,6 +529,7 @@ load_config_from_file :: proc(
 	Config_Error,
 ) {
 	path := config_path(home, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
 	if path == "" {
 		return Mimir_Config{}, .Invalid_Home
 	}
@@ -553,6 +557,7 @@ load_input_history_from_file :: proc(
 	History_Error,
 ) {
 	path := input_history_path(home, workingDirectory, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
 	if path == "" {
 		return nil, .Invalid_Path
 	}
@@ -584,6 +589,8 @@ load_input_history_from_file :: proc(
 save_config_to_file :: proc(home: string, config: Mimir_Config) -> Config_Error {
 	dir := config_dir(home, context.temp_allocator)
 	path := config_path(home, context.temp_allocator)
+	defer delete(dir, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
 	if dir == "" || path == "" {
 		return .Invalid_Home
 	}
@@ -596,6 +603,7 @@ save_config_to_file :: proc(home: string, config: Mimir_Config) -> Config_Error 
 	}
 
 	payload := config_to_json(config, context.temp_allocator)
+	defer delete(payload, context.temp_allocator)
 	writeErr := os.write_entire_file(path, payload)
 	if writeErr != nil {
 		return .Io_Error
@@ -611,6 +619,8 @@ save_input_history_to_file :: proc(
 ) -> History_Error {
 	dir := history_cache_dir(home, context.temp_allocator)
 	path := input_history_path(home, workingDirectory, context.temp_allocator)
+	defer delete(dir, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
 	if dir == "" || path == "" {
 		return .Invalid_Path
 	}
@@ -623,6 +633,7 @@ save_input_history_to_file :: proc(
 	}
 
 	payload := input_history_to_json(history, context.temp_allocator)
+	defer delete(payload, context.temp_allocator)
 	if writeErr := os.write_entire_file_from_string(path, payload); writeErr != nil {
 		return .Io_Error
 	}
@@ -631,6 +642,7 @@ save_input_history_to_file :: proc(
 
 clear_input_history_file :: proc(home: string, workingDirectory: string) -> History_Error {
 	path := input_history_path(home, workingDirectory, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
 	if path == "" {
 		return .Invalid_Path
 	}
