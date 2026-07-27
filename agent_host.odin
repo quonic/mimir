@@ -179,6 +179,7 @@ app_show_agent_approval :: proc(
 	}
 	state.approval.agentID = agentID
 	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
+	_ = app_apply_approval_method(state)
 	return true
 }
 

@@ -60,6 +60,10 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(config.safetyProvider == "", "expected missing safety provider to stay empty")
 	assert(config.safetyModel == "", "expected missing safety model to stay empty")
 	assert(
+		config.approvalMethod == .Always_Ask,
+		"expected missing approval method to default to always ask",
+	)
+	assert(
 		config.toolContinuations == DEFAULT_TOOL_CONTINUATIONS,
 		"expected missing tool continuation limit to use the default",
 	)
@@ -128,6 +132,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.embeddingModel = "nomic-embed-text"
 	config.safetyProvider = "ollama"
 	config.safetyModel = "llama3.2:instruct"
+	config.approvalMethod = .Approve_Safe
 	config.toolContinuations = 2500
 	config.providers[0].model = "llama3.2"
 	assert(
@@ -169,6 +174,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.embeddingModel == "nomic-embed-text", "expected embedding model round trip")
 	assert(loaded.safetyProvider == "ollama", "expected safety provider round trip")
 	assert(loaded.safetyModel == "llama3.2:instruct", "expected safety model round trip")
+	assert(loaded.approvalMethod == .Approve_Safe, "expected approval method round trip")
 	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
@@ -191,6 +197,32 @@ test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
 
 	_, err := parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected negative tool continuation limit to reject config")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_invalid_approval_method :: proc(t: ^testing.T) {
+	payload := `{
+  "approvalMethod": "sometimes",
+  "providers": [],
+  "mcpServers": [],
+  "skillPaths": []
+}`
+
+	_, err := parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected invalid approval method to reject config")
+	_ = t
+}
+
+@(test)
+test_approval_method_string_round_trip :: proc(t: ^testing.T) {
+	methods := [4]Approval_Method{.Always_Ask, .Approve_Safe, .Approve_All, .Deny_All}
+	for method in methods {
+		value := approval_method_to_string(method)
+		parsed, parsedOK := approval_method_from_string(value)
+		assert(parsedOK, "expected approval method string to parse")
+		assert(parsed == method, "expected approval method string round trip")
+	}
 	_ = t
 }
 

@@ -12,6 +12,13 @@ DEFAULT_CONFIG_ENDPOINT :: "http://localhost:11434"
 DEFAULT_CONFIG_PROVIDER :: "ollama"
 DEFAULT_TOOL_CONTINUATIONS :: 1000
 
+Approval_Method :: enum int {
+	Always_Ask = 0,
+	Approve_Safe,
+	Approve_All,
+	Deny_All,
+}
+
 Config_Error :: enum int {
 	None = 0,
 	Invalid_Home,
@@ -58,6 +65,7 @@ Mimir_Config_Wire :: struct {
 	embeddingModel:    string,
 	safetyProvider:    string,
 	safetyModel:       string,
+	approvalMethod:    string,
 	toolContinuations: int,
 	providers:         []Provider_Config_Wire,
 	contextWindows:    []Context_Window_Config_Wire,
@@ -92,6 +100,7 @@ Mimir_Config :: struct {
 	embeddingModel:      string,
 	safetyProvider:      string,
 	safetyModel:         string,
+	approvalMethod:      Approval_Method,
 	toolContinuations:   int,
 	providers:           [dynamic]Provider_Config,
 	contextWindows:      [dynamic]Context_Window_Config,
@@ -104,6 +113,34 @@ Mimir_Config :: struct {
 Config_Register_Result :: struct {
 	ollamaProbeFailed: bool,
 	modelCount:        int,
+}
+
+approval_method_from_string :: proc(value: string) -> (Approval_Method, bool) {
+	switch value {
+	case "", "alwaysAsk":
+		return .Always_Ask, true
+	case "approveSafe":
+		return .Approve_Safe, true
+	case "approveAll":
+		return .Approve_All, true
+	case "denyAll":
+		return .Deny_All, true
+	}
+	return .Always_Ask, false
+}
+
+approval_method_to_string :: proc(method: Approval_Method) -> string {
+	switch method {
+	case .Always_Ask:
+		return "alwaysAsk"
+	case .Approve_Safe:
+		return "approveSafe"
+	case .Approve_All:
+		return "approveAll"
+	case .Deny_All:
+		return "denyAll"
+	}
+	return "alwaysAsk"
 }
 
 config_dir :: proc(home: string, allocator := context.allocator) -> string {
@@ -181,6 +218,7 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config: Mimir_Config
 	config.allocationAllocator = allocator
 	config.selectedProvider = DEFAULT_CONFIG_PROVIDER
+	config.approvalMethod = .Always_Ask
 	config.toolContinuations = DEFAULT_TOOL_CONTINUATIONS
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
@@ -471,7 +509,14 @@ parse_config_from_json :: proc(
 	config.embeddingModel = strings.clone(wire.embeddingModel, allocator)
 	config.safetyProvider = strings.clone(wire.safetyProvider, allocator)
 	config.safetyModel = strings.clone(wire.safetyModel, allocator)
+	approvalMethod, approvalMethodOK := approval_method_from_string(wire.approvalMethod)
+	if !approvalMethodOK {
+		config_destroy(&config)
+		return Mimir_Config{}, .Invalid_JSON
+	}
+	config.approvalMethod = approvalMethod
 	if wire.toolContinuations < 0 {
+		config_destroy(&config)
 		return Mimir_Config{}, .Invalid_JSON
 	}
 	config.toolContinuations = wire.toolContinuations
@@ -723,6 +768,9 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"safetyModel\": ")
 	write_json_string(&builder, config.safetyModel)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"approvalMethod\": ")
+	write_json_string(&builder, approval_method_to_string(config.approvalMethod))
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"toolContinuations\": ")
 	write_decimal(&builder, config.toolContinuations)

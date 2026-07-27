@@ -134,6 +134,7 @@ Config_Setting_ID :: enum int {
 	Chat_Model,
 	Embedding_Model,
 	Safety_Model,
+	Approval_Method,
 	Tool_Continuations,
 }
 
@@ -515,6 +516,7 @@ run_app :: proc() {
 			}
 		}
 		if state.mode == .Approval && app_poll_approval_safety(&state) {
+			_ = app_apply_approval_method(&state)
 			frameDirty = true
 		}
 		if frameDirty {
@@ -1042,12 +1044,36 @@ app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
 	state.approval.historyIndex = -1
 	state.approval.choice = .Allow_Once
 	state.approval.input = .Ready
-	if prepared.action.effect == .Execute {
+	if state.config.approvalMethod == .Approve_Safe ||
+	   (state.config.approvalMethod == .Always_Ask && prepared.action.effect == .Execute) {
 		app_start_approval_safety(state)
 	}
 	state.mode = .Approval
 	state.status = "Permission approval required"
 	return true
+}
+
+app_apply_approval_method :: proc(state: ^App_State) -> bool {
+	switch state.config.approvalMethod {
+	case .Always_Ask:
+		return false
+	case .Approve_All:
+		app_apply_approval_choice(state, .Allow_Once)
+		return true
+	case .Deny_All:
+		app_apply_approval_choice(state, .Deny)
+		return true
+	case .Approve_Safe:
+		if !app_approval_safety_ready(state) || state.approval.safety.unavailable {
+			return false
+		}
+		if app_approval_safety_verdict(state) != .Safe {
+			return false
+		}
+		app_apply_approval_choice(state, .Allow_Once)
+		return true
+	}
+	return false
 }
 
 app_clear_approval :: proc(state: ^App_State) {
@@ -1878,6 +1904,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 			)
 		}
 	case .Advanced:
+		append(&state.configSettings, Config_Setting{id = .Approval_Method, kind = .Single_Select})
 		append(&state.configSettings, Config_Setting{id = .Tool_Continuations, kind = .Text})
 	}
 
@@ -2018,6 +2045,8 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 		app_select_config_embedding_model(state, setting.modelIndex)
 	case .Safety_Model:
 		app_select_config_safety_model(state, setting.modelIndex)
+	case .Approval_Method:
+		app_cycle_approval_method(state)
 	}
 	return true
 }
@@ -2055,6 +2084,20 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 		provider.type = .Ollama
 	}
 	app_apply_config_change(state, "Provider type saved")
+}
+
+app_cycle_approval_method :: proc(state: ^App_State) {
+	switch state.config.approvalMethod {
+	case .Always_Ask:
+		state.config.approvalMethod = .Approve_Safe
+	case .Approve_Safe:
+		state.config.approvalMethod = .Approve_All
+	case .Approve_All:
+		state.config.approvalMethod = .Deny_All
+	case .Deny_All:
+		state.config.approvalMethod = .Always_Ask
+	}
+	app_apply_config_change(state, "Approval method saved")
 }
 
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {

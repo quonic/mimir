@@ -54,6 +54,7 @@ The initial configuration shape is:
   "embeddingModel": "",
   "safetyProvider": "",
   "safetyModel": "",
+  "approvalMethod": "alwaysAsk",
   "toolContinuations": 1000,
   "contextWindows": [
     {
@@ -84,10 +85,27 @@ They are separate from the chat model. Before you use `search_code`, select an
 embedding provider and model in `Embedding Model`. Mimir does not select a
 default embedding model.
 
-`safetyProvider` and `safetyModel` set the model that checks shell commands in
+`safetyProvider` and `safetyModel` set the model that classifies tool actions in
 the approval dialog. Select a chat provider and model in `Safety Model` to use
 a separate safety model. If both values are empty, Mimir uses the chat provider
 and model. An incomplete or invalid safety selection disables safety advice.
+
+`approvalMethod` controls actions that require approval after Mimir checks the
+normal permission grants. It defaults to `alwaysAsk` when omitted. Set it in
+`/config` under `Advanced`, or use one of these JSON values:
+
+- `alwaysAsk`: show the approval dialog. Shell commands show safety advice when
+  a safety model is available.
+- `approveSafe`: classify writes, shell commands, and remote/MCP calls. Mimir
+  allows only an exact `SAFE|reason` response. An unavailable safety model,
+  malformed response, `RISKY`, or `UNCLEAR` response opens the approval dialog.
+- `approveAll`: allow every action that would otherwise require approval. Mimir
+  does not call the safety model.
+- `denyAll`: deny every action that would otherwise require approval.
+
+Read-only project access and matching session or persistent permission grants
+are resolved before `approvalMethod`; this setting does not create or change
+permission grants.
 
 `toolContinuations` sets the maximum number of consecutive model and tool
 continuation cycles for one request. It must be a positive integer and defaults

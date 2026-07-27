@@ -441,6 +441,7 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 			app_start_tool_continuation_if_ready(state)
 		} else {
 			state.approval.historyIndex = historyIndex
+			_ = app_apply_approval_method(state)
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
 		if !app_start_tool_execution(state, call, historyIndex) {

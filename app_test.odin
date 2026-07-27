@@ -133,12 +133,63 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 }
 
 @(test)
-test_approval_safety_prompt_uses_only_command_details :: proc(t: ^testing.T) {
-	prompt := approval_safety_prompt("git status")
+test_approval_safety_prompt_uses_only_action_details :: proc(t: ^testing.T) {
+	prompt := approval_safety_prompt(
+		Permission_Action {
+			effect = .Execute,
+			command = "git status",
+			workingDirectory = "/workspace/project",
+		},
+	)
 	assert(strings.contains(prompt, "git status"), "expected command in safety prompt")
+	assert(
+		strings.contains(prompt, "/workspace/project"),
+		"expected working directory in safety prompt",
+	)
 	assert(
 		!strings.contains(prompt, "prior conversation"),
 		"expected prompt to exclude prior conversation",
+	)
+	_ = t
+}
+
+@(test)
+test_approval_safety_prompt_describes_each_action_effect :: proc(t: ^testing.T) {
+	writePrompt := approval_safety_prompt(
+		Permission_Action{effect = .Write, targetPath = "/workspace/project/output.txt"},
+	)
+	assert(
+		strings.contains(writePrompt, "/workspace/project/output.txt"),
+		"expected write target path in safety prompt",
+	)
+	remotePrompt := approval_safety_prompt(
+		Permission_Action{effect = .Remote, mcpServer = "github"},
+	)
+	assert(strings.contains(remotePrompt, "github"), "expected MCP server in safety prompt")
+	_ = t
+}
+
+@(test)
+test_approval_safety_verdict_requires_exact_label_prefix :: proc(t: ^testing.T) {
+	assert(
+		approval_safety_verdict_from_response("SAFE|Reads repository status") == .Safe,
+		"expected SAFE verdict",
+	)
+	assert(
+		approval_safety_verdict_from_response("RISKY|Deletes files") == .Risky,
+		"expected RISKY verdict",
+	)
+	assert(
+		approval_safety_verdict_from_response("UNCLEAR|Cannot determine") == .Unclear,
+		"expected UNCLEAR verdict",
+	)
+	assert(
+		approval_safety_verdict_from_response("Safe: Reads repository status") == .Invalid,
+		"expected prose response to be invalid",
+	)
+	assert(
+		approval_safety_verdict_from_response("SAFE|") == .Invalid,
+		"expected missing SAFE reason to be invalid",
 	)
 	_ = t
 }
@@ -351,6 +402,90 @@ test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
 		state.history[len(state.history) - 1].content == "run_command (awaiting approval)",
 		"expected approval-pending tool history entry",
 	)
+	_ = t
+}
+
+@(test)
+test_app_approve_all_starts_streamed_tool_execution :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Approve_All
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("run_command", context.allocator),
+			arguments = strings.clone(`{"command":"pwd"}`, context.allocator),
+		},
+	)
+
+	assert(app_process_pending_stream_tool_calls(&state), "expected queued tool call to process")
+	assert(state.mode == .Chat, "expected automatic approval to keep chat mode")
+	assert(state.toolExecution.active, "expected approved tool execution to start")
+	assert(
+		state.history[len(state.history) - 1].content == "run_command (running)",
+		"expected automatically approved tool to run",
+	)
+	_ = t
+}
+
+@(test)
+test_app_deny_all_rejects_streamed_tool_call :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Deny_All
+	append(
+		&state.stream.toolCalls,
+		ai.Tool_Call {
+			id = strings.clone("call-1", context.allocator),
+			name = strings.clone("run_command", context.allocator),
+			arguments = strings.clone(`{"command":"pwd"}`, context.allocator),
+		},
+	)
+
+	assert(app_process_pending_stream_tool_calls(&state), "expected queued tool call to process")
+	assert(state.mode == .Chat, "expected automatic denial to keep chat mode")
+	assert(!state.toolExecution.active, "expected denied tool execution not to start")
+	assert(
+		state.history[len(state.history) - 1].content == "run_command (denied)",
+		"expected automatically denied tool history",
+	)
+	_ = t
+}
+
+@(test)
+test_app_approve_safe_allows_only_safe_verdict :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Approve_Safe
+	assert(
+		app_show_approval(&state, Tool_Call{id = "run_command", command = "pwd"}),
+		"expected command call to open approval state",
+	)
+	state.approval.safety.unavailable = false
+	append(&state.approval.safety.response, "SAFE|Prints working directory")
+
+	assert(app_apply_approval_method(&state), "expected SAFE verdict to approve tool")
+	assert(state.mode == .Chat, "expected SAFE approval to close approval mode")
+	assert(state.toolExecution.active, "expected SAFE verdict to start execution")
+	_ = t
+}
+
+@(test)
+test_app_approve_safe_falls_back_for_risky_verdict :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Approve_Safe
+	assert(
+		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "output.txt"}),
+		"expected write call to open approval state",
+	)
+	state.approval.safety.unavailable = false
+	append(&state.approval.safety.response, "RISKY|Overwrites file")
+
+	assert(!app_apply_approval_method(&state), "expected RISKY verdict to require manual approval")
+	assert(state.mode == .Approval, "expected RISKY verdict to retain approval modal")
+	assert(!state.toolExecution.active, "expected RISKY verdict not to start execution")
 	_ = t
 }
 
@@ -1562,8 +1697,9 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
 
-	assert(len(state.configSettings) == 1, "expected one advanced setting")
-	assert(state.configSettings[0].id == .Tool_Continuations, "expected tool continuation setting")
+	assert(len(state.configSettings) == 2, "expected two advanced settings")
+	assert(state.configSettings[1].id == .Tool_Continuations, "expected tool continuation setting")
+	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
 	assert(state.configEditing, "expected continuation setting edit mode")
 	input_buffer_set_text(&state.configEdit, "2500")
@@ -1582,6 +1718,7 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 	state.configCategory = .Advanced
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
+	state.configSettingCursor = 1
 	app_activate_config_setting(&state)
 	input_buffer_set_text(&state.configEdit, "0")
 	app_commit_config_edit(&state)
@@ -1594,6 +1731,26 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 		state.status == "Tool continuation limit must be a positive integer",
 		"expected invalid continuation status",
 	)
+	_ = t
+}
+
+@(test)
+test_config_modal_cycles_approval_method :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(state.configSettings[0].id == .Approval_Method, "expected approval method setting")
+	assert(
+		config_setting_line(&state, state.configSettings[0]) == "Approval method: < Always ask >",
+		"expected initial approval method label",
+	)
+	assert(app_activate_config_setting(&state), "expected approval method activation")
+	assert(state.config.approvalMethod == .Approve_Safe, "expected approval method to cycle")
+	assert(state.status == "Approval method saved", "expected approval method save status")
 	_ = t
 }
 

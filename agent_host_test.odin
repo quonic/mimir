@@ -195,6 +195,69 @@ test_agent_allow_once_executes_and_resumes_runtime :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_agent_deny_all_resolves_request_without_modal :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Deny_All
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "run_command",
+				arguments = `{"command":"pwd"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+
+	assert(app_poll_agent_host(&state), "expected automatic denial to process request")
+	assert(state.mode == .Chat, "expected automatic denial not to open modal")
+	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Streaming, "expected denied request to resume agent")
+	_ = t
+}
+
+@(test)
+test_agent_approve_all_starts_tool_without_modal :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Approve_All
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "run_command",
+				arguments = `{"command":"pwd"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+
+	assert(app_poll_agent_host(&state), "expected automatic approval to process request")
+	assert(state.mode == .Chat, "expected automatic approval not to open modal")
+	assert(state.toolExecution.active, "expected automatic approval to start tool execution")
+	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Executing_Tool, "expected runtime tool execution state")
+	_ = t
+}
+
+@(test)
 test_agent_tool_execution_projects_output_to_runtime :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

@@ -157,7 +157,9 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			write_clipped_line(batch, row, interior.left_column, width, displayServer)
 		}
 		row += 2
-		if action.effect == .Execute {
+		showSafetyAdvice :=
+			action.effect == .Execute || state.config.approvalMethod == .Approve_Safe
+		if showSafetyAdvice {
 			adviceRegion := interior
 			adviceRegion.top_row = row
 			adviceRegion.bottom_row = interior.bottom_row - 4
@@ -167,7 +169,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 					row,
 					interior.left_column,
 					width,
-					"Safety advice: assessing command...",
+					"Safety advice: assessing action...",
 				)
 				row += 1
 			} else if state.approval.safety.unavailable {
@@ -710,6 +712,12 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		strings.write_string(&builder, fmt.tprintf("%d", state.config.toolContinuations))
 		return strings.to_string(builder)
 	}
+	if setting.id == .Approval_Method {
+		strings.write_string(&builder, "Approval method: < ")
+		strings.write_string(&builder, approval_method_label(state.config.approvalMethod))
+		strings.write_string(&builder, " >")
+		return strings.to_string(builder)
+	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
 	}
@@ -798,10 +806,26 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Embedding model"
 	case .Safety_Model:
 		return "Safety model"
+	case .Approval_Method:
+		return "Approval method"
 	case .Tool_Continuations:
 		return "Tool continuation limit"
 	}
 	return ""
+}
+
+approval_method_label :: proc(method: Approval_Method) -> string {
+	switch method {
+	case .Always_Ask:
+		return "Always ask"
+	case .Approve_Safe:
+		return "Approve SAFE"
+	case .Approve_All:
+		return "Approve all"
+	case .Deny_All:
+		return "Deny all"
+	}
+	return "Always ask"
 }
 
 config_masked_value :: proc(value: string) -> string {
