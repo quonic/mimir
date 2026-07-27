@@ -594,7 +594,7 @@ render_config_categories :: proc(
 	}
 	write_clipped_line(batch, region.top_row, region.left_column, width, "Categories")
 	for categoryIndex := 0;
-	    categoryIndex <= int(Config_Category.Safety_Model);
+	    categoryIndex <= int(Config_Category.Advanced);
 	    categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
 		row := region.top_row + 2 + categoryIndex
@@ -628,6 +628,8 @@ config_category_label :: proc(category: Config_Category) -> string {
 		return "Embedding Model"
 	case .Safety_Model:
 		return "Safety Model"
+	case .Advanced:
+		return "Advanced"
 	}
 	return ""
 }
@@ -703,6 +705,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		strings.write_string(&builder, entry.providerName)
 		strings.write_string(&builder, " / ")
 		strings.write_string(&builder, entry.model)
+		return strings.to_string(builder)
+	}
+	if setting.id == .Tool_Continuations {
+		strings.write_string(&builder, "Tool continuation limit: ")
+		strings.write_string(&builder, fmt.tprintf("%d", state.config.toolContinuations))
 		return strings.to_string(builder)
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
@@ -793,6 +800,8 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Embedding model"
 	case .Safety_Model:
 		return "Safety model"
+	case .Tool_Continuations:
+		return "Tool continuation limit"
 	}
 	return ""
 }

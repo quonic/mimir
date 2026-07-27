@@ -21,7 +21,7 @@ test_agent_start_options_clone_owns_project_root :: proc(t: ^testing.T) {
 	original := Agent_Start_Options {
 		parentID                   = Agent_ID(4),
 		projectRoot                = "./project",
-		maxToolContinuations       = 8,
+		maxToolContinuations       = 1000,
 		maxRetainedToolOutputBytes = 64 * 1024,
 	}
 	clone := agent_start_options_clone(original, context.temp_allocator)
@@ -29,7 +29,7 @@ test_agent_start_options_clone_owns_project_root :: proc(t: ^testing.T) {
 
 	assert(clone.parentID == original.parentID, "expected parent ID to be retained")
 	assert(clone.projectRoot == original.projectRoot, "expected project root to be retained")
-	assert(clone.maxToolContinuations == 8, "expected continuation limit to be retained")
+	assert(clone.maxToolContinuations == 1000, "expected continuation limit to be retained")
 	assert(clone.maxRetainedToolOutputBytes == 64 * 1024, "expected output limit to be retained")
 	_ = t
 }

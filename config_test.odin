@@ -59,6 +59,10 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(config.embeddingModel == "", "expected missing embedding model to stay empty")
 	assert(config.safetyProvider == "", "expected missing safety provider to stay empty")
 	assert(config.safetyModel == "", "expected missing safety model to stay empty")
+	assert(
+		config.toolContinuations == DEFAULT_TOOL_CONTINUATIONS,
+		"expected missing tool continuation limit to use the default",
+	)
 	assert(len(config.providers) == 1, "expected one provider")
 	assert(config.providers[0].type == ai.Interface_Type.Ollama, "expected Ollama provider")
 	assert(config.providers[0].model == "llama3.2", "expected provider model")
@@ -124,6 +128,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.embeddingModel = "nomic-embed-text"
 	config.safetyProvider = "ollama"
 	config.safetyModel = "llama3.2:instruct"
+	config.toolContinuations = 2500
 	config.providers[0].model = "llama3.2"
 	assert(
 		config_set_context_window_tokens(&config, "ollama", "llama3.2", 131072),
@@ -164,6 +169,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.embeddingModel == "nomic-embed-text", "expected embedding model round trip")
 	assert(loaded.safetyProvider == "ollama", "expected safety provider round trip")
 	assert(loaded.safetyModel == "llama3.2:instruct", "expected safety model round trip")
+	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")
@@ -171,6 +177,20 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 		config_context_window_tokens(&loaded, "ollama", "llama3.2") == 131072,
 		"expected context window round trip",
 	)
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
+	payload := `{
+  "toolContinuations": -1,
+  "providers": [],
+  "mcpServers": [],
+  "skillPaths": []
+}`
+
+	_, err := parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected negative tool continuation limit to reject config")
 	_ = t
 }
 

@@ -12,7 +12,6 @@ import "core:sync"
 import "core:thread"
 import "core:time"
 
-MAX_TOOL_CONTINUATIONS :: 8
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
 SEARCH_CODE_MAX_RESULTS :: 10
@@ -786,7 +785,7 @@ app_start_tool_continuation_if_ready :: proc(state: ^App_State) {
 	if len(state.stream.toolCalls) > 0 {
 		return
 	}
-	if state.stream.continuationCount >= MAX_TOOL_CONTINUATIONS {
+	if state.stream.continuationCount >= state.config.toolContinuations {
 		append_history(state, .Tool, "Tool continuation limit reached.")
 		state.status = "Tool continuation limit reached"
 		app_clear_assistant_stream_conversation(&state.stream)

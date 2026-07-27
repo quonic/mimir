@@ -215,7 +215,7 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	}
 	options := agent.Agent_Start_Options {
 		projectRoot                = state.workingDirectory,
-		maxToolContinuations       = MAX_TOOL_CONTINUATIONS,
+		maxToolContinuations       = state.config.toolContinuations,
 		maxRetainedToolOutputBytes = MAX_RETAINED_TOOL_OUTPUT_BYTES,
 	}
 	startErr := agent_host_start_active(&state.agentHost, options)

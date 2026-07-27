@@ -54,6 +54,7 @@ The initial configuration shape is:
   "embeddingModel": "",
   "safetyProvider": "",
   "safetyModel": "",
+  "toolContinuations": 1000,
   "contextWindows": [
     {
       "providerName": "ollama",
@@ -87,6 +88,10 @@ default embedding model.
 the approval dialog. Select a chat provider and model in `Safety Model` to use
 a separate safety model. If both values are empty, Mimir uses the chat provider
 and model. An incomplete or invalid safety selection disables safety advice.
+
+`toolContinuations` sets the maximum number of consecutive model and tool
+continuation cycles for one request. It must be a positive integer and defaults
+to `1000`. Change it through `/config` in `Advanced`, or edit the JSON file.
 
 `contextWindows` can store a manual context limit for a provider and model. The
 value must not be negative. A value of `0` means the limit is unknown. For

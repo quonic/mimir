@@ -97,6 +97,7 @@ Config_Category :: enum int {
 	Chat_Model,
 	Embedding_Model,
 	Safety_Model,
+	Advanced,
 }
 
 Config_Focus :: enum int {
@@ -133,6 +134,7 @@ Config_Setting_ID :: enum int {
 	Chat_Model,
 	Embedding_Model,
 	Safety_Model,
+	Tool_Continuations,
 }
 
 Config_Setting :: struct {
@@ -1875,6 +1877,11 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 				Config_Setting{id = .Safety_Model, kind = .Single_Select, modelIndex = index},
 			)
 		}
+	case .Advanced:
+		append(
+			&state.configSettings,
+			Config_Setting{id = .Tool_Continuations, kind = .Text},
+		)
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
@@ -1949,8 +1956,8 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 	if state.configFocus == .Categories {
 		category := int(state.configCategory) + delta
 		if category < int(Config_Category.Providers) {
-			category = int(Config_Category.Safety_Model)
-		} else if category > int(Config_Category.Safety_Model) {
+			category = int(Config_Category.Advanced)
+		} else if category > int(Config_Category.Advanced) {
 			category = int(Config_Category.Providers)
 		}
 		state.configCategory = Config_Category(category)
@@ -1999,7 +2006,8 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 	     .Provider_Endpoint,
 	     .Provider_API_Key,
 	     .Provider_Model,
-	     .Provider_Context_Window:
+	     .Provider_Context_Window,
+	     .Tool_Continuations:
 		app_begin_config_edit(state, setting)
 	case .Refresh_Models:
 		app_refresh_config_models(state, setting.providerIndex)
@@ -2053,6 +2061,17 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 }
 
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
+	if setting.id == .Tool_Continuations {
+		input_buffer_set_text(
+			&state.configEdit,
+			fmt.tprintf("%d", state.config.toolContinuations),
+		)
+		state.configEditingSetting = setting
+		state.configEditing = true
+		state.configUTF8PendingLen = 0
+		state.status = "Editing: Enter saves, Esc cancels"
+		return
+	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return
 	}
@@ -2157,6 +2176,16 @@ app_commit_config_edit :: proc(state: ^App_State) {
 	state.configEditing = false
 	input_buffer_clear(&state.configEdit)
 
+	if setting.id == .Tool_Continuations {
+		continuations, continuationsOK := strconv.parse_int(text)
+		if !continuationsOK || continuations < 1 {
+			state.status = "Tool continuation limit must be a positive integer"
+			return
+		}
+		state.config.toolContinuations = continuations
+		app_apply_config_change(state, "Tool continuation limit saved")
+		return
+	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		state.status = "Provider no longer exists"
 		return

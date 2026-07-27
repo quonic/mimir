@@ -1558,6 +1558,53 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(len(state.configSettings) == 1, "expected one advanced setting")
+	assert(
+		state.configSettings[0].id == .Tool_Continuations,
+		"expected tool continuation setting",
+	)
+	assert(app_activate_config_setting(&state), "expected continuation setting activation")
+	assert(state.configEditing, "expected continuation setting edit mode")
+	input_buffer_set_text(&state.configEdit, "2500")
+	app_commit_config_edit(&state)
+
+	assert(state.config.toolContinuations == 2500, "expected continuation limit to update")
+	assert(state.status == "Tool continuation limit saved", "expected saved continuation status")
+	_ = t
+}
+
+@(test)
+test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+	app_activate_config_setting(&state)
+	input_buffer_set_text(&state.configEdit, "0")
+	app_commit_config_edit(&state)
+
+	assert(
+		state.config.toolContinuations == DEFAULT_TOOL_CONTINUATIONS,
+		"expected invalid continuation limit to preserve previous value",
+	)
+	assert(
+		state.status == "Tool continuation limit must be a positive integer",
+		"expected invalid continuation status",
+	)
+	_ = t
+}
+
+@(test)
 test_compute_app_layout_places_status_last :: proc(t: ^testing.T) {
 	layout := compute_app_layout(24, 80, 3)
 	assert(layout.statusBar.top_row == 24, "expected status bar to occupy final row")
