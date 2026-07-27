@@ -9,7 +9,7 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 
 ## Preview
 
-```ASCII
+```text
 ┌─ History ────────────────────────────────────────────────────────────────────────────────────────────────┐
 │system: Mimir the terminal harness is ready.                                                              │
 │         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐         │
@@ -42,7 +42,7 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 Config: arrows/Tab, Enter, Esc
 ```
 
-```ASCII
+```text
 ┌─ History ───────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │system: Mimir the terminal harness is ready.                                                                     │
 │         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
@@ -75,7 +75,7 @@ Config: arrows/Tab, Enter, Esc
 Config: arrows/Tab, Enter, Esc
 ```
 
-```ASCII
+```text
 ┌─ History ───────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │system: Mimir the terminal harness is ready.                                                                     │
 │         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
