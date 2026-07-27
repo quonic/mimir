@@ -22,7 +22,7 @@ Tool_Registry :: struct {
 builtin_ai_tool_definitions :: proc(
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
-	definitions := make([dynamic]ai.Tool_Definition, 0, 7, allocator)
+	definitions := make([dynamic]ai.Tool_Definition, 0, 8, allocator)
 	append(
 		&definitions,
 		ai.Tool_Definition {
@@ -75,7 +75,15 @@ builtin_ai_tool_definitions :: proc(
 		&definitions,
 		ai.Tool_Definition {
 			name = "search_code",
-			description = "Search the active project for code relevant to a query",
+			description = "Semantically search the active project for code relevant to a query",
+			parametersJSON = `{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = "find_code",
+			description = "Find exact text in active-project code, including identifiers and signatures",
 			parametersJSON = `{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}`,
 		},
 	)

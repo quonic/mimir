@@ -151,8 +151,8 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Read
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "list_available_shells", "search_code":
-		if call.id == "search_code" && call.query == "" {
+	case "list_available_shells", "search_code", "find_code":
+		if (call.id == "search_code" || call.id == "find_code") && call.query == "" {
 			return Permission_Action{}, false
 		}
 		action.effect = .Read

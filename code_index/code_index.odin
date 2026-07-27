@@ -6,7 +6,7 @@ import "core:hash"
 import "core:os"
 import "core:strings"
 
-CODE_INDEX_SCHEMA_VERSION :: "1"
+CODE_INDEX_SCHEMA_VERSION :: "2"
 CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
 CODE_INDEX_EMBEDDING_BATCH_SIZE :: 32
 CODE_INDEX_DEFAULT_CHUNK_LINES :: 120
@@ -28,6 +28,7 @@ Code_Index :: struct {
 	embeddingModel:      string,
 	cacheDir:            string,
 	cachePath:           string,
+	fingerprintPath:     string,
 	database:            vdb.Database,
 	databaseInitialized: bool,
 	dirty:               bool,
@@ -84,6 +85,11 @@ code_index_init :: proc(
 	if cachePath == "" {
 		return Code_Index{}, .Invalid_Cache
 	}
+	fingerprintPath := code_index_fingerprint_path(cachePath, allocator)
+	if fingerprintPath == "" {
+		delete(cachePath, allocator)
+		return Code_Index{}, .Invalid_Cache
+	}
 
 	return Code_Index {
 			projectRoot = strings.clone(projectRoot, allocator),
@@ -91,6 +97,7 @@ code_index_init :: proc(
 			embeddingModel = strings.clone(embeddingModel, allocator),
 			cacheDir = strings.clone(cacheDir, allocator),
 			cachePath = cachePath,
+			fingerprintPath = fingerprintPath,
 		},
 		.None
 }
@@ -107,6 +114,7 @@ code_index_destroy :: proc(index: ^Code_Index, allocator := context.allocator) {
 	delete(index.embeddingModel, allocator)
 	delete(index.cacheDir, allocator)
 	delete(index.cachePath, allocator)
+	delete(index.fingerprintPath, allocator)
 	index^ = {}
 }
 
@@ -181,11 +189,47 @@ code_index_cache_path :: proc(
 	return strings.to_string(builder)
 }
 
+code_index_fingerprint_path :: proc(cachePath: string, allocator := context.allocator) -> string {
+	if cachePath == "" {
+		return ""
+	}
+	return strings.concatenate({cachePath, ".sources"}, allocator)
+}
+
 code_index_write_hex_u64 :: proc(builder: ^strings.Builder, value: u64) {
 	hexDigits := "0123456789abcdef"
 	for shift := 60; shift >= 0; shift -= 4 {
 		strings.write_byte(builder, hexDigits[(value >> u64(shift)) & 0xf])
 	}
+}
+
+code_index_fingerprint_to_string :: proc(
+	fingerprint: u64,
+	allocator := context.allocator,
+) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	code_index_write_hex_u64(&builder, fingerprint)
+	return strings.to_string(builder)
+}
+
+code_index_fingerprint_from_string :: proc(value: string) -> (u64, bool) {
+	if len(value) != 16 {
+		return 0, false
+	}
+	fingerprint: u64
+	for character in value {
+		digit: u64
+		if character >= '0' && character <= '9' {
+			digit = u64(character - '0')
+		} else if character >= 'a' && character <= 'f' {
+			digit = u64(character - 'a') + 10
+		} else {
+			return 0, false
+		}
+		fingerprint = fingerprint << 4 | digit
+	}
+	return fingerprint, true
 }
 
 code_index_collect_sources :: proc(
@@ -213,6 +257,21 @@ code_index_sources_destroy :: proc(
 		delete(source.content, allocator)
 	}
 	delete(sources^)
+}
+
+code_index_sources_fingerprint :: proc(sources: []Code_Source) -> u64 {
+	builder: strings.Builder
+	strings.builder_init(&builder, context.temp_allocator)
+	for source in sources {
+		strings.write_string(&builder, source.relativePath)
+		strings.write_byte(&builder, 0)
+		strings.write_string(&builder, source.content)
+		strings.write_byte(&builder, 0)
+	}
+	fingerprintText := strings.to_string(builder)
+	defer delete(fingerprintText, context.temp_allocator)
+	fingerprint := hash.fnv64a(transmute([]byte)fingerprintText)
+	return fingerprint
 }
 
 code_index_collect_directory :: proc(
@@ -628,6 +687,47 @@ code_index_search_results_destroy :: proc(
 	delete(results^)
 }
 
+code_index_find_text :: proc(
+	index: ^Code_Index,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> [dynamic]Code_Search_Result {
+	results := make([dynamic]Code_Search_Result, 0, 0, allocator)
+	if index == nil || index.projectRoot == "" || query == "" || maximumResults <= 0 {
+		return results
+	}
+
+	sources := code_index_collect_sources(index.projectRoot, allocator)
+	defer code_index_sources_destroy(&sources, allocator)
+	for source in sources {
+		lines := strings.split(source.content, "\n", allocator)
+		for line, lineIndex in lines {
+			if strings.contains(line, query) {
+				identifier := code_index_chunk_identifier(
+					source.relativePath,
+					lineIndex + 1,
+					lineIndex + 1,
+					allocator,
+				)
+				append(
+					&results,
+					Code_Search_Result {
+						id = identifier,
+						metadata = strings.clone(identifier, allocator),
+					},
+				)
+				if len(results) == maximumResults {
+					delete(lines, allocator)
+					return results
+				}
+			}
+		}
+		delete(lines, allocator)
+	}
+	return results
+}
+
 code_index_search_result_location :: proc(
 	result: Code_Search_Result,
 ) -> (
@@ -767,13 +867,27 @@ code_index_search_text :: proc(
 }
 
 code_index_load :: proc(index: ^Code_Index, allocator := context.allocator) -> Code_Index_Error {
-	if index == nil || index.cachePath == "" {
+	if index == nil || index.cachePath == "" || index.fingerprintPath == "" {
 		return .Invalid_Cache
 	}
 	if index.databaseInitialized {
 		return .None
 	}
-	if !os.exists(index.cachePath) {
+	if !os.exists(index.cachePath) || !os.exists(index.fingerprintPath) {
+		return .Not_Found
+	}
+	fingerprintData, fingerprintReadError := os.read_entire_file(index.fingerprintPath, allocator)
+	if fingerprintReadError != nil {
+		return .Io_Error
+	}
+	defer delete(fingerprintData, allocator)
+	cachedFingerprint, fingerprintOK := code_index_fingerprint_from_string(string(fingerprintData))
+	if !fingerprintOK {
+		return .Invalid_Format
+	}
+	sources := code_index_collect_sources(index.projectRoot, allocator)
+	defer code_index_sources_destroy(&sources, allocator)
+	if cachedFingerprint != code_index_sources_fingerprint(sources[:]) {
 		return .Not_Found
 	}
 
@@ -793,13 +907,24 @@ code_index_save :: proc(index: ^Code_Index) -> Code_Index_Error {
 	if index == nil ||
 	   !index.databaseInitialized ||
 	   index.cacheDir == "" ||
-	   index.cachePath == "" {
+	   index.cachePath == "" ||
+	   index.fingerprintPath == "" {
 		return .Invalid_Cache
 	}
 	if !os.exists(index.cacheDir) && os.make_directory_all(index.cacheDir) != nil {
 		return .Io_Error
 	}
 	if vdb.save(&index.database, index.cachePath) != .None {
+		return .Io_Error
+	}
+	sources := code_index_collect_sources(index.projectRoot, context.temp_allocator)
+	defer code_index_sources_destroy(&sources, context.temp_allocator)
+	fingerprint := code_index_fingerprint_to_string(
+		code_index_sources_fingerprint(sources[:]),
+		context.temp_allocator,
+	)
+	defer delete(fingerprint, context.temp_allocator)
+	if os.write_entire_file_from_string(index.fingerprintPath, fingerprint) != nil {
 		return .Io_Error
 	}
 	index.dirty = false

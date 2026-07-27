@@ -254,6 +254,37 @@ test_code_index_search_copies_ranked_results_and_releases_lock :: proc(t: ^testi
 }
 
 @(test)
+test_code_index_find_text_returns_exact_matching_lines :: proc(t: ^testing.T) {
+	project, projectError := os.make_directory_temp("", "mimir-code-find-", context.temp_allocator)
+	assert(projectError == nil, "expected temporary project directory")
+	defer os.remove_all(project)
+
+	path := strings.concatenate({project, "/source.odin"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			path,
+			"first write_decimal\nsecond\nthird write_decimal",
+		) ==
+		nil,
+		"expected source fixture",
+	)
+	index := Code_Index {
+		projectRoot = project,
+	}
+	results := code_index_find_text(&index, "write_decimal", 1, context.temp_allocator)
+	defer code_index_search_results_destroy(&results, context.temp_allocator)
+
+	assert(len(results) == 1, "expected maximum result limit")
+	location, locationOK := code_index_search_result_location(results[0])
+	assert(locationOK, "expected a valid result location")
+	assert(location.relativePath == "source.odin", "expected matching source path")
+	assert(location.startLine == 1, "expected first matching line")
+	assert(location.endLine == 1, "expected single-line match")
+	_ = t
+}
+
+@(test)
 test_code_index_reads_bounded_result_excerpt :: proc(t: ^testing.T) {
 	project, projectError := os.make_directory_temp(
 		"",
@@ -310,6 +341,12 @@ test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
 	gitDirectory := strings.concatenate({project, "/.git"}, context.temp_allocator)
 	defer delete(gitDirectory, context.temp_allocator)
 	assert(os.make_directory_all(gitDirectory) == nil, "expected git marker directory")
+	sourcePath := strings.concatenate({project, "/source.odin"}, context.temp_allocator)
+	defer delete(sourcePath, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(sourcePath, "package main\nfirst") == nil,
+		"expected source fixture",
+	)
 
 	index, initError := code_index_init(
 		project,
@@ -342,5 +379,23 @@ test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
 	defer code_index_destroy(&loaded, context.temp_allocator)
 	assert(code_index_load(&loaded, context.temp_allocator) == .None, "expected cache load")
 	assert(vdb.count(&loaded.database) == 1, "expected persisted vector")
+	assert(
+		os.write_entire_file_from_string(sourcePath, "package main\nchanged") == nil,
+		"expected changed source fixture",
+	)
+	stale, staleInitError := code_index_init(
+		project,
+		cacheDir,
+		"ollama",
+		"nomic-embed-text",
+		context.temp_allocator,
+	)
+	assert(staleInitError == .None, "expected stale index initialization")
+	defer code_index_destroy(&stale, context.temp_allocator)
+	assert(
+		code_index_load(&stale, context.temp_allocator) == .Not_Found,
+		"expected changed source to invalidate cache",
+	)
+	assert(!stale.databaseInitialized, "expected stale cache to remain unloaded")
 	_ = t
 }

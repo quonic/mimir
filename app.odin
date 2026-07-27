@@ -2584,6 +2584,23 @@ app_search_code :: proc(
 	)
 }
 
+app_find_code :: proc(
+	state: ^App_State,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> [dynamic]code_index.Code_Search_Result {
+	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
+	if state == nil || state.dispatcher.projectRoot == "" {
+		return results
+	}
+	delete(results)
+	index := code_index.Code_Index {
+		projectRoot = state.dispatcher.projectRoot,
+	}
+	return code_index.code_index_find_text(&index, query, maximumResults, allocator)
+}
+
 app_clear_model_entries :: proc(state: ^App_State) {
 	for entry in state.models {
 		delete(entry.providerName, context.allocator)

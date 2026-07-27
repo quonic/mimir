@@ -293,11 +293,11 @@ test_approval_modal_renders_compact_safety_advice :: proc(t: ^testing.T) {
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 7, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 8, "expected Ollama to receive all built-in tools")
 
 	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
 	defer delete(openAITools)
-	assert(len(openAITools) == 7, "expected OpenAI to receive all built-in tools")
+	assert(len(openAITools) == 8, "expected OpenAI to receive all built-in tools")
 	_ = t
 }
 
@@ -467,6 +467,21 @@ test_app_decodes_search_code_tool_arguments :: proc(t: ^testing.T) {
 	assert(ok, "expected search_code arguments to decode")
 	assert(call.query == "permission dispatch", "expected search query")
 	assert(call.maxResults == SEARCH_CODE_MAX_RESULTS, "expected maximum results cap")
+	_ = t
+}
+
+@(test)
+test_app_decodes_find_code_tool_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-find",
+		name      = "find_code",
+		arguments = `{"query":"write_decimal","max_results":0}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected find_code arguments to decode")
+	assert(call.query == "write_decimal", "expected decoded exact query")
+	assert(call.maxResults == SEARCH_CODE_DEFAULT_MAX_RESULTS, "expected default result limit")
 	_ = t
 }
 

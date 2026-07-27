@@ -644,7 +644,7 @@ app_tool_call_from_ai :: proc(
 		query            = strings.clone(arguments.query, allocator),
 		maxResults       = arguments.max_results,
 	}
-	if call.id == "search_code" {
+	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
 			tool_call_destroy(&call, allocator)
 			return Tool_Call{}, false
@@ -659,8 +659,16 @@ app_tool_call_from_ai :: proc(
 }
 
 app_execute_tool_call :: proc(state: ^App_State, call: Tool_Call) -> string {
-	if call.id != "search_code" {
+	if call.id != "search_code" && call.id != "find_code" {
 		return tool_dispatch_execute_approved(&state.dispatcher, call)
+	}
+	if call.id == "find_code" {
+		results := app_find_code(state, call.query, call.maxResults, state.dispatcher.allocator)
+		defer code_index.code_index_search_results_destroy(&results, state.dispatcher.allocator)
+		index := code_index.Code_Index {
+			projectRoot = state.dispatcher.projectRoot,
+		}
+		return app_search_code_results_json(&index, results[:], state.dispatcher.allocator)
 	}
 	results, searchError := app_search_code(
 		state,
@@ -933,7 +941,7 @@ app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
 	case "read_file", "list_directory", "get_file_info", "list_available_shells", "run_command":
 		return true
-	case "search_code":
+	case "search_code", "find_code":
 		return true
 	}
 	return false
