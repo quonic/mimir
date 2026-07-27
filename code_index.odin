@@ -245,8 +245,8 @@ code_index_collect_directory :: proc(
 			continue
 		}
 
-		data, readError := os.read_entire_file(entry.fullpath, allocator)
-		if readError != nil {
+		data, readfileError := os.read_entire_file(entry.fullpath, allocator)
+		if readfileError != nil {
 			continue
 		}
 		if code_index_is_binary(data[:]) {

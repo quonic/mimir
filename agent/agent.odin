@@ -1,6 +1,5 @@
 package agent
 
-import "core:mem"
 import "core:strings"
 
 Agent_ID :: distinct u64

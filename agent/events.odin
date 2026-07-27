@@ -1,6 +1,5 @@
 package agent
 
-import "core:mem"
 import "core:strings"
 
 Agent_Event_Type :: enum int {
