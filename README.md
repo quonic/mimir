@@ -10,101 +10,101 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 ## Preview
 
 ```ASCII
-┌─ History ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                                           │
-│               ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
-│               │Categories          | Providers                                                       │                │
-│               │                    |                                                                 │                │
-│               │* Providers         |   Provider: < Ollama Internal Test Server >                     │                │
-│               │  Chat Model        |   Name: Ollama Internal Test Server                             │                │
-│               │  Embedding Model   |   Type: < ollama >                                              │                │
-│               │  Safety Model      | > Endpoint: http://ollama-test.local:11434                      │                │
-│               │  Advanced          |   API key: ********                                             │                │
-│               │                    |   Configured model: qwen3.6:35b                                 │                │
-│               │                    |   Context window tokens: 262144                                 │                │
-│               │                    |   [x] Enabled                                                   │                │
-│               │                    |   [ Refresh models ]                                            │                │
-│               │                    |   [ Add provider ]                                              │                │
-│               │                    |   [ Remove provider ]                                           │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │Arrows move  Tab change pane  Enter select/edit  Esc close                            │                │
-│               └──────────────────────────────────────────────────────────────────────────────────────┘                │
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ History ────────────────────────────────────────────────────────────────────────────────────────────────┐
+│system: Mimir the terminal harness is ready.                                                              │
+│         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐         │
+│         │Categories          | Providers                                                       │         │
+│         │                    |                                                                 │         │
+│         │* Providers         |   Provider: < Ollama Internal Test Server >                     │         │
+│         │  Chat Model        |   Name: Ollama Internal Test Server                             │         │
+│         │  Embedding Model   |   Type: < ollama >                                              │         │
+│         │  Safety Model      | > Endpoint: http://ollama-test.local:11434                      │         │
+│         │  Advanced          |   API key: ********                                             │         │
+│         │                    |   Configured model: qwen3.6:35b                                 │         │
+│         │                    |   Context window tokens: 262144                                 │         │
+│         │                    |   [x] Enabled                                                   │         │
+│         │                    |   [ Refresh models ]                                            │         │
+│         │                    |   [ Add provider ]                                              │         │
+│         │                    |   [ Remove provider ]                                           │         │
+│         │                    |                                                                 │         │
+│         │                    |                                                                 │         │
+│         │                    |                                                                 │         │
+│         │                    |                                                                 │         │
+│         │                    |                                                                 │         │
+│         │                    |                                                                 │         │
+│         │Arrows move  Tab change pane  Enter select/edit  Esc close                            │         │
+│         └──────────────────────────────────────────────────────────────────────────────────────┘         │
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ Input ──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 Config: arrows/Tab, Enter, Esc
 ```
 
 ```ASCII
-┌─ History ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                                           │
-│               ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
-│               │Categories          | Chat Model                                                      │                │
-│               │                    |                                                                 │                │
-│               │  Providers         |     Ollama Internal Test Server / granite4.1-guardian:8b        │                │
-│               │> Chat Model        |     Ollama Internal Test Server / qwen3-coder:30b               │                │
-│               │  Embedding Model   |     Ollama Internal Test Server / gpt-oss:120b                  │                │
-│               │  Safety Model      |   * Ollama Internal Test Server / qwen3.6:35b                   │                │
-│               │  Advanced          |     Ollama Internal Test Server / gemma4:31b                    │                │
-│               │                    |     Ollama Internal Test Server / ornith:35b                    │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │Arrows move  Tab change pane  Enter select/edit  Esc close                            │                │
-│               └──────────────────────────────────────────────────────────────────────────────────────┘                │
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ History ───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│system: Mimir the terminal harness is ready.                                                                     │
+│         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
+│         │Categories          | Chat Model                                                      │                │
+│         │                    |                                                                 │                │
+│         │  Providers         |     Ollama Internal Test Server / granite4.1-guardian:8b        │                │
+│         │> Chat Model        |     Ollama Internal Test Server / qwen3-coder:30b               │                │
+│         │  Embedding Model   |     Ollama Internal Test Server / gpt-oss:120b                  │                │
+│         │  Safety Model      |   * Ollama Internal Test Server / qwen3.6:35b                   │                │
+│         │  Advanced          |     Ollama Internal Test Server / gemma4:31b                    │                │
+│         │                    |     Ollama Internal Test Server / ornith:35b                    │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │Arrows move  Tab change pane  Enter select/edit  Esc close                            │                │
+│         └──────────────────────────────────────────────────────────────────────────────────────┘                │
+│                                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ Input ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 Config: arrows/Tab, Enter, Esc
 ```
 
 ```ASCII
-┌─ History ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                                           │
-│               ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
-│               │Categories          | Advanced                                                        │                │
-│               │                    |                                                                 │                │
-│               │  Providers         |   Approval method: < Approve SAFE >                             │                │
-│               │  Chat Model        |   Tool continuation limit: 1000                                 │                │
-│               │  Embedding Model   |                                                                 │                │
-│               │  Safety Model      |                                                                 │                │
-│               │> Advanced          |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │                    |                                                                 │                │
-│               │Arrows move  Tab change pane  Enter select/edit  Esc close                            │                │
-│               └──────────────────────────────────────────────────────────────────────────────────────┘                │
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ History ───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│system: Mimir the terminal harness is ready.                                                                     │
+│         ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐                │
+│         │Categories          | Advanced                                                        │                │
+│         │                    |                                                                 │                │
+│         │  Providers         |   Approval method: < Approve SAFE >                             │                │
+│         │  Chat Model        |   Tool continuation limit: 1000                                 │                │
+│         │  Embedding Model   |                                                                 │                │
+│         │  Safety Model      |                                                                 │                │
+│         │> Advanced          |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │                    |                                                                 │                │
+│         │Arrows move  Tab change pane  Enter select/edit  Esc close                            │                │
+│         └──────────────────────────────────────────────────────────────────────────────────────┘                │
+│                                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ Input ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 Config: arrows/Tab, Enter, Esc
 ```
 
