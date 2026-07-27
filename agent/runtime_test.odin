@@ -242,3 +242,22 @@ test_stream_request_clone_owns_messages_and_tool_definitions :: proc(t: ^testing
 	assert(request.maxTokens == 4096, "expected cloned max tokens")
 	_ = t
 }
+
+@(test)
+test_runtime_seeds_active_agent_before_its_worker_starts :: proc(t: ^testing.T) {
+	runtime := runtime_init(context.temp_allocator)
+	defer runtime_destroy(&runtime)
+	agentID, startErr := runtime_start_background(&runtime, Agent_Start_Options{})
+	assert(startErr == .None, "expected agent to start")
+	assert(runtime_begin(&runtime, agentID) == .None, "expected agent to become active")
+	assert(
+		runtime_set_conversation(
+			&runtime,
+			agentID,
+			[]ai.Message{{role = .User, content = "inspect"}},
+		) ==
+		.None,
+		"expected active agent to accept its initial conversation",
+	)
+	_ = t
+}

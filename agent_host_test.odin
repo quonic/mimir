@@ -20,3 +20,17 @@ test_agent_host_starts_active_and_background_agents :: proc(t: ^testing.T) {
 	assert(backgroundOK && backgroundState == .Idle, "expected idle background agent")
 	_ = t
 }
+
+@(test)
+test_agent_host_stream_requires_a_selected_provider :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.selectedProvider = ""
+
+	assert(
+		!app_start_agent_host_stream(&state),
+		"expected missing provider to reject stream start",
+	)
+	assert(state.status == "No provider selected", "expected missing provider status")
+	_ = t
+}

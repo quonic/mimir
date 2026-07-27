@@ -143,7 +143,9 @@ runtime_set_conversation :: proc(
 		return .Not_Found
 	}
 	instance := &runtime.instances[index]
-	if instance.state != .Idle {
+	canSeedStreaming :=
+		instance.state == .Streaming && instance.stream == nil && len(instance.conversation) == 0
+	if instance.state != .Idle && !canSeedStreaming {
 		return .Invalid_State
 	}
 	for &message in instance.conversation {
