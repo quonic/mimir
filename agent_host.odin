@@ -3,14 +3,16 @@ package main
 import agent "./agent"
 import "ai"
 import "core:mem"
+import "core:strings"
 
 Agent_Host :: struct {
 	runtime:       agent.Runtime,
 	activeAgentID: agent.Agent_ID,
+	historyIndex:  int,
 }
 
 agent_host_init :: proc(allocator := context.allocator) -> Agent_Host {
-	return Agent_Host{runtime = agent.runtime_init(allocator)}
+	return Agent_Host{runtime = agent.runtime_init(allocator), historyIndex = -1}
 }
 
 agent_host_destroy :: proc(host: ^Agent_Host) {
@@ -55,6 +57,65 @@ agent_host_poll_active :: proc(host: ^Agent_Host) -> (bool, agent.Agent_Error) {
 		return false, .None
 	}
 	return agent.runtime_poll_stream(&host.runtime, host.activeAgentID)
+}
+
+app_poll_agent_host :: proc(state: ^App_State) -> bool {
+	dirty, pollErr := agent_host_poll_active(&state.agentHost)
+	if pollErr != .None {
+		state.status = "Agent runtime polling failed"
+		return dirty
+	}
+	activeID := state.agentHost.activeAgentID
+	for {
+		event, eventOK := agent.runtime_next_event(&state.agentHost.runtime, activeID)
+		if !eventOK {
+			break
+		}
+		dirty = app_apply_agent_event(state, event) || dirty
+		agent.agent_event_destroy(&event, context.allocator)
+	}
+	return dirty
+}
+
+app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bool {
+	switch event.type {
+	case .Text_Delta:
+		if state.agentHost.historyIndex < 0 || state.agentHost.historyIndex >= len(state.history) {
+			append_history(state, .Assistant, event.content)
+			state.agentHost.historyIndex = len(state.history) - 1
+		} else {
+			entry := &state.history[state.agentHost.historyIndex]
+			updated := strings.concatenate({entry.content, event.content}, context.allocator)
+			delete(entry.content)
+			entry.content = updated
+			entry.cachedLineWidth = 0
+			entry.cachedLineCount = 0
+		}
+		state.historyRenderOnly = true
+		return true
+	case .Tool_Requested:
+		state.status = "Tool call awaiting dispatch"
+		return true
+	case .Completed:
+		state.status = "Assistant response complete"
+		state.agentHost.historyIndex = -1
+		return true
+	case .Failed:
+		append_history(state, .Assistant, event.content)
+		state.status = "Assistant stream failed"
+		state.agentHost.historyIndex = -1
+		return true
+	case .Canceled:
+		state.status = "Assistant stream canceled"
+		state.agentHost.historyIndex = -1
+		return true
+	case .Child_Completed:
+		append_history(state, .Tool, event.content)
+		return true
+	case .None, .Thinking_Changed, .Tool_Resolved:
+		return false
+	}
+	return false
 }
 
 app_start_agent_host_stream :: proc(state: ^App_State) -> bool {

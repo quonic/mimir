@@ -1,6 +1,7 @@
 package main
 
 import agent "./agent"
+import "ai"
 import "core:testing"
 
 @(test)
@@ -32,5 +33,40 @@ test_agent_host_stream_requires_a_selected_provider :: proc(t: ^testing.T) {
 		"expected missing provider to reject stream start",
 	)
 	assert(state.status == "No provider selected", "expected missing provider status")
+	_ = t
+}
+
+@(test)
+test_agent_host_projects_streamed_text_into_one_history_entry :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "first "},
+		) ==
+		.None,
+		"expected first text delta",
+	)
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "response", done = true},
+		) ==
+		.None,
+		"expected final text delta",
+	)
+	assert(app_poll_agent_host(&state), "expected projected runtime events")
+	entry := state.history[len(state.history) - 1]
+	assert(entry.role == .Assistant, "expected assistant history entry")
+	assert(entry.content == "first response", "expected combined streamed text")
+	assert(state.status == "Assistant response complete", "expected completion status")
 	_ = t
 }
