@@ -152,10 +152,33 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		return true
 	}
 	if decision == .Approval_Required {
-		state.status = "Tool call awaiting approval"
+		if !app_show_agent_approval(state, call, event.agentID, event.requestID) {
+			_ = agent.runtime_resolve_tool(
+				&state.agentHost.runtime,
+				event.agentID,
+				event.requestID,
+				.Denied,
+				"Tool call requires approval.",
+			)
+			state.status = "Tool call rejected"
+		}
 		return true
 	}
 	state.status = "Tool call awaiting execution"
+	return true
+}
+
+app_show_agent_approval :: proc(
+	state: ^App_State,
+	call: Tool_Call,
+	agentID: agent.Agent_ID,
+	requestID: string,
+) -> bool {
+	if !app_show_approval(state, call) {
+		return false
+	}
+	state.approval.agentID = agentID
+	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
 	return true
 }
 

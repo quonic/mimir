@@ -1,5 +1,6 @@
 package main
 
+import agent "./agent"
 import "ai"
 import "console"
 import "core:c"
@@ -37,14 +38,16 @@ Approval_Input_State :: enum int {
 }
 
 Approval_State :: struct {
-	call:          Tool_Call,
-	callOwned:     bool,
-	prepared:      Tool_Dispatch_Result,
-	preparedOwned: bool,
-	historyIndex:  int,
-	safety:        Approval_Safety_State,
-	choice:        Approval_Choice,
-	input:         Approval_Input_State,
+	call:           Tool_Call,
+	callOwned:      bool,
+	prepared:       Tool_Dispatch_Result,
+	preparedOwned:  bool,
+	historyIndex:   int,
+	agentID:        agent.Agent_ID,
+	agentRequestID: string,
+	safety:         Approval_Safety_State,
+	choice:         Approval_Choice,
+	input:          Approval_Input_State,
 }
 
 App_Setup_Step :: enum int {
@@ -1051,6 +1054,7 @@ app_clear_approval :: proc(state: ^App_State) {
 	if state.approval.preparedOwned {
 		tool_dispatch_result_destroy(&state.approval.prepared, state.dispatcher.allocator)
 	}
+	delete(state.approval.agentRequestID, state.dispatcher.allocator)
 	state.approval = {}
 }
 

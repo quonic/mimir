@@ -95,3 +95,27 @@ test_agent_host_denies_invalid_tool_requests_and_resumes_agent :: proc(t: ^testi
 	assert(agentOK && agentState == .Streaming, "expected denied tool to resume the agent")
 	_ = t
 }
+
+@(test)
+test_agent_host_approval_retains_runtime_request_identity :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		app_show_agent_approval(
+			&state,
+			Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			agentID,
+			"call-1",
+		),
+		"expected approval modal",
+	)
+	assert(state.mode == .Approval, "expected approval mode")
+	assert(state.approval.agentID == agentID, "expected approval agent ID")
+	assert(state.approval.agentRequestID == "call-1", "expected approval request ID")
+	_ = t
+}
