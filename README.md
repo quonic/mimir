@@ -20,8 +20,8 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 ## Supported Platforms
 
 - Linux
-- macOS might work, but is untested. Please report any issues if you try it.
-- Windows might work, but is untested. Please report any issues if you try it.
+
+Windows and macOS are untested and may never be officially supported, as I do not have access to those platforms. You are more than welcome to try building and running Mimir on those platforms, but I cannot guarantee that it will work. Feel free to open issues or PRs if you find problems or have suggestions for improvements.
 
 ## Quick Start
 
