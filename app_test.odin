@@ -134,12 +134,8 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 
 @(test)
 test_approval_safety_prompt_uses_only_command_details :: proc(t: ^testing.T) {
-	prompt := approval_safety_prompt("git status", "/workspace/project")
+	prompt := approval_safety_prompt("git status")
 	assert(strings.contains(prompt, "git status"), "expected command in safety prompt")
-	assert(
-		strings.contains(prompt, "/workspace/project"),
-		"expected working directory in safety prompt",
-	)
 	assert(
 		!strings.contains(prompt, "prior conversation"),
 		"expected prompt to exclude prior conversation",
