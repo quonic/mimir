@@ -360,11 +360,11 @@ app_destroy :: proc(state: ^App_State) {
 	input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
 	for entry in state.inputHistory {
-		delete(entry, context.allocator)
+		delete(entry, state.stream.bufferAllocator)
 	}
 	delete(state.inputHistory)
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft, context.allocator)
+		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
 	}
 	for entry in state.history {
 		delete(entry.content, context.allocator)
@@ -1522,7 +1522,7 @@ app_record_input_history :: proc(state: ^App_State, text: string) {
 		app_reset_input_history_browse(state)
 		return
 	}
-	append(&state.inputHistory, strings.clone(text, context.allocator))
+	append(&state.inputHistory, strings.clone(text, state.stream.bufferAllocator))
 	app_reset_input_history_browse(state)
 	if state.configHome != "" && state.workingDirectory != "" {
 		if save_input_history_to_file(
@@ -1555,6 +1555,7 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 
 app_clear_input_history :: proc(state: ^App_State) {
 	for &entry in state.inputHistory {
+		delete(entry, state.stream.bufferAllocator)
 		entry = ""
 	}
 	clear(&state.inputHistory)
@@ -1582,7 +1583,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 app_reset_input_history_browse :: proc(state: ^App_State) {
 	state.inputHistoryCursor = -1
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft, context.allocator)
+		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
 		state.inputHistoryDraft = ""
 	}
 }
@@ -1595,7 +1596,7 @@ app_input_history_previous :: proc(state: ^App_State) -> bool {
 	if state.inputHistoryCursor < 0 {
 		current := input_buffer_string(&state.input)
 		if current != "" {
-			state.inputHistoryDraft = strings.clone(current, context.allocator)
+			state.inputHistoryDraft = strings.clone(current, state.stream.bufferAllocator)
 		}
 		state.inputHistoryCursor = len(state.inputHistory) - 1
 	} else if state.inputHistoryCursor > 0 {

@@ -325,6 +325,7 @@ runtime_request_next_tool :: proc(runtime: ^Runtime, index: int) -> Agent_Error 
 		return .Tool_Resolution_Not_Found
 	}
 	request := instance.queuedTools[0]
+	defer tool_request_destroy(&request, runtime.allocator)
 	ordered_remove(&instance.queuedTools, 0)
 	return runtime_request_tool(runtime, instance.id, request)
 }

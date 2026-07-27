@@ -60,10 +60,6 @@ runtime_destroy :: proc(runtime: ^Runtime) {
 }
 
 runtime_message_destroy :: proc(message: ^ai.Message, allocator := context.allocator) {
-	for &result in message.toolResults {
-		delete(result.content, allocator)
-		result.content = ""
-	}
 	ai.message_destroy(message, allocator)
 }
 

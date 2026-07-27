@@ -4,6 +4,7 @@ package ai
 // Anthropic, OpenAI-compatible, and native Ollama interfaces.
 
 import http "../http"
+import "core:mem"
 import "core:strings"
 
 Interface :: struct {
@@ -45,11 +46,15 @@ Client :: struct {
 }
 
 Interfaces: [dynamic]Interface
+interfacesAllocator: mem.Allocator
 
 clear_interfaces :: proc() {
+	if Interfaces == nil {
+		return
+	}
 	for iface in Interfaces {
 		for &model in iface.models {
-			model_destroy(&model)
+			model_destroy(&model, interfacesAllocator)
 		}
 		delete(iface.models)
 	}
@@ -60,6 +65,10 @@ clear_interfaces :: proc() {
 add_interface :: proc(name: string, type: Interface_Type, endpoint: string) {
 	url := http.url_parse(endpoint)
 	if url.host != "" {
+		if Interfaces == nil {
+			Interfaces = make([dynamic]Interface, 0, 0, context.allocator)
+			interfacesAllocator = context.allocator
+		}
 		append(&Interfaces, Interface{name = name, type = type, endpoint = url})
 	}
 }
@@ -73,6 +82,10 @@ add_interface_with_models :: proc(
 	url := http.url_parse(endpoint)
 	if url.host == "" {
 		return
+	}
+	if Interfaces == nil {
+		Interfaces = make([dynamic]Interface, 0, 0, context.allocator)
+		interfacesAllocator = context.allocator
 	}
 
 	entry := Interface {
