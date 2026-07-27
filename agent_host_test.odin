@@ -119,3 +119,41 @@ test_agent_host_approval_retains_runtime_request_identity :: proc(t: ^testing.T)
 	assert(state.approval.agentRequestID == "call-1", "expected approval request ID")
 	_ = t
 }
+
+@(test)
+test_agent_approval_denial_resolves_the_runtime_request :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request{id = "call-1", name = "write_file", arguments = `{}`},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+	requestEvent, requestEventOK := agent.runtime_next_event(&state.agentHost.runtime, agentID)
+	assert(requestEventOK, "expected runtime tool event")
+	defer agent.agent_event_destroy(&requestEvent, context.allocator)
+	assert(
+		app_show_agent_approval(
+			&state,
+			Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			agentID,
+			requestEvent.requestID,
+		),
+		"expected approval modal",
+	)
+	app_apply_approval_choice(&state, .Deny)
+	assert(state.mode == .Chat, "expected approval denial to return to chat")
+	assert(state.status == "Tool call denied", "expected denial status")
+	agentState, agentOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(agentOK && agentState == .Streaming, "expected denied request to resume agent")
+	_ = t
+}

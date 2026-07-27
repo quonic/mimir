@@ -1146,6 +1146,19 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if choice == .Deny {
 		output := "Permission denied."
+		if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
+			_ = agent.runtime_resolve_tool(
+				&state.agentHost.runtime,
+				state.approval.agentID,
+				state.approval.agentRequestID,
+				.Denied,
+				output,
+			)
+			state.status = "Tool call denied"
+			state.mode = .Chat
+			app_clear_approval(state)
+			return
+		}
 		app_update_tool_history(
 			state,
 			state.approval.historyIndex,
