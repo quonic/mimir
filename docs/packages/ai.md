@@ -1,6 +1,6 @@
 # AI Package
 
-The `ai` package provides generalized chat-completions and embedding interfaces for:
+The `ai` package provides chat completion and embedding interfaces for:
 
 - Native Ollama endpoints
 - OpenAI-compatible endpoints, including Ollama's `/v1` compatibility API
@@ -16,7 +16,7 @@ ai.add_interface("ollama-openai", .OpenAI, "http://127.0.0.1:11434/v1")
 ai.add_interface("anthropic", .Anthropic, "https://api.anthropic.com/v1")
 ```
 
-Optional model allow-list:
+Optional model allowlist:
 
 ```odin
 ai.add_interface_with_models(
@@ -52,7 +52,7 @@ if err == .None {
 ## Streaming a Chat Request
 
 OpenAI-compatible, Anthropic, and native Ollama interfaces can stream chat
-deltas:
+updates:
 
 ```odin
 stream_chat_delta :: proc(delta: ai.Chat_Stream_Delta) -> bool {
@@ -73,7 +73,7 @@ err := ai.send_chat_completion_stream(client, ai.Chat_Request{
 
 ## Generating Embeddings
 
-OpenAI-compatible and native Ollama interfaces support embeddings. A single input
+OpenAI-compatible and native Ollama interfaces support embeddings. One input
 returns one vector:
 
 ```odin
@@ -87,8 +87,8 @@ if err == .None {
 }
 ```
 
-Use `send_embeddings` when the caller has multiple inputs. The response vectors
-preserve the order of the request inputs:
+Use `send_embeddings` for multiple inputs. The response vectors keep the order
+of the request inputs:
 
 ```odin
 response, err := ai.send_embeddings(client, ai.Embedding_Batch_Request{
@@ -106,19 +106,18 @@ if err == .None {
 ```
 
 `Embedding_Response` and `Embedding_Batch_Response` own their model strings and
-vector buffers. Always call the matching destroy procedure with the allocator used
-for the request result.
+vector buffers. Always call the matching destroy procedure with the allocator
+that received the request result.
 
-Dimensions are sent to OpenAI-compatible and native Ollama APIs when
-`hasDimensions` is set. Native Ollama also supports optional `ollamaTruncate`,
-`ollamaKeepAlive`, and `ollamaOptions` controls. Set the corresponding `has...`
-field to include each control. Unset controls are omitted from the request, so
-Ollama retains its defaults, including its default truncation behavior.
+Mimir sends dimensions to OpenAI-compatible and native Ollama APIs when
+`hasDimensions` is set. Native Ollama also supports `ollamaTruncate`,
+`ollamaKeepAlive`, and `ollamaOptions`. Set the matching `has...` field to send
+each option. Mimir omits unset options. Ollama then uses its defaults, including
+its default truncation behavior.
 
-The normalized response exposes `model`, vectors, `inputTokenCount`,
-`totalDuration`, and `loadDuration`. A provider that does not return a metadata
-value leaves it as zero. Anthropic interfaces return `.Unsupported_Interface`
-because Anthropic does not provide a native embeddings endpoint.
+The response includes `model`, vectors, `inputTokenCount`, `totalDuration`, and
+`loadDuration`. A missing metadata value is zero. Anthropic interfaces return
+`.Unsupported_Interface` because Anthropic has no native embeddings endpoint.
 
 ## Listing Models
 
@@ -140,9 +139,9 @@ odin check .
 odin test ./ai
 ```
 
-Integration with local Ollama is opt-in:
+Local Ollama integration is optional:
 
-1. Start Ollama and make sure a model is available.
+1. Start Ollama and make sure that a model is available.
 2. Set these environment variables:
    - `AI_OLLAMA_INTEGRATION=1`
    - `AI_OLLAMA_NATIVE_INTEGRATION=1` for the native `/api` protocol
@@ -153,5 +152,5 @@ Integration with local Ollama is opt-in:
    - Optional: `AI_OLLAMA_API_KEY=<value>`
 3. Run `odin test ./ai`.
 
-When integration is enabled, tests verify both chat completions and `list_models`
-against the selected Ollama endpoint.
+When integration is enabled, tests check chat completions and `list_models` at
+the selected Ollama endpoint.

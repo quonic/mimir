@@ -1,30 +1,30 @@
 # Configuration
 
-Mimir stores its main configuration file at:
+Mimir stores its main configuration file here:
 
 ```text
 $HOME/.config/mimir/config.json
 ```
 
-Submitted input history is stored separately beneath:
+Mimir stores submitted input history here:
 
 ```text
 $HOME/.cache/mimir/history-<working-directory-hash>.json
 ```
 
-Each cache file belongs to one absolute working directory. `/clear` removes
-only the history file for the directory from which Mimir is running.
+Each history file belongs to one absolute working directory. `/clear` removes
+only the history file for the current directory.
 
-Semantic code indexes are stored separately beneath:
+Mimir stores semantic code indexes here:
 
 ```text
 $HOME/.cache/mimir/code-index-<project-and-model-hash>.vdb
 ```
 
-The index cache is scoped to the Git project root when one is found, otherwise
-to Mimir's working directory. Its identity also includes the embedding provider
-and model, so projects and embedding models never share vectors. Mimir loads a
-matching cache on startup and builds it lazily when `search_code` is first used.
+Mimir uses the Git project root for the cache when it finds one. Otherwise, it
+uses the working directory. The cache also identifies the embedding provider and
+model. Projects and embedding models do not share vectors. Mimir loads a
+matching cache at startup. It builds the cache when `search_code` first uses it.
 
 ## First Run
 
@@ -34,14 +34,13 @@ At startup, Mimir probes the default native Ollama endpoint:
 http://localhost:11434
 ```
 
-If Ollama is available, Mimir saves a default provider configuration. If it is
-not available, the application enters its setup flow to collect an endpoint URL
-and optional API key, then saves the resulting configuration after a successful
-probe.
+If Ollama is available, Mimir saves a default provider configuration. Otherwise,
+Mimir asks for an endpoint URL and an optional API key. It saves the
+configuration after it connects successfully.
 
-Mimir probes existing Ollama providers at startup to refresh their model lists
-for selection through `/config`. A malformed configuration enters setup mode
-without overwriting the existing file.
+At startup, Mimir updates model lists for configured Ollama providers. Select a
+model with `/config`. If the configuration is invalid, Mimir starts setup mode
+and keeps the existing file.
 
 ## Configuration Format
 
@@ -78,35 +77,31 @@ The initial configuration shape is:
 }
 ```
 
-`selectedProvider` and `selectedModel` configure the chat model.
-`embeddingProvider` and `embeddingModel` configure semantic code search and
-are intentionally independent. Select an embedding-capable provider and model
-in the `Embedding Model` settings category before using `search_code`; Mimir
-does not choose a default embedding model.
+`selectedProvider` and `selectedModel` set the chat model.
+`embeddingProvider` and `embeddingModel` set the model for semantic code search.
+They are separate from the chat model. Before you use `search_code`, select an
+embedding provider and model in `Embedding Model`. Mimir does not select a
+default embedding model.
 
-`safetyProvider` and `safetyModel` configure the model that evaluates shell
-commands in the approval dialog. Select a chat-capable provider and model in
-the `Safety Model` settings category to use an independent model for those
-assessments. When both values are empty, Mimir falls back to the chat provider
-and model for compatibility with existing configurations. A partial or invalid
-explicit safety selection leaves safety advice unavailable rather than falling
-back silently.
+`safetyProvider` and `safetyModel` set the model that checks shell commands in
+the approval dialog. Select a chat provider and model in `Safety Model` to use
+a separate safety model. If both values are empty, Mimir uses the chat provider
+and model. An incomplete or invalid safety selection disables safety advice.
 
-`contextWindows` optionally records a nonnegative manual context capacity for a
-specific provider/model pair. A value of `0` means the capacity is unknown. For
-Ollama, Mimir queries `/api/show` for a positive `model_info` key ending in
-`.context_length`; a discovered value is used in preference to this fallback.
-The Providers configuration modal's **Refresh models** action discovers these
-values for all listed Ollama models and persists changed positive values. Missing
-or unsupported model metadata retains any existing configured value and does not
-prevent chat.
+`contextWindows` can store a manual context limit for a provider and model. The
+value must not be negative. A value of `0` means the limit is unknown. For
+Ollama, Mimir reads a positive `model_info` key that ends in `.context_length`
+from `/api/show`. This value takes priority over the manual limit. **Refresh
+models** finds these values for all listed Ollama models and saves changed
+positive values. Missing or unsupported metadata keeps an existing limit and
+does not stop chat.
 
 ## Permission Grants
 
 Built-in file operations are confined to Mimir's active project directory.
-Reads within that directory are allowed by default. Writes and commands require
-approval unless a matching grant is configured. Grants are stored in the user
-configuration and are scoped to one canonical project path.
+Mimir allows reads inside the project directory by default. Writes and commands
+need approval unless a matching grant exists. Mimir stores grants in the user
+configuration. Each grant applies to one canonical project path.
 
 `permissionGrants` accepts the following grant kinds:
 
@@ -122,7 +117,7 @@ configuration and are scoped to one canonical project path.
       "kind": "commandPrefix",
       "projectRoot": "/home/user/project",
       "command": "odin test"
-    }
+    },
     {
       "kind": "mcpServer",
       "projectRoot": "/home/user/project",
@@ -132,13 +127,13 @@ configuration and are scoped to one canonical project path.
 }
 ```
 
-A `directorySubtree` grant applies only to writes within that directory. A
-`commandPrefix` grant applies only when the command runs from the project root and
-matches the configured command prefix. An `mcpServer` grant reserves server-level
-trust for future MCP transport.
+A `directorySubtree` grant applies only to writes in that directory. A
+`commandPrefix` grant applies only when the command runs from the project root
+and starts with the configured command. An `mcpServer` grant reserves trust for
+a future MCP server connection.
 
-Malformed grants, paths outside their project root, and path traversal are
-rejected while loading configuration.
+Mimir rejects malformed grants, paths outside the project root, and path
+traversal when it loads the configuration.
 
 ## Diagnostics
 
@@ -148,6 +143,6 @@ Raw LLM HTTP response output from the latest chat request is written to:
 $HOME/.cache/mimir/last_session.log
 ```
 
-The log is overwritten when a new chat request starts and appended as response
-body or stream chunks arrive. It can contain model output and provider error
-bodies, so treat it as local diagnostic data.
+Mimir replaces the log when a new chat request starts. It adds response bodies
+or stream chunks as they arrive. The log can contain model output and provider
+error bodies. Treat it as local diagnostic data.

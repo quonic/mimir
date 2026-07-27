@@ -2,37 +2,35 @@
 
 ## Terminal Application
 
-Mimir is implemented as a full-screen terminal application that uses the
-terminal alternate buffer for normal interactive sessions. Its primary view has
-three parts:
+Mimir is a full-screen terminal application. Interactive sessions use the
+terminal alternate buffer. The main view has three parts:
 
-- A history panel that takes most of the available height.
-- A multiline input panel below history that expands as text is typed or pasted.
-- A one-line status bar fixed to the final terminal row.
+- A history panel that uses most of the available height.
+- A multiline input panel below the history panel. It expands as you type or paste text.
+- A one-line status bar on the last terminal row.
 
-Slash commands are reserved for application commands. Initial command targets
-include `/exit`, `/config`, `/help`, `/stop`, and `/clear`.
+Slash commands control the application. Commands include `/exit`, `/config`,
+`/help`, `/stop`, and `/clear`.
 
 ## Input and Terminal Behavior
 
-The input panel supports shell-style editing controls. Up and Down browse
-submitted input history, which is persisted separately for each working
 directory. `/clear` removes the submitted-input history for the current working
-directory. Left and Right move the insertion cursor within the current input.
-The cursor is drawn inside the input panel as a blinking background-colored
-cell.
+The input panel supports shell-style editing controls. Up and Down browse the
+input history for the current working directory. `/clear` removes this history.
+Left and Right move the cursor in the current input. The cursor appears as a
+blinking cell in the input panel.
 
-The application enters raw mode and the alternate buffer, renders the panels,
-and restores the terminal on `/exit`, Ctrl-C, or Ctrl-D. On Linux, it reads the
-terminal size with `ioctl(TIOCGWINSZ)` and polls for input with a short timeout
-so resizes redraw the layout even when no key is pressed. If size detection is
-unavailable, it falls back to `LINES` and `COLUMNS`, then to 24 by 80.
+Mimir enters raw mode and the alternate buffer before it renders the panels. It
+restores the terminal on `/exit`, Ctrl-C, or Ctrl-D. On Linux, it reads terminal
+size with `ioctl(TIOCGWINSZ)`. It polls for input with a short timeout so it can
+redraw after a resize. If it cannot read the size, it uses `LINES` and `COLUMNS`.
+If those are unavailable, it uses 24 by 80.
 
 ## Chat Streaming and Cancellation
 
-Chat submissions stream assistant responses from the configured provider and
-model on a background worker, allowing the input loop to continue processing
-terminal events. `/stop` and `/cancel` request graceful cancellation.
+Chat requests stream assistant responses from the configured provider and model
+on a background worker. The input loop continues to process terminal events.
+`/stop` and `/cancel` request cancellation.
 
-Cancellation completes after the provider emits the next stream chunk because
-the current HTTP transport does not expose a hard request-abort hook.
+Cancellation completes after the provider sends the next stream chunk. The HTTP
+transport cannot abort an active request immediately.
