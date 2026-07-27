@@ -87,7 +87,7 @@ app_start_approval_safety :: proc(state: ^App_State) {
 		model       = strings.clone(safetyModel.model, state.dispatcher.allocator),
 		messages    = messages[:],
 		temperature = 0.0,
-		maxTokens   = 24,
+		maxTokens   = 2400,
 	}
 
 	approval.workerData = worker
@@ -195,7 +195,7 @@ approval_safety_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: ra
 		if safety.cancelRequested {
 			return false
 		}
-		if delta.content != "" {
+		if delta.content != "" && !delta.isThinking {
 			append(&safety.response, ..transmute([]byte)delta.content)
 		}
 	}
