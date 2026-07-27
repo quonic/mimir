@@ -1219,7 +1219,18 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			"running",
 		)
 	}
-	started := app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
+	started := false
+	if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
+		started = app_start_agent_tool_execution(
+			state,
+			state.approval.call,
+			state.approval.historyIndex,
+			state.approval.agentID,
+			state.approval.agentRequestID,
+		)
+	} else {
+		started = app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
+	}
 	state.mode = .Chat
 	app_clear_approval(state)
 	if !started {

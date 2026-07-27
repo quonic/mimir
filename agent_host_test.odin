@@ -157,3 +157,130 @@ test_agent_approval_denial_resolves_the_runtime_request :: proc(t: ^testing.T) {
 	assert(agentOK && agentState == .Streaming, "expected denied request to resume agent")
 	_ = t
 }
+
+@(test)
+test_agent_allow_once_executes_and_resumes_runtime :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "run_command",
+				arguments = `{"command":"pwd"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+	assert(app_poll_agent_host(&state), "expected tool request to open approval")
+	assert(state.mode == .Approval, "expected approval mode")
+	app_apply_approval_choice(&state, .Allow_Once)
+	assert(state.toolExecution.active, "expected approved tool execution to start")
+	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Executing_Tool, "expected runtime tool execution state")
+	_ = app_poll_agent_host(&state)
+	for !app_poll_tool_execution(&state) {
+	}
+	runtimeState, runtimeOK = agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Streaming, "expected completed tool to resume runtime")
+	_ = t
+}
+
+@(test)
+test_agent_tool_execution_projects_output_to_runtime :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "run_command",
+				arguments = `{"command":"pwd"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+	assert(app_poll_agent_host(&state), "expected tool request to open approval")
+	app_apply_approval_choice(&state, .Allow_Once)
+	_ = app_poll_agent_host(&state)
+	for !app_poll_tool_execution(&state) {
+	}
+	resultEvent, resultOK := agent.runtime_next_event(&state.agentHost.runtime, agentID)
+	assert(resultOK, "expected runtime tool result event")
+	defer agent.agent_event_destroy(&resultEvent, context.allocator)
+	assert(resultEvent.type == .Tool_Resolved, "expected resolved tool event")
+	assert(!resultEvent.isError, "expected successful tool result")
+	assert(resultEvent.content != "", "expected projected tool output")
+	assert(len(state.stream.conversation) == 0, "expected no legacy tool result projection")
+	_ = t
+}
+
+@(test)
+test_agent_tool_completion_starts_queued_tool_request :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta {
+				hasToolCall = true,
+				toolCall = ai.Tool_Call {
+					id = "call-1",
+					name = "run_command",
+					arguments = `{"command":"pwd"}`,
+				},
+			},
+		) ==
+		.None,
+		"expected first queued tool call",
+	)
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta {
+				hasToolCall = true,
+				toolCall = ai.Tool_Call {
+					id = "call-2",
+					name = "run_command",
+					arguments = `{"command":"pwd"}`,
+				},
+				done = true,
+			},
+		) ==
+		.None,
+		"expected second queued tool call",
+	)
+	assert(app_poll_agent_host(&state), "expected first tool request to open approval")
+	assert(state.approval.agentRequestID == "call-1", "expected first tool request")
+	app_apply_approval_choice(&state, .Allow_Once)
+	_ = app_poll_agent_host(&state)
+	for !app_poll_tool_execution(&state) {
+	}
+	assert(app_poll_agent_host(&state), "expected queued tool request to open approval")
+	assert(state.mode == .Approval, "expected queued tool approval")
+	assert(state.approval.agentRequestID == "call-2", "expected second tool request")
+	_ = t
+}
