@@ -138,7 +138,7 @@ history_cache_dir :: proc(home: string, allocator := context.allocator) -> strin
 	return strings.to_string(builder)
 }
 
-config_write_decimal :: proc(builder: ^strings.Builder, value: int) {
+write_decimal :: proc(builder: ^strings.Builder, value: int) {
 	if value == 0 {
 		strings.write_byte(builder, '0')
 		return
@@ -751,7 +751,7 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		strings.write_string(&builder, ",\n      \"model\": ")
 		write_json_string(&builder, entry.model)
 		strings.write_string(&builder, ",\n      \"tokens\": ")
-		config_write_decimal(&builder, entry.tokens)
+		write_decimal(&builder, entry.tokens)
 		strings.write_string(&builder, "\n    }")
 	}
 	if len(config.contextWindows) > 0 {

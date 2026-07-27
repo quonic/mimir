@@ -699,13 +699,13 @@ app_search_code_results_json :: proc(
 		}
 		strings.write_string(&builder, `,"start_line":`)
 		if locationOK {
-			config_write_decimal(&builder, location.startLine)
+			write_decimal(&builder, location.startLine)
 		} else {
 			strings.write_byte(&builder, '0')
 		}
 		strings.write_string(&builder, `,"end_line":`)
 		if locationOK {
-			config_write_decimal(&builder, location.endLine)
+			write_decimal(&builder, location.endLine)
 		} else {
 			strings.write_byte(&builder, '0')
 		}
