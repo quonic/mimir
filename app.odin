@@ -587,12 +587,38 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 	state.historySelection = {}
 }
 
-app_append_tool_history :: proc(state: ^App_State, toolID, status: string) -> int {
-	append_history(state, .Tool, fmt.tprintf("%s (%s)", toolID, status))
+app_tool_history_content :: proc(call: Tool_Call, status: string) -> string {
+	target := ""
+	switch call.id {
+	case "read_file", "write_file", "get_file_info":
+		target = call.filePath
+	case "list_directory":
+		target = call.directoryPath
+	case "run_command":
+		target = call.command
+	case "search_code", "find_code":
+		target = call.query
+	case "mcp":
+		target = call.mcpServer
+	}
+	if target == "" {
+		return fmt.tprintf("%s (%s)", call.id, status)
+	}
+	displayTarget := approval_display_text(target, context.temp_allocator)
+	return fmt.tprintf("%s: %s (%s)", call.id, displayTarget, status)
+}
+
+app_append_tool_history :: proc(state: ^App_State, call: Tool_Call, status: string) -> int {
+	append_history(state, .Tool, app_tool_history_content(call, status))
 	return len(state.history) - 1
 }
 
-app_update_tool_history :: proc(state: ^App_State, historyIndex: int, toolID, status: string) {
+app_update_tool_history :: proc(
+	state: ^App_State,
+	historyIndex: int,
+	call: Tool_Call,
+	status: string,
+) {
 	if historyIndex < 0 || historyIndex >= len(state.history) {
 		return
 	}
@@ -600,7 +626,7 @@ app_update_tool_history :: proc(state: ^App_State, historyIndex: int, toolID, st
 	if entry.content != "" {
 		delete(entry.content, context.allocator)
 	}
-	entry.content = strings.clone(fmt.tprintf("%s (%s)", toolID, status), context.allocator)
+	entry.content = strings.clone(app_tool_history_content(call, status), context.allocator)
 	entry.cachedLineWidth = 0
 	entry.cachedLineCount = 0
 	state.historyScrollOffset = 0
@@ -1189,12 +1215,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			app_clear_approval(state)
 			return
 		}
-		app_update_tool_history(
-			state,
-			state.approval.historyIndex,
-			state.approval.call.id,
-			"denied",
-		)
+		app_update_tool_history(state, state.approval.historyIndex, state.approval.call, "denied")
 		app_append_tool_result(state, state.approval.call.callID, output, true)
 		state.status = "Tool call denied"
 		state.mode = .Chat
@@ -1238,16 +1259,11 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	if state.approval.historyIndex < 0 {
 		state.approval.historyIndex = app_append_tool_history(
 			state,
-			state.approval.call.id,
+			state.approval.call,
 			"running",
 		)
 	} else {
-		app_update_tool_history(
-			state,
-			state.approval.historyIndex,
-			state.approval.call.id,
-			"running",
-		)
+		app_update_tool_history(state, state.approval.historyIndex, state.approval.call, "running")
 	}
 	started := false
 	if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {

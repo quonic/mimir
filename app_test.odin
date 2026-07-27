@@ -399,7 +399,7 @@ test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
 	assert(state.mode == .Approval, "expected execute tool call to require approval")
 	assert(len(state.stream.toolCalls) == 0, "expected queued tool call to be consumed")
 	assert(
-		state.history[len(state.history) - 1].content == "run_command (awaiting approval)",
+		state.history[len(state.history) - 1].content == "run_command: pwd (awaiting approval)",
 		"expected approval-pending tool history entry",
 	)
 	_ = t
@@ -423,7 +423,7 @@ test_app_approve_all_starts_streamed_tool_execution :: proc(t: ^testing.T) {
 	assert(state.mode == .Chat, "expected automatic approval to keep chat mode")
 	assert(state.toolExecution.active, "expected approved tool execution to start")
 	assert(
-		state.history[len(state.history) - 1].content == "run_command (running)",
+		state.history[len(state.history) - 1].content == "run_command: pwd (running)",
 		"expected automatically approved tool to run",
 	)
 	_ = t
@@ -447,7 +447,7 @@ test_app_deny_all_rejects_streamed_tool_call :: proc(t: ^testing.T) {
 	assert(state.mode == .Chat, "expected automatic denial to keep chat mode")
 	assert(!state.toolExecution.active, "expected denied tool execution not to start")
 	assert(
-		state.history[len(state.history) - 1].content == "run_command (denied)",
+		state.history[len(state.history) - 1].content == "run_command: pwd (denied)",
 		"expected automatically denied tool history",
 	)
 	_ = t
@@ -513,20 +513,20 @@ test_app_approved_tool_history_runs_and_completes :: proc(t: ^testing.T) {
 	assert(app_process_pending_stream_tool_calls(&state), "expected tool call to await approval")
 	historyIndex := len(state.history) - 1
 	assert(
-		state.history[historyIndex].content == "run_command (awaiting approval)",
+		state.history[historyIndex].content == "run_command: pwd (awaiting approval)",
 		"expected awaiting approval history entry",
 	)
 	app_apply_approval_choice(&state, .Allow_Once)
 	assert(state.mode == .Chat, "expected approval to return to chat mode")
 	assert(
-		state.history[historyIndex].content == "run_command (running)",
+		state.history[historyIndex].content == "run_command: pwd (running)",
 		"expected approved tool to enter running history state",
 	)
 	state.mode = .Config
 	for !app_poll_tool_execution(&state) {
 	}
 	assert(
-		state.history[historyIndex].content == "run_command (completed)",
+		state.history[historyIndex].content == "run_command: pwd (completed)",
 		"expected approved tool to complete in history",
 	)
 	_ = t
@@ -559,7 +559,7 @@ test_app_denied_tool_history_is_labeled :: proc(t: ^testing.T) {
 	historyIndex := len(state.history) - 1
 	app_apply_approval_choice(&state, .Deny)
 	assert(
-		state.history[historyIndex].content == "write_file (denied)",
+		state.history[historyIndex].content == "write_file: generated/output.txt (denied)",
 		"expected denied tool history entry",
 	)
 	assert(len(state.stream.conversation) == 2, "expected denied result in continuation")
@@ -583,6 +583,53 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 	assert(call.id == "write_file", "expected decoded tool ID")
 	assert(call.filePath == "notes.txt", "expected decoded file path")
 	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
+test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T) {
+	assert(
+		app_tool_history_content(
+			Tool_Call{id = "list_directory", directoryPath = "src/agent"},
+			"running",
+		) ==
+		"list_directory: src/agent (running)",
+		"expected directory path in history",
+	)
+	assert(
+		app_tool_history_content(
+			Tool_Call{id = "search_code", query = "permission dispatch"},
+			"completed",
+		) ==
+		"search_code: permission dispatch (completed)",
+		"expected search query in history",
+	)
+	assert(
+		app_tool_history_content(Tool_Call{id = "mcp", mcpServer = "github"}, "running") ==
+		"mcp: github (running)",
+		"expected MCP server in history",
+	)
+	assert(
+		app_tool_history_content(
+			Tool_Call{id = "write_file", filePath = "notes.txt", content = "secret"},
+			"running",
+		) ==
+		"write_file: notes.txt (running)",
+		"expected write history to omit file contents",
+	)
+	assert(
+		app_tool_history_content(
+			Tool_Call{id = "run_command", command = "printf 'one\ntwo'\x1b[2J"},
+			"running",
+		) ==
+		"run_command: printf 'one\\ntwo'\\e[2J (running)",
+		"expected command controls to be escaped",
+	)
+	assert(
+		app_tool_history_content(Tool_Call{id = "list_available_shells"}, "completed") ==
+		"list_available_shells (completed)",
+		"expected targetless tool fallback",
+	)
 	_ = t
 }
 
@@ -695,13 +742,13 @@ test_app_shows_running_and_completed_tool_history :: proc(t: ^testing.T) {
 	)
 	assert(len(state.history) == 2, "expected tool call to appear in history")
 	assert(
-		state.history[1].content == "read_file (running)",
+		state.history[1].content == "read_file: app.odin (running)",
 		"expected running tool history entry",
 	)
 	for !app_poll_tool_execution(&state) {
 	}
 	assert(
-		state.history[1].content == "read_file (completed)",
+		state.history[1].content == "read_file: app.odin (completed)",
 		"expected completed tool history entry",
 	)
 	assert(len(state.stream.conversation) == 2, "expected tool result to remain in continuation")
@@ -740,7 +787,10 @@ test_app_shows_failed_tool_history :: proc(t: ^testing.T) {
 	for !app_poll_tool_execution(&state) {
 	}
 	assert(state.history[1].role == .Tool, "expected visible tool failure entry")
-	assert(state.history[1].content == "read_file (failed)", "expected failed tool history entry")
+	assert(
+		state.history[1].content == "read_file: missing.odin (failed)",
+		"expected failed tool history entry",
+	)
 	result := state.stream.conversation[1].toolResults[0]
 	assert(result.isError, "expected failed tool result")
 	_ = t

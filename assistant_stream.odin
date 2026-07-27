@@ -420,22 +420,22 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 		if toolID == "" {
 			toolID = "unknown"
 		}
-		app_append_tool_history(state, toolID, "failed")
+		app_append_tool_history(state, Tool_Call{id = toolID}, "failed")
 		app_append_tool_result(state, queuedCall.id, "Tool call arguments are invalid.", true)
 		state.status = "Tool call rejected"
 		app_start_tool_continuation_if_ready(state)
 		return true
 	}
 	defer tool_call_destroy(&call, state.dispatcher.allocator)
-	historyIndex := app_append_tool_history(state, call.id, "running")
+	historyIndex := app_append_tool_history(state, call, "running")
 
 	decision := tool_dispatch_decide(&state.dispatcher, call)
 	switch decision {
 	case .Approval_Required:
-		app_update_tool_history(state, historyIndex, call.id, "awaiting approval")
+		app_update_tool_history(state, historyIndex, call, "awaiting approval")
 		if !app_show_approval(state, call) {
 			output := "Tool call requires approval."
-			app_update_tool_history(state, historyIndex, call.id, "denied")
+			app_update_tool_history(state, historyIndex, call, "denied")
 			app_append_tool_result(state, call.callID, output, true)
 			state.status = "Tool call rejected"
 			app_start_tool_continuation_if_ready(state)
@@ -445,13 +445,13 @@ app_process_pending_stream_tool_calls :: proc(state: ^App_State) -> bool {
 		}
 	case .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
 		if !app_start_tool_execution(state, call, historyIndex) {
-			app_update_tool_history(state, historyIndex, call.id, "failed")
+			app_update_tool_history(state, historyIndex, call, "failed")
 			app_append_tool_result(state, call.callID, "Tool call could not start.", true)
 			state.status = "Tool call could not start"
 			app_start_tool_continuation_if_ready(state)
 		}
 	case .Denied:
-		app_update_tool_history(state, historyIndex, call.id, "denied")
+		app_update_tool_history(state, historyIndex, call, "denied")
 		app_append_tool_result(state, call.callID, "Permission denied.", true)
 		state.status = "Tool call denied"
 	}
@@ -553,14 +553,13 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	output := execution.result
 	outputOwned := execution.resultOwned
 	toolCallID := execution.call.callID
-	toolID := execution.call.id
 	agentID := execution.agentID
 	agentRequestID := execution.agentRequestID
 	isError := app_tool_output_is_error(output)
 	if isError {
-		app_update_tool_history(state, execution.historyIndex, toolID, "failed")
+		app_update_tool_history(state, execution.historyIndex, execution.call, "failed")
 	} else {
-		app_update_tool_history(state, execution.historyIndex, toolID, "completed")
+		app_update_tool_history(state, execution.historyIndex, execution.call, "completed")
 	}
 	if !agent.agent_id_is_none(agentID) && agentRequestID != "" {
 		_ = agent.runtime_finish_tool(&state.agentHost.runtime, agentID, output, isError)
