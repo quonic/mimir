@@ -1,9 +1,9 @@
 package code_index
 
+import vdb "../vdb"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import vdb "../vdb"
 
 @(test)
 test_code_index_discovers_git_project_root :: proc(t: ^testing.T) {
@@ -87,7 +87,10 @@ test_code_index_init_uses_caller_cache_directory :: proc(t: ^testing.T) {
 	assert(initError == .None, "expected initialization with caller cache directory")
 	defer code_index_destroy(&index, context.temp_allocator)
 	assert(index.cacheDir == cacheDir, "expected caller cache directory to be retained")
-	assert(strings.starts_with(index.cachePath, cacheDir), "expected cache path below caller directory")
+	assert(
+		strings.starts_with(index.cachePath, cacheDir),
+		"expected cache path below caller directory",
+	)
 
 	invalid, invalidError := code_index_init(
 		project,
@@ -288,11 +291,19 @@ test_code_index_reads_bounded_result_excerpt :: proc(t: ^testing.T) {
 
 @(test)
 test_code_index_saves_and_loads_database :: proc(t: ^testing.T) {
-	cacheDir, cacheDirError := os.make_directory_temp("", "mimir-code-index-cache-", context.temp_allocator)
+	cacheDir, cacheDirError := os.make_directory_temp(
+		"",
+		"mimir-code-index-cache-",
+		context.temp_allocator,
+	)
 	assert(cacheDirError == nil, "expected temporary cache directory")
 	defer os.remove_all(cacheDir)
 
-	project, projectError := os.make_directory_temp("", "mimir-code-index-project-", context.temp_allocator)
+	project, projectError := os.make_directory_temp(
+		"",
+		"mimir-code-index-project-",
+		context.temp_allocator,
+	)
 	assert(projectError == nil, "expected temporary project directory")
 	defer os.remove_all(project)
 	defer delete(project, context.temp_allocator)

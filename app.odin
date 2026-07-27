@@ -2575,7 +2575,13 @@ app_search_code :: proc(
 		return results, clientError
 	}
 	delete(results)
-	return code_index.code_index_search_text(&state.codeIndex, client, query, maximumResults, allocator)
+	return code_index.code_index_search_text(
+		&state.codeIndex,
+		client,
+		query,
+		maximumResults,
+		allocator,
+	)
 }
 
 app_clear_model_entries :: proc(state: ^App_State) {

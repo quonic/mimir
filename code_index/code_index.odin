@@ -1,10 +1,10 @@
 package code_index
 
 import ai "../ai"
+import vdb "../vdb"
 import "core:hash"
 import "core:os"
 import "core:strings"
-import vdb "../vdb"
 
 CODE_INDEX_SCHEMA_VERSION :: "1"
 CODE_INDEX_MAX_SOURCE_BYTES :: 512 * 1024
