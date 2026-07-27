@@ -1,5 +1,6 @@
 package agent
 
+import ai "../ai"
 import "core:mem"
 import "core:strings"
 
@@ -9,9 +10,13 @@ Agent_Instance :: struct {
 	state:          Agent_State,
 	children:       [dynamic]Agent_ID,
 	events:         [dynamic]Agent_Event,
+	conversation:   [dynamic]ai.Message,
+	partialBuffer:  [dynamic]byte,
+	queuedTools:    [dynamic]Tool_Request,
 	finalResult:    string,
 	pendingTool:    Tool_Request,
 	pendingToolSet: bool,
+	thinking:       bool,
 }
 
 Runtime :: struct {
@@ -36,6 +41,15 @@ runtime_destroy :: proc(runtime: ^Runtime) {
 		}
 		delete(instance.events)
 		delete(instance.children)
+		for &message in instance.conversation {
+			ai.message_destroy(&message, runtime.allocator)
+		}
+		delete(instance.conversation)
+		delete(instance.partialBuffer)
+		for &request in instance.queuedTools {
+			tool_request_destroy(&request, runtime.allocator)
+		}
+		delete(instance.queuedTools)
 		delete(instance.finalResult, runtime.allocator)
 		tool_request_destroy(&instance.pendingTool, runtime.allocator)
 	}
@@ -57,11 +71,14 @@ runtime_start_background :: proc(
 	id := runtime.nextID
 	runtime.nextID = Agent_ID(u64(id) + 1)
 	instance := Agent_Instance {
-		id       = id,
-		options  = agent_start_options_clone(options, runtime.allocator),
-		state    = .Idle,
-		children = make([dynamic]Agent_ID, 0, 0, runtime.allocator),
-		events   = make([dynamic]Agent_Event, 0, 0, runtime.allocator),
+		id            = id,
+		options       = agent_start_options_clone(options, runtime.allocator),
+		state         = .Idle,
+		children      = make([dynamic]Agent_ID, 0, 0, runtime.allocator),
+		events        = make([dynamic]Agent_Event, 0, 0, runtime.allocator),
+		conversation  = make([dynamic]ai.Message, 0, 0, runtime.allocator),
+		partialBuffer = make([dynamic]byte, 0, 0, runtime.allocator),
+		queuedTools   = make([dynamic]Tool_Request, 0, 0, runtime.allocator),
 	}
 	append(&runtime.instances, instance)
 	return id, .None
@@ -111,6 +128,29 @@ runtime_begin :: proc(runtime: ^Runtime, id: Agent_ID) -> Agent_Error {
 		return .Invalid_State
 	}
 	instance.state = .Streaming
+	return .None
+}
+
+runtime_set_conversation :: proc(
+	runtime: ^Runtime,
+	id: Agent_ID,
+	messages: []ai.Message,
+) -> Agent_Error {
+	index, ok := runtime_find_index(runtime, id)
+	if !ok {
+		return .Not_Found
+	}
+	instance := &runtime.instances[index]
+	if instance.state != .Idle {
+		return .Invalid_State
+	}
+	for &message in instance.conversation {
+		ai.message_destroy(&message, runtime.allocator)
+	}
+	clear(&instance.conversation)
+	for message in messages {
+		append(&instance.conversation, ai.message_clone(message, runtime.allocator))
+	}
 	return .None
 }
 
@@ -287,12 +327,17 @@ runtime_finish_tool_at_index :: proc(
 	isError: bool,
 ) {
 	instance := &runtime.instances[index]
+	runtime_record_tool_result(runtime, index, instance.pendingTool.id, output, isError)
 	tool_request_destroy(&instance.pendingTool, runtime.allocator)
 	instance.pendingToolSet = false
+	clear(&instance.partialBuffer)
 	instance.state = .Streaming
 	runtime_emit_event(
 		runtime,
 		index,
 		Agent_Event{type = .Tool_Resolved, content = output, isError = isError},
 	)
+	if len(instance.queuedTools) > 0 {
+		_ = runtime_request_next_tool(runtime, index)
+	}
 }

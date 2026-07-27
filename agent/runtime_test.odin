@@ -1,5 +1,6 @@
 package agent
 
+import ai "../ai"
 import "core:testing"
 
 @(test)
@@ -102,5 +103,116 @@ test_runtime_resolves_tool_requests_without_host_policy_dependency :: proc(t: ^t
 	assert(resolved.content == "Permission denied.", "expected denial output")
 	state, stateOK := runtime_state(&runtime, agentID)
 	assert(stateOK && state == .Streaming, "expected agent to resume streaming")
+	_ = t
+}
+
+@(test)
+test_runtime_stream_delta_records_turn_and_requests_tool :: proc(t: ^testing.T) {
+	runtime := runtime_init(context.temp_allocator)
+	defer runtime_destroy(&runtime)
+	agentID, startErr := runtime_start_background(&runtime, Agent_Start_Options{})
+	assert(startErr == .None, "expected agent to start")
+	assert(runtime_begin(&runtime, agentID) == .None, "expected agent to begin")
+	assert(
+		runtime_receive_stream_delta(
+			&runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "I will inspect it."},
+		) ==
+		.None,
+		"expected text delta",
+	)
+	assert(
+		runtime_receive_stream_delta(
+			&runtime,
+			agentID,
+			ai.Chat_Stream_Delta {
+				hasToolCall = true,
+				toolCall = ai.Tool_Call {
+					id = "call-1",
+					name = "read_file",
+					arguments = `{"file_path":"README.md"}`,
+				},
+				done = true,
+			},
+		) ==
+		.None,
+		"expected tool-call delta",
+	)
+
+	textEvent, textOK := runtime_next_event(&runtime, agentID)
+	assert(textOK && textEvent.type == .Text_Delta, "expected text delta event")
+	assert(textEvent.content == "I will inspect it.", "expected streamed text")
+	agent_event_destroy(&textEvent, context.temp_allocator)
+	toolEvent, toolOK := runtime_next_event(&runtime, agentID)
+	assert(toolOK && toolEvent.type == .Tool_Requested, "expected tool request event")
+	defer agent_event_destroy(&toolEvent, context.temp_allocator)
+	assert(toolEvent.toolRequest.id == "call-1", "expected tool request ID")
+	state, stateOK := runtime_state(&runtime, agentID)
+	assert(stateOK && state == .Awaiting_Tool_Resolution, "expected pending tool resolution")
+	_ = t
+}
+
+@(test)
+test_runtime_post_tool_stream_uses_a_new_assistant_buffer :: proc(t: ^testing.T) {
+	runtime := runtime_init(context.temp_allocator)
+	defer runtime_destroy(&runtime)
+	agentID, startErr := runtime_start_background(&runtime, Agent_Start_Options{})
+	assert(startErr == .None, "expected agent to start")
+	assert(runtime_begin(&runtime, agentID) == .None, "expected agent to begin")
+	assert(
+		runtime_receive_stream_delta(&runtime, agentID, ai.Chat_Stream_Delta{content = "first"}) ==
+		.None,
+		"expected first text delta",
+	)
+	assert(
+		runtime_receive_stream_delta(
+			&runtime,
+			agentID,
+			ai.Chat_Stream_Delta {
+				hasToolCall = true,
+				toolCall = ai.Tool_Call{id = "call-1", name = "read_file", arguments = `{}`},
+				done = true,
+			},
+		) ==
+		.None,
+		"expected tool turn",
+	)
+	firstEvent, firstEventOK := runtime_next_event(&runtime, agentID)
+	assert(firstEventOK, "expected first text event")
+	agent_event_destroy(&firstEvent, context.temp_allocator)
+	toolEvent, toolEventOK := runtime_next_event(&runtime, agentID)
+	assert(toolEventOK, "expected tool event")
+	agent_event_destroy(&toolEvent, context.temp_allocator)
+	assert(
+		runtime_resolve_tool(&runtime, agentID, "call-1", .Allowed, "") == .None,
+		"expected allowed tool resolution",
+	)
+	resolutionEvent, resolutionEventOK := runtime_next_event(&runtime, agentID)
+	assert(resolutionEventOK, "expected tool resolution event")
+	agent_event_destroy(&resolutionEvent, context.temp_allocator)
+	assert(
+		runtime_finish_tool(&runtime, agentID, "contents", false) == .None,
+		"expected tool result",
+	)
+	resultEvent, resultEventOK := runtime_next_event(&runtime, agentID)
+	assert(resultEventOK, "expected tool result event")
+	agent_event_destroy(&resultEvent, context.temp_allocator)
+	assert(
+		runtime_receive_stream_delta(
+			&runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "second", done = true},
+		) ==
+		.None,
+		"expected continuation completion",
+	)
+	textEvent, textEventOK := runtime_next_event(&runtime, agentID)
+	assert(textEventOK && textEvent.content == "second", "expected continuation text event")
+	agent_event_destroy(&textEvent, context.temp_allocator)
+	completeEvent, completeEventOK := runtime_next_event(&runtime, agentID)
+	assert(completeEventOK && completeEvent.type == .Completed, "expected completion event")
+	defer agent_event_destroy(&completeEvent, context.temp_allocator)
+	assert(completeEvent.content == "second", "expected only continuation result")
 	_ = t
 }
