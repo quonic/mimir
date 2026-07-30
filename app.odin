@@ -2093,10 +2093,8 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 	provider := &state.config.providers[providerIndex]
 	switch provider.type {
 	case .Ollama:
-		provider.type = .OpenAI
-	case .OpenAI:
-		provider.type = .Anthropic
-	case .Anthropic, .None:
+		provider.type = .None
+	case .None:
 		provider.type = .Ollama
 	}
 	app_apply_config_change(state, "Provider type saved")
@@ -2599,7 +2597,7 @@ app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
 	if !providerOK || !provider.enabled {
 		return ai.Client{}, .Interface_Not_Found
 	}
-	if provider.type != .Ollama && provider.type != .OpenAI {
+	if provider.type != .Ollama {
 		return ai.Client{}, .Unsupported_Interface
 	}
 	return ai.new_client(provider.name, provider.apiKey)
@@ -2736,7 +2734,7 @@ app_append_model_entry :: proc(
 			providerType = provider.type,
 			model = strings.clone(model.name, allocator),
 			supportsChat = provider.type != .Ollama || ai.model_supports_chat(model),
-			supportsEmbeddings = provider.type == .OpenAI || ai.model_supports_embeddings(model),
+			supportsEmbeddings = provider.type == .Ollama || ai.model_supports_embeddings(model),
 		},
 	)
 }

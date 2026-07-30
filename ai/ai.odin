@@ -1,7 +1,7 @@
 package ai
 
 // This package provides the interface for interacting with AI services.
-// Anthropic, OpenAI-compatible, and native Ollama interfaces.
+// Native Ollama interfaces.
 
 import http "../http"
 import "core:mem"
@@ -21,8 +21,6 @@ Model :: struct {
 
 Interface_Type :: enum {
 	None,
-	Anthropic,
-	OpenAI,
 	Ollama,
 }
 

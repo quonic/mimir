@@ -9,12 +9,6 @@ import "core:strings"
 import http "../http"
 import httpClient "../http/client"
 
-OPENAI_CHAT_PATH :: "/chat/completions"
-OPENAI_EMBEDDINGS_PATH :: "/embeddings"
-OPENAI_MODELS_PATH :: "/models"
-ANTHROPIC_MESSAGES_PATH :: "/messages"
-ANTHROPIC_MODELS_PATH :: "/models"
-ANTHROPIC_VERSION :: "2023-06-01"
 OLLAMA_CHAT_PATH :: "/api/chat"
 OLLAMA_EMBED_PATH :: "/api/embed"
 OLLAMA_MODELS_PATH :: "/api/tags"
@@ -28,12 +22,6 @@ send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Res
 		return Chat_Response{}, .Unsupported_Model
 	}
 
-	if client.iface.type == .OpenAI {
-		return send_openai_chat_completion(client, request)
-	}
-	if client.iface.type == .Anthropic {
-		return send_anthropic_chat_completion(client, request)
-	}
 	if client.iface.type == .Ollama {
 		return send_ollama_chat_completion(client, request)
 	}
@@ -98,9 +86,6 @@ send_embeddings :: proc(
 		return Embedding_Batch_Response{}, .Unsupported_Model
 	}
 
-	if client.iface.type == .OpenAI {
-		return send_openai_embeddings(client, request, allocator)
-	}
 	if client.iface.type == .Ollama {
 		return send_ollama_embeddings(client, request, allocator)
 	}
@@ -147,12 +132,6 @@ send_chat_completion_stream_internal :: proc(
 		return .Unsupported_Model
 	}
 
-	if client.iface.type == .OpenAI {
-		return send_openai_chat_completion_stream(client, request, callbackState)
-	}
-	if client.iface.type == .Anthropic {
-		return send_anthropic_chat_completion_stream(client, request, callbackState)
-	}
 	if client.iface.type == .Ollama {
 		return send_ollama_chat_completion_stream(client, request, callbackState)
 	}
@@ -188,12 +167,6 @@ list_models :: proc(
 	[dynamic]string,
 	AI_Error,
 ) {
-	if client.iface.type == .OpenAI {
-		return list_openai_models(client, allocator)
-	}
-	if client.iface.type == .Anthropic {
-		return list_anthropic_models(client, allocator)
-	}
 	if client.iface.type == .Ollama {
 		models, err := list_ollama_models(client, allocator)
 		if err != .None {
@@ -209,263 +182,6 @@ list_models :: proc(
 	}
 
 	return [dynamic]string{}, .Unsupported_Interface
-}
-
-send_openai_chat_completion :: proc(
-	client: Client,
-	request: Chat_Request,
-) -> (
-	Chat_Response,
-	AI_Error,
-) {
-	target, ok := compose_endpoint_target(client.iface.endpoint, OPENAI_CHAT_PATH)
-	if !ok {
-		return Chat_Response{}, .Invalid_Request
-	}
-
-	wire := build_openai_chat_request(request)
-	extraHeaders: [dynamic][2]string
-	defer delete(extraHeaders)
-
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
-
-	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
-	if errKind != .None {
-		return Chat_Response{}, errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return parse_openai_chat_response(body)
-	}
-
-	_ = parse_openai_error_message(body)
-	return Chat_Response{}, map_status_to_error(status)
-}
-
-send_openai_embeddings :: proc(
-	client: Client,
-	request: Embedding_Batch_Request,
-	allocator := context.allocator,
-) -> (
-	Embedding_Batch_Response,
-	AI_Error,
-) {
-	target, ok := compose_endpoint_target(client.iface.endpoint, OPENAI_EMBEDDINGS_PATH)
-	if !ok {
-		return Embedding_Batch_Response{}, .Invalid_Request
-	}
-
-	wire := build_openai_embedding_request(request)
-	extraHeaders: [dynamic][2]string
-	defer delete(extraHeaders)
-
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
-
-	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
-	if errKind != .None {
-		return Embedding_Batch_Response{}, errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return parse_openai_embedding_response(body, len(request.inputs), allocator)
-	}
-
-	_ = parse_openai_error_message(body)
-	return Embedding_Batch_Response{}, map_status_to_error(status)
-}
-
-send_openai_chat_completion_stream :: proc(
-	client: Client,
-	request: Chat_Request,
-	callbackState: Chat_Stream_Callback_State,
-) -> AI_Error {
-	target, ok := compose_endpoint_target(client.iface.endpoint, OPENAI_CHAT_PATH)
-	if !ok {
-		return .Invalid_Request
-	}
-
-	wire := build_openai_chat_stream_request(request)
-	extraHeaders: [dynamic][2]string
-	defer delete(extraHeaders)
-
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
-
-	toolState: OpenAI_Stream_Tool_State
-	defer openai_stream_tool_state_destroy(&toolState)
-	streamCallbackState := callbackState
-	streamCallbackState.parserData = rawptr(&toolState)
-
-	body, status, errKind := do_json_post_stream(
-		target,
-		wire,
-		extraHeaders[:],
-		streamCallbackState,
-		parse_openai_stream_event,
-		parse_sse_stream_chunk,
-	)
-	if errKind != .None {
-		return errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return .None
-	}
-
-	_ = parse_openai_error_message(body)
-	return map_status_to_error(status)
-}
-
-send_anthropic_chat_completion :: proc(
-	client: Client,
-	request: Chat_Request,
-) -> (
-	Chat_Response,
-	AI_Error,
-) {
-	if client.apiKey == "" {
-		return Chat_Response{}, .Authentication_Error
-	}
-
-	target, ok := compose_endpoint_target(client.iface.endpoint, ANTHROPIC_MESSAGES_PATH)
-	if !ok {
-		return Chat_Response{}, .Invalid_Request
-	}
-
-	wire := build_anthropic_request(request)
-	headers := [][2]string{{"x-api-key", client.apiKey}, {"anthropic-version", ANTHROPIC_VERSION}}
-
-	body, status, errKind := do_json_post(target, wire, headers)
-	if errKind != .None {
-		return Chat_Response{}, errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return parse_anthropic_response(body)
-	}
-
-	_ = parse_anthropic_error_message(body)
-	return Chat_Response{}, map_status_to_error(status)
-}
-
-send_anthropic_chat_completion_stream :: proc(
-	client: Client,
-	request: Chat_Request,
-	callbackState: Chat_Stream_Callback_State,
-) -> AI_Error {
-	if client.apiKey == "" {
-		return .Authentication_Error
-	}
-
-	target, ok := compose_endpoint_target(client.iface.endpoint, ANTHROPIC_MESSAGES_PATH)
-	if !ok {
-		return .Invalid_Request
-	}
-
-	wire := build_anthropic_stream_request(request)
-	headers := [][2]string{{"x-api-key", client.apiKey}, {"anthropic-version", ANTHROPIC_VERSION}}
-	toolState: Anthropic_Stream_Tool_State
-	defer anthropic_stream_tool_state_destroy(&toolState)
-	streamCallbackState := callbackState
-	streamCallbackState.parserData = rawptr(&toolState)
-
-	body, status, errKind := do_json_post_stream(
-		target,
-		wire,
-		headers,
-		streamCallbackState,
-		parse_anthropic_stream_event,
-		parse_sse_stream_chunk,
-	)
-	if errKind != .None {
-		return errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return .None
-	}
-
-	_ = parse_anthropic_error_message(body)
-	return map_status_to_error(status)
-}
-
-list_openai_models :: proc(
-	client: Client,
-	allocator := context.allocator,
-) -> (
-	[dynamic]string,
-	AI_Error,
-) {
-	target, ok := compose_endpoint_target(client.iface.endpoint, OPENAI_MODELS_PATH)
-	if !ok {
-		return [dynamic]string{}, .Invalid_Request
-	}
-
-	extraHeaders: [dynamic][2]string
-	defer delete(extraHeaders)
-
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
-
-	body, status, errKind := do_json_get(target, extraHeaders[:])
-	if errKind != .None {
-		return [dynamic]string{}, errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return parse_openai_models_response(body, allocator)
-	}
-
-	_ = parse_openai_error_message(body)
-	return [dynamic]string{}, map_status_to_error(status)
-}
-
-list_anthropic_models :: proc(
-	client: Client,
-	allocator := context.allocator,
-) -> (
-	[dynamic]string,
-	AI_Error,
-) {
-	if client.apiKey == "" {
-		return [dynamic]string{}, .Authentication_Error
-	}
-
-	target, ok := compose_endpoint_target(client.iface.endpoint, ANTHROPIC_MODELS_PATH)
-	if !ok {
-		return [dynamic]string{}, .Invalid_Request
-	}
-
-	headers := [][2]string{{"x-api-key", client.apiKey}, {"anthropic-version", ANTHROPIC_VERSION}}
-
-	body, status, errKind := do_json_get(target, headers)
-	if errKind != .None {
-		return [dynamic]string{}, errKind
-	}
-	defer if body != "" {delete(body)}
-
-	if http.status_is_success(status) {
-		return parse_anthropic_models_response(body, allocator)
-	}
-
-	_ = parse_anthropic_error_message(body)
-	return [dynamic]string{}, map_status_to_error(status)
 }
 
 send_ollama_chat_completion :: proc(

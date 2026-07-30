@@ -342,9 +342,6 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer delete(ollamaTools)
 	assert(len(ollamaTools) == 8, "expected Ollama to receive all built-in tools")
 
-	openAITools := app_tool_definitions_for_provider(.OpenAI, context.allocator)
-	defer delete(openAITools)
-	assert(len(openAITools) == 8, "expected OpenAI to receive all built-in tools")
 	_ = t
 }
 

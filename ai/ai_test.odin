@@ -19,8 +19,6 @@ Test_Stream_State :: struct {
 	usage:        Chat_Usage,
 }
 
-testOpenAIStreamState: Test_Stream_State
-testAnthropicStreamState: Test_Stream_State
 testOllamaStreamState: Test_Stream_State
 testStopStreamState: Test_Stream_State
 
@@ -32,16 +30,6 @@ reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	}
 	delete(state.toolCalls)
 	state^ = Test_Stream_State{}
-}
-
-record_openai_stream_delta :: proc(delta: Chat_Stream_Delta) -> bool {
-	record_stream_delta(&testOpenAIStreamState, delta)
-	return true
-}
-
-record_anthropic_stream_delta :: proc(delta: Chat_Stream_Delta) -> bool {
-	record_stream_delta(&testAnthropicStreamState, delta)
-	return true
 }
 
 record_ollama_stream_delta :: proc(delta: Chat_Stream_Delta) -> bool {
@@ -96,50 +84,6 @@ free_model_list :: proc(models: ^[dynamic]string, allocator := context.allocator
 }
 
 TEST_OLLAMA_SERVER :: "localhost"
-
-@(test)
-test_build_openai_chat_request :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model       = "test-model",
-		temperature = 0.3,
-		maxTokens   = 128,
-		messages    = []Message {
-			{role = .System, content = "You are concise."},
-			{role = .User, content = "Hello"},
-		},
-	}
-
-	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
-	assert(wire.model == "test-model", "expected model to be propagated to OpenAI payload")
-	assert(len(wire.messages) == 2, "expected OpenAI payload to include all messages")
-	assert(wire.messages[0].role == "system", "expected first OpenAI role to be system")
-	assert(wire.messages[1].content == "Hello", "expected OpenAI message content to be preserved")
-	assert(!wire.stream, "expected OpenAI chat payload to disable streaming")
-
-	streamWire := build_openai_chat_stream_request(request)
-	assert(streamWire.stream, "expected OpenAI stream payload to enable streaming")
-	assert(streamWire.stream_options.include_usage, "expected OpenAI stream usage to be requested")
-	_ = t
-}
-
-@(test)
-test_build_openai_embedding_request :: proc(t: ^testing.T) {
-	wire := build_openai_embedding_request(
-		Embedding_Batch_Request {
-			model = "text-embedding-3-small",
-			inputs = []string{"first", "second"},
-			options = Embedding_Options{dimensions = 256, hasDimensions = true},
-		},
-		allocator = context.temp_allocator,
-	)
-	payload, marshalErr := json.unparse(wire, allocator = context.temp_allocator)
-	assert(marshalErr == nil, "expected OpenAI embedding request to serialize")
-	assert(strings.contains(payload, `"model":"text-embedding-3-small"`), "expected model")
-	assert(strings.contains(payload, `"input":["first","second"]`), "expected batch inputs")
-	assert(strings.contains(payload, `"encoding_format":"float"`), "expected float encoding")
-	assert(strings.contains(payload, `"dimensions":256`), "expected requested dimensions")
-	_ = t
-}
 
 @(test)
 test_build_ollama_embedding_request :: proc(t: ^testing.T) {
@@ -197,23 +141,6 @@ test_build_ollama_embedding_request :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_parse_openai_embedding_response_orders_vectors :: proc(t: ^testing.T) {
-	payload := `{"model":"text-embedding-3-small","data":[{"embedding":[0.3,0.4],"index":1},{"embedding":[0.1,0.2],"index":0}],"usage":{"prompt_tokens":4,"total_tokens":4}}`
-	response, err := parse_openai_embedding_response(payload, 2, context.allocator)
-	defer embedding_batch_response_destroy(&response, context.allocator)
-	assert(err == .None, "expected OpenAI embedding response to parse")
-	assert(response.inputTokenCount == 4, "expected OpenAI token count")
-	assert(len(response.embeddings) == 2, "expected two vectors")
-	assert(response.embeddings[0][0] == 0.1, "expected vectors ordered by response index")
-	assert(response.embeddings[1][0] == 0.3, "expected second ordered vector")
-
-	invalidPayload := `{"model":"text-embedding-3-small","data":[{"embedding":[0.1],"index":2}],"usage":{"prompt_tokens":1}}`
-	_, invalidErr := parse_openai_embedding_response(invalidPayload, 1, context.allocator)
-	assert(invalidErr == .Invalid_Response, "expected out of range index to reject")
-	_ = t
-}
-
-@(test)
 test_parse_ollama_embedding_response_and_cleanup :: proc(t: ^testing.T) {
 	payload := `{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]],"prompt_eval_count":5,"total_duration":12,"load_duration":3}`
 	response, err := parse_ollama_embedding_response(payload, 2, context.allocator)
@@ -225,88 +152,6 @@ test_parse_ollama_embedding_response_and_cleanup :: proc(t: ^testing.T) {
 	embedding_batch_response_destroy(&response, context.allocator)
 	assert(len(response.embeddings) == 0, "expected embedding cleanup to clear vectors")
 	assert(response.model == "", "expected embedding cleanup to clear model")
-	_ = t
-}
-
-@(test)
-test_embedding_request_validation_and_anthropic_support :: proc(t: ^testing.T) {
-	client := Client {
-		iface = Interface{type = .Anthropic},
-	}
-	_, emptyErr := send_embeddings(
-		client,
-		Embedding_Batch_Request{},
-		allocator = context.temp_allocator,
-	)
-	assert(emptyErr == .Invalid_Request, "expected empty embedding request to reject")
-
-	_, unsupportedErr := send_embedding(
-		client,
-		Embedding_Request{model = "claude-test", input = "hello"},
-		allocator = context.temp_allocator,
-	)
-	assert(
-		unsupportedErr == .Unsupported_Interface,
-		"expected Anthropic embeddings to be unsupported",
-	)
-	_ = t
-}
-
-@(test)
-test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model    = "test-model",
-		messages = []Message{{role = .User, content = "Inspect the project"}},
-		tools    = []Tool_Definition {
-			{
-				name = "read_file",
-				description = "Read a project file",
-				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
-			},
-		},
-	}
-	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
-	assert(len(wire.tools) == 1, "expected OpenAI request tool")
-	assert(wire.tools[0].type == "function", "expected OpenAI function tool")
-	assert(wire.tools[0].function.name == "read_file", "expected OpenAI tool name")
-
-	payload := `{"model":"gpt-test","choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"file_path\\":\\"main.odin\\"}"}}]},"finish_reason":"tool_calls"}]}`
-	response, err := parse_openai_chat_response(payload, context.allocator)
-	defer chat_response_destroy(&response, context.allocator)
-	assert(err == .None, "expected OpenAI tool call response")
-	assert(len(response.toolCalls) == 1, "expected parsed OpenAI tool call")
-	assert(response.toolCalls[0].name == "read_file", "expected parsed OpenAI tool name")
-	_ = t
-}
-
-@(test)
-test_openai_request_serializes_tool_call_history :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model    = "test-model",
-		messages = []Message {
-			{
-				role = .Assistant,
-				toolCalls = []Tool_Call {
-					{id = "call-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
-				},
-			},
-			{
-				role = .Tool,
-				toolResults = []Tool_Result{{toolCallID = "call-1", content = "package main"}},
-			},
-		},
-	}
-	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
-	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
-	assert(wire.messages[0].role == "assistant", "expected assistant tool-call message")
-	assert(len(wire.messages[0].tool_calls) == 1, "expected serialized tool call")
-	assert(
-		wire.messages[0].tool_calls[0].function.name == "read_file",
-		"expected serialized tool name",
-	)
-	assert(wire.messages[1].role == "tool", "expected OpenAI tool result role")
-	assert(wire.messages[1].tool_call_id == "call-1", "expected result call ID")
-	assert(wire.messages[1].content == "package main", "expected tool result content")
 	_ = t
 }
 
@@ -418,37 +263,6 @@ test_ollama_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_build_anthropic_stream_request :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model     = "claude-sonnet-4",
-		messages  = []Message{{role = .User, content = "Hello"}},
-		maxTokens = 128,
-	}
-
-	wire := build_anthropic_request(request, allocator = context.temp_allocator)
-	assert(!wire.stream, "expected Anthropic message payload to disable streaming")
-
-	streamWire := build_anthropic_stream_request(request)
-	assert(streamWire.stream, "expected Anthropic stream payload to enable streaming")
-	_ = t
-}
-
-@(test)
-test_parse_openai_chat_response :: proc(t: ^testing.T) {
-	payload := `{"model":"llama3.2","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
-	response, err := parse_openai_chat_response(payload, allocator = context.temp_allocator)
-	defer {
-		delete(response.content, allocator = context.temp_allocator)
-		delete(response.model, allocator = context.temp_allocator)
-		delete(response.finishReason, allocator = context.temp_allocator)
-	}
-	assert(err == .None, "expected valid OpenAI response payload to parse")
-	assert(response.content == "hi", "expected parsed OpenAI content to match payload")
-	assert(response.model == "llama3.2", "expected parsed OpenAI model to match payload")
-	_ = t
-}
-
-@(test)
 test_parse_ollama_chat_response :: proc(t: ^testing.T) {
 	payload := `{"model":"llama3.2","message":{"role":"assistant","content":"hi"},"done":true,"done_reason":"stop"}`
 	response, err := parse_ollama_chat_response(payload, allocator = context.temp_allocator)
@@ -461,286 +275,6 @@ test_parse_ollama_chat_response :: proc(t: ^testing.T) {
 	assert(response.content == "hi", "expected parsed Ollama content to match payload")
 	assert(response.model == "llama3.2", "expected parsed Ollama model to match payload")
 	assert(response.finishReason == "stop", "expected Ollama done reason to be preserved")
-	_ = t
-}
-
-@(test)
-test_parse_anthropic_response :: proc(t: ^testing.T) {
-	payload := `{"model":"claude-sonnet-4","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}`
-	response, err := parse_anthropic_response(payload, allocator = context.temp_allocator)
-	defer {
-		delete(response.content, allocator = context.temp_allocator)
-		delete(response.model, allocator = context.temp_allocator)
-		delete(response.finishReason, allocator = context.temp_allocator)
-	}
-	assert(err == .None, "expected valid Anthropic response payload to parse")
-	assert(response.content == "hello", "expected parsed Anthropic content to match payload")
-	assert(response.finishReason == "end_turn", "expected Anthropic stop reason to be preserved")
-	_ = t
-}
-
-@(test)
-test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model    = "claude-test",
-		messages = []Message{{role = .User, content = "Inspect the project"}},
-		tools    = []Tool_Definition {
-			{
-				name = "read_file",
-				description = "Read a project file",
-				parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}}}`,
-			},
-		},
-	}
-	wire := build_anthropic_request(request, allocator = context.temp_allocator)
-	assert(len(wire.tools) == 1, "expected Anthropic request tool")
-	assert(wire.tools[0].name == "read_file", "expected Anthropic tool name")
-
-	payload := `{"model":"claude-test","content":[{"type":"tool_use","id":"tool-1","name":"read_file","input":{"file_path":"main.odin"}}],"stop_reason":"tool_use"}`
-	response, err := parse_anthropic_response(payload, allocator = context.temp_allocator)
-	defer chat_response_destroy(&response, context.temp_allocator)
-	assert(err == .None, "expected Anthropic tool call response")
-	assert(len(response.toolCalls) == 1, "expected parsed Anthropic tool call")
-	assert(response.toolCalls[0].arguments != "", "expected serialized Anthropic arguments")
-	_ = t
-}
-
-@(test)
-test_anthropic_request_serializes_tool_call_history :: proc(t: ^testing.T) {
-	request := Chat_Request {
-		model    = "claude-test",
-		messages = []Message {
-			{
-				role = .Assistant,
-				toolCalls = []Tool_Call {
-					{id = "tool-1", name = "read_file", arguments = `{"file_path":"main.odin"}`},
-				},
-			},
-			{
-				role = .Tool,
-				toolResults = []Tool_Result{{toolCallID = "tool-1", content = "package main"}},
-			},
-		},
-	}
-	wire := build_anthropic_request(request, allocator = context.temp_allocator)
-	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
-	assert(wire.messages[0].role == "assistant", "expected Anthropic assistant role")
-	assert(wire.messages[1].role == "user", "expected Anthropic tool result user role")
-	toolUseJSON, toolUseErr := json.unparse(
-		wire.messages[0].content,
-		allocator = context.temp_allocator,
-	)
-	assert(toolUseErr == nil, "expected Anthropic tool-use blocks to serialize")
-	assert(strings.contains(toolUseJSON, `"tool_use"`), "expected tool_use block")
-	assert(strings.contains(toolUseJSON, `"file_path"`), "expected raw tool input")
-	toolResultJSON, toolResultErr := json.unparse(
-		wire.messages[1].content,
-		allocator = context.temp_allocator,
-	)
-	assert(toolResultErr == nil, "expected Anthropic tool-result blocks to serialize")
-	assert(strings.contains(toolResultJSON, `"tool_result"`), "expected tool_result block")
-	assert(strings.contains(toolResultJSON, `"tool-1"`), "expected tool result call ID")
-	_ = t
-}
-
-@(test)
-test_parse_openai_stream_body :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOpenAIStreamState)
-	defer reset_test_stream_state(&testOpenAIStreamState)
-
-	payload :=
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
-		"data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n" +
-		"data: [DONE]\n\n"
-	err := parse_sse_stream_body(payload, record_openai_stream_delta, parse_openai_stream_event)
-
-	assert(err == .None, "expected OpenAI stream body to parse")
-	assert(len(testOpenAIStreamState.parts) == 2, "expected OpenAI stream to emit text deltas")
-	assert(testOpenAIStreamState.parts[0] == "Hel", "expected first OpenAI delta to match")
-	assert(testOpenAIStreamState.parts[1] == "lo", "expected second OpenAI delta to match")
-	assert(
-		testOpenAIStreamState.model == "gpt-test",
-		"expected OpenAI stream model to be preserved",
-	)
-	assert(testOpenAIStreamState.finishReason == "stop", "expected OpenAI finish reason")
-	assert(testOpenAIStreamState.done, "expected OpenAI stream to mark done")
-	assert(testOpenAIStreamState.usage.hasInputTokens, "expected OpenAI prompt usage")
-	assert(testOpenAIStreamState.usage.inputTokens == 12, "expected OpenAI prompt tokens")
-	assert(testOpenAIStreamState.usage.hasOutputTokens, "expected OpenAI completion usage")
-	assert(testOpenAIStreamState.usage.outputTokens == 3, "expected OpenAI completion tokens")
-	_ = t
-}
-
-@(test)
-test_parse_openai_stream_reasoning_delta :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOpenAIStreamState)
-	defer reset_test_stream_state(&testOpenAIStreamState)
-
-	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"\",\"reasoning\":\"Thinking\"},\"finish_reason\":null}]}\n\n"
-	err := parse_sse_stream_body(payload, record_openai_stream_delta, parse_openai_stream_event)
-
-	assert(err == .None, "expected OpenAI reasoning stream body to parse")
-	assert(len(testOpenAIStreamState.parts) == 1, "expected OpenAI reasoning delta to be emitted")
-	assert(
-		testOpenAIStreamState.parts[0] == "Thinking",
-		"expected reasoning delta to be surfaced as content",
-	)
-	assert(
-		testOpenAIStreamState.partThinking[0],
-		"expected reasoning delta to be marked as thinking",
-	)
-	_ = t
-}
-
-@(test)
-test_parse_openai_stream_content_precedes_reasoning :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOpenAIStreamState)
-	defer reset_test_stream_state(&testOpenAIStreamState)
-
-	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"Answer\",\"reasoning\":\"Thinking\"}}]}\n\n"
-	err := parse_sse_stream_body(payload, record_openai_stream_delta, parse_openai_stream_event)
-
-	assert(err == .None, "expected OpenAI stream body to parse")
-	assert(len(testOpenAIStreamState.parts) == 1, "expected one OpenAI content delta")
-	assert(
-		testOpenAIStreamState.parts[0] == "Answer",
-		"expected OpenAI content to take precedence",
-	)
-	assert(
-		!testOpenAIStreamState.partThinking[0],
-		"expected normal content delta to not be marked as thinking",
-	)
-	_ = t
-}
-
-@(test)
-test_parse_openai_stream_tool_calls :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOpenAIStreamState)
-	defer reset_test_stream_state(&testOpenAIStreamState)
-
-	toolState: OpenAI_Stream_Tool_State
-	defer openai_stream_tool_state_destroy(&toolState)
-	payload :=
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\\\"file_path\\\\\":\"}}]}}]}\n\n" +
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\\\"main.odin\\\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
-		"data: [DONE]\n\n"
-	err := parse_sse_stream_body_internal(
-		payload,
-		Chat_Stream_Callback_State {
-			callback = record_openai_stream_delta,
-			parserData = rawptr(&toolState),
-		},
-		parse_openai_stream_event,
-	)
-
-	assert(err == .None, "expected OpenAI tool-call stream to parse")
-	assert(len(testOpenAIStreamState.toolCalls) == 1, "expected one completed tool call")
-	assert(testOpenAIStreamState.toolCalls[0].id == "call-1", "expected tool call ID")
-	assert(testOpenAIStreamState.toolCalls[0].name == "read_file", "expected tool call name")
-	assert(
-		testOpenAIStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
-		"expected concatenated tool call arguments",
-	)
-	_ = t
-}
-
-@(test)
-test_parse_anthropic_stream_body :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testAnthropicStreamState)
-	defer reset_test_stream_state(&testAnthropicStreamState)
-
-	payload :=
-		"event: message_start\n" +
-		"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":11}}}\n\n" +
-		"event: content_block_delta\n" +
-		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n" +
-		"event: message_delta\n" +
-		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
-		"event: message_stop\n" +
-		"data: {\"type\":\"message_stop\"}\n\n"
-	err := parse_sse_stream_body(
-		payload,
-		record_anthropic_stream_delta,
-		parse_anthropic_stream_event,
-	)
-
-	assert(err == .None, "expected Anthropic stream body to parse")
-	assert(
-		len(testAnthropicStreamState.parts) == 1,
-		"expected Anthropic stream to emit text delta",
-	)
-	assert(testAnthropicStreamState.parts[0] == "Hi", "expected Anthropic text delta to match")
-	assert(
-		!testAnthropicStreamState.partThinking[0],
-		"expected Anthropic text delta to not be marked as thinking",
-	)
-	assert(testAnthropicStreamState.model == "claude-test", "expected Anthropic stream model")
-	assert(testAnthropicStreamState.finishReason == "end_turn", "expected Anthropic finish reason")
-	assert(testAnthropicStreamState.done, "expected Anthropic stream to mark done")
-	assert(testAnthropicStreamState.usage.inputTokens == 11, "expected Anthropic input tokens")
-	assert(testAnthropicStreamState.usage.outputTokens == 2, "expected Anthropic output tokens")
-	_ = t
-}
-
-@(test)
-test_parse_anthropic_stream_thinking_delta :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testAnthropicStreamState)
-	defer reset_test_stream_state(&testAnthropicStreamState)
-
-	payload :=
-		"event: content_block_delta\n" +
-		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Thinking\"}}\n\n"
-	err := parse_sse_stream_body(
-		payload,
-		record_anthropic_stream_delta,
-		parse_anthropic_stream_event,
-	)
-
-	assert(err == .None, "expected Anthropic thinking stream body to parse")
-	assert(len(testAnthropicStreamState.parts) == 1, "expected one Anthropic thinking delta")
-	assert(testAnthropicStreamState.parts[0] == "Thinking", "expected Anthropic thinking text")
-	assert(
-		testAnthropicStreamState.partThinking[0],
-		"expected Anthropic thinking delta to be marked as thinking",
-	)
-	_ = t
-}
-
-@(test)
-test_parse_anthropic_stream_tool_calls :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testAnthropicStreamState)
-	defer reset_test_stream_state(&testAnthropicStreamState)
-
-	toolState: Anthropic_Stream_Tool_State
-	defer anthropic_stream_tool_state_destroy(&toolState)
-	payload :=
-		"event: content_block_start\n" +
-		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"read_file\"}}\n\n" +
-		"event: content_block_delta\n" +
-		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\":\"}}\n\n" +
-		"event: content_block_delta\n" +
-		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"main.odin\\\"}\"}}\n\n" +
-		"event: content_block_stop\n" +
-		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
-	err := parse_sse_stream_body_internal(
-		payload,
-		Chat_Stream_Callback_State {
-			callback = record_anthropic_stream_delta,
-			parserData = rawptr(&toolState),
-		},
-		parse_anthropic_stream_event,
-	)
-
-	assert(err == .None, "expected Anthropic tool-use stream to parse")
-	assert(len(testAnthropicStreamState.toolCalls) == 1, "expected one completed tool call")
-	assert(testAnthropicStreamState.toolCalls[0].id == "tool-1", "expected tool call ID")
-	assert(testAnthropicStreamState.toolCalls[0].name == "read_file", "expected tool call name")
-	assert(
-		testAnthropicStreamState.toolCalls[0].arguments == `{"file_path":"main.odin"}`,
-		"expected concatenated tool arguments",
-	)
 	_ = t
 }
 
@@ -853,39 +387,6 @@ test_parse_stream_body_with_context_callback :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_parse_sse_stream_chunks :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOpenAIStreamState)
-	defer reset_test_stream_state(&testOpenAIStreamState)
-
-	state: Stream_Parse_State
-	defer destroy_stream_parse_state(&state)
-
-	stop, err := parse_sse_stream_chunk(
-		&state,
-		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"He",
-		Chat_Stream_Callback_State{callback = record_openai_stream_delta},
-		parse_openai_stream_event,
-	)
-	assert(err == .None, "expected partial SSE chunk to parse without error")
-	assert(!stop, "expected partial SSE chunk not to stop")
-	assert(len(testOpenAIStreamState.parts) == 0, "expected partial SSE chunk not to emit")
-
-	stop, err = parse_sse_stream_chunk(
-		&state,
-		"l\"}}]}\n\ndata: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
-		Chat_Stream_Callback_State{callback = record_openai_stream_delta},
-		parse_openai_stream_event,
-	)
-
-	assert(err == .None, "expected complete SSE chunks to parse")
-	assert(!stop, "expected complete SSE chunks not to stop")
-	assert(len(testOpenAIStreamState.parts) == 2, "expected two SSE deltas to emit")
-	assert(testOpenAIStreamState.parts[0] == "Hel", "expected split SSE delta to match")
-	assert(testOpenAIStreamState.parts[1] == "lo", "expected second SSE delta to match")
-	_ = t
-}
-
-@(test)
 test_parse_json_lines_stream_chunks :: proc(t: ^testing.T) {
 	reset_test_stream_state(&testOllamaStreamState)
 	defer reset_test_stream_state(&testOllamaStreamState)
@@ -943,19 +444,6 @@ test_stream_chunk_callback_stop :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_parse_openai_models_response :: proc(t: ^testing.T) {
-	payload := `{"data":[{"id":"qwen3.6"},{"id":"gemma4"}]}`
-	models, err := parse_openai_models_response(payload, allocator = context.temp_allocator)
-	defer free_model_list(&models, allocator = context.temp_allocator)
-
-	assert(err == .None, "expected valid OpenAI models response payload to parse")
-	assert(len(models) == 2, "expected OpenAI models response to return two model IDs")
-	assert(models[0] == "qwen3.6", "expected first OpenAI model ID to match payload")
-	assert(models[1] == "gemma4", "expected second OpenAI model ID to match payload")
-	_ = t
-}
-
-@(test)
 test_parse_ollama_models_response :: proc(t: ^testing.T) {
 	payload := `{"models":[{"name":"completion-only","capabilities":["completion"]},{"name":"chat","capabilities":["completion","tools"]},{"name":"embedding","capabilities":["embedding"]},{"name":"all","capabilities":["completion","tools","embedding"]},{"name":"unknown"}]}`
 	models, err := parse_ollama_models_response(payload, allocator = context.temp_allocator)
@@ -1005,19 +493,6 @@ test_parse_ollama_model_context_window_missing_or_invalid :: proc(t: ^testing.T)
 }
 
 @(test)
-test_parse_anthropic_models_response :: proc(t: ^testing.T) {
-	payload := `{"data":[{"id":"claude-sonnet-4"},{"id":"claude-haiku-3.5"}]}`
-	models, err := parse_anthropic_models_response(payload, allocator = context.temp_allocator)
-	defer free_model_list(&models, allocator = context.temp_allocator)
-
-	assert(err == .None, "expected valid Anthropic models response payload to parse")
-	assert(len(models) == 2, "expected Anthropic models response to return two model IDs")
-	assert(models[0] == "claude-sonnet-4", "expected first Anthropic model ID to match payload")
-	assert(models[1] == "claude-haiku-3.5", "expected second Anthropic model ID to match payload")
-	_ = t
-}
-
-@(test)
 test_probe_ollama_endpoint_rejects_invalid_url :: proc(t: ^testing.T) {
 	models, err := probe_ollama_endpoint("localhost:11434", context.temp_allocator)
 	defer models_destroy(&models, allocator = context.temp_allocator)
@@ -1057,58 +532,6 @@ test_compose_endpoint_target :: proc(t: ^testing.T) {
 		target2 == "http://localhost:11434/v1/chat/completions",
 		"expected endpoint composition to avoid duplicated slash",
 	)
-	_ = t
-}
-
-@(test)
-test_ollama_openai_compatible_integration :: proc(t: ^testing.T) {
-	enabled := os.get_env("AI_OLLAMA_INTEGRATION", context.temp_allocator) == "1"
-	if !enabled {
-		_ = t
-		return
-	}
-
-	model := os.get_env("AI_OLLAMA_MODEL", context.temp_allocator)
-	if model == "" {
-		_ = t
-		return
-	}
-
-	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
-	if endpoint == "" {
-		endpoint = fmt.aprintf(
-			"http://%s:11434/v1",
-			TEST_OLLAMA_SERVER,
-			allocator = context.temp_allocator,
-		)
-	}
-
-	client := Client {
-		iface = Interface{name = "ollama", type = .OpenAI, endpoint = http.url_parse(endpoint)},
-		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
-	}
-
-	response, err := send_chat_completion(
-		client,
-		Chat_Request {
-			model = model,
-			messages = []Message{{role = .User, content = "Reply with exactly: ok"}},
-			temperature = 0,
-			maxTokens = 16,
-		},
-	)
-	defer {
-		delete(response.content, allocator = context.temp_allocator)
-		delete(response.model, allocator = context.temp_allocator)
-		delete(response.finishReason, allocator = context.temp_allocator)
-	}
-	assert(err == .None, "expected Ollama OpenAI-compatible request to succeed")
-	assert(len(response.content) > 0, "expected Ollama response content to be non-empty")
-
-	models, modelsErr := list_models(client, allocator = context.temp_allocator)
-	defer free_model_list(&models, allocator = context.temp_allocator)
-	assert(modelsErr == .None, "expected Ollama OpenAI-compatible model list request to succeed")
-	assert(len(models) > 0, "expected Ollama model list to be non-empty")
 	_ = t
 }
 
@@ -1161,54 +584,6 @@ test_ollama_native_integration :: proc(t: ^testing.T) {
 	defer free_model_list(&models, allocator = context.temp_allocator)
 	assert(modelsErr == .None, "expected native Ollama model list request to succeed")
 	assert(len(models) > 0, "expected native Ollama model list to be non-empty")
-	_ = t
-}
-
-@(test)
-test_ollama_openai_compatible_embedding_integration :: proc(t: ^testing.T) {
-	enabled := os.get_env("AI_OLLAMA_INTEGRATION", context.temp_allocator) == "1"
-	if !enabled {
-		_ = t
-		return
-	}
-
-	model := os.get_env("AI_OLLAMA_EMBEDDING_MODEL", context.temp_allocator)
-	if model == "" {
-		_ = t
-		return
-	}
-
-	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
-	if endpoint == "" {
-		endpoint = fmt.aprintf(
-			"http://%s:11434/v1",
-			TEST_OLLAMA_SERVER,
-			allocator = context.temp_allocator,
-		)
-	}
-	client := Client {
-		iface = Interface{name = "ollama", type = .OpenAI, endpoint = http.url_parse(endpoint)},
-		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
-	}
-
-	response, err := send_embedding(
-		client,
-		Embedding_Request{model = model, input = "hello"},
-		allocator = context.temp_allocator,
-	)
-	defer embedding_response_destroy(&response, allocator = context.temp_allocator)
-	assert(err == .None, "expected OpenAI-compatible Ollama embedding request to succeed")
-	assert(len(response.embedding) > 0, "expected OpenAI-compatible embedding vector")
-
-	batch, batchErr := send_embeddings(
-		client,
-		Embedding_Batch_Request{model = model, inputs = []string{"hello", "goodbye"}},
-		allocator = context.temp_allocator,
-	)
-	defer embedding_batch_response_destroy(&batch, allocator = context.temp_allocator)
-	assert(batchErr == .None, "expected OpenAI-compatible Ollama embedding batch to succeed")
-	assert(len(batch.embeddings) == 2, "expected two OpenAI-compatible embedding vectors")
-	assert(len(batch.embeddings[0]) > 0, "expected first OpenAI-compatible embedding vector")
 	_ = t
 }
 

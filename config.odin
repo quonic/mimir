@@ -394,10 +394,6 @@ register_config_interfaces :: proc(
 
 provider_type_to_string :: proc(providerType: ai.Interface_Type) -> string {
 	switch providerType {
-	case .Anthropic:
-		return "anthropic"
-	case .OpenAI:
-		return "openai"
 	case .Ollama:
 		return "ollama"
 	case .None:
@@ -408,10 +404,6 @@ provider_type_to_string :: proc(providerType: ai.Interface_Type) -> string {
 
 provider_type_from_string :: proc(text: string) -> (ai.Interface_Type, bool) {
 	switch text {
-	case "anthropic":
-		return .Anthropic, true
-	case "openai":
-		return .OpenAI, true
 	case "ollama":
 		return .Ollama, true
 	case "none":
