@@ -38,7 +38,7 @@ main :: proc() {
 
 	when ODIN_DEBUG {
 		models, err := ai.list_models(client)
-		defer ai.free_model_list(models)
+		defer ai.free_model_list(&models)
 		if err != .None {
 			// handle model listing failure
 			fmt.eprintfln("failed to list models: %v", err)

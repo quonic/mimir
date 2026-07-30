@@ -1,3 +1,4 @@
+#+vet explicit-allocators
 package ai
 
 import http "../http"
@@ -27,7 +28,7 @@ reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	delete(state.parts)
 	delete(state.partThinking)
 	for &call in state.toolCalls {
-		tool_call_destroy(&call)
+		tool_call_destroy(&call, context.allocator)
 	}
 	delete(state.toolCalls)
 	state^ = Test_Stream_State{}
@@ -66,7 +67,7 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 		append(&state.partThinking, delta.isThinking)
 	}
 	if delta.hasToolCall {
-		append(&state.toolCalls, tool_call_clone(delta.toolCall))
+		append(&state.toolCalls, tool_call_clone(delta.toolCall, context.allocator))
 	}
 	if delta.model != "" {
 		state.model = delta.model
@@ -87,11 +88,11 @@ record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta)
 	}
 }
 
-free_model_list :: proc(models: [dynamic]string) {
-	for model in models {
-		delete(model)
-	}
-	delete(models)
+free_model_list :: proc(models: ^[dynamic]string, allocator := context.allocator) {
+	// for &model in models {
+	// 	delete(model, context.allocator)
+	// }
+	free(models, allocator = allocator)
 }
 
 TEST_OLLAMA_SERVER :: "localhost"
@@ -108,7 +109,7 @@ test_build_openai_chat_request :: proc(t: ^testing.T) {
 		},
 	}
 
-	wire := build_openai_chat_request(request)
+	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
 	assert(wire.model == "test-model", "expected model to be propagated to OpenAI payload")
 	assert(len(wire.messages) == 2, "expected OpenAI payload to include all messages")
 	assert(wire.messages[0].role == "system", "expected first OpenAI role to be system")
@@ -129,6 +130,7 @@ test_build_openai_embedding_request :: proc(t: ^testing.T) {
 			inputs = []string{"first", "second"},
 			options = Embedding_Options{dimensions = 256, hasDimensions = true},
 		},
+		allocator = context.temp_allocator,
 	)
 	payload, marshalErr := json.unparse(wire, allocator = context.temp_allocator)
 	assert(marshalErr == nil, "expected OpenAI embedding request to serialize")
@@ -158,6 +160,7 @@ test_build_ollama_embedding_request :: proc(t: ^testing.T) {
 				hasOllamaOptions = true,
 			},
 		},
+		allocator = context.temp_allocator,
 	)
 	payload, marshalErr := json.unparse(wire, allocator = context.temp_allocator)
 	assert(marshalErr == nil, "expected Ollama embedding request to serialize")
@@ -170,6 +173,7 @@ test_build_ollama_embedding_request :: proc(t: ^testing.T) {
 
 	defaultWire := build_ollama_embedding_request(
 		Embedding_Batch_Request{model = "nomic-embed-text", inputs = []string{"first", "second"}},
+		allocator = context.temp_allocator,
 	)
 	defaultPayload, defaultMarshalErr := json.unparse(
 		defaultWire,
@@ -229,12 +233,17 @@ test_embedding_request_validation_and_anthropic_support :: proc(t: ^testing.T) {
 	client := Client {
 		iface = Interface{type = .Anthropic},
 	}
-	_, emptyErr := send_embeddings(client, Embedding_Batch_Request{})
+	_, emptyErr := send_embeddings(
+		client,
+		Embedding_Batch_Request{},
+		allocator = context.temp_allocator,
+	)
 	assert(emptyErr == .Invalid_Request, "expected empty embedding request to reject")
 
 	_, unsupportedErr := send_embedding(
 		client,
 		Embedding_Request{model = "claude-test", input = "hello"},
+		allocator = context.temp_allocator,
 	)
 	assert(
 		unsupportedErr == .Unsupported_Interface,
@@ -256,7 +265,7 @@ test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_openai_chat_request(request)
+	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
 	assert(len(wire.tools) == 1, "expected OpenAI request tool")
 	assert(wire.tools[0].type == "function", "expected OpenAI function tool")
 	assert(wire.tools[0].function.name == "read_file", "expected OpenAI tool name")
@@ -287,7 +296,7 @@ test_openai_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_openai_chat_request(request)
+	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
 	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
 	assert(wire.messages[0].role == "assistant", "expected assistant tool-call message")
 	assert(len(wire.messages[0].tool_calls) == 1, "expected serialized tool call")
@@ -337,7 +346,7 @@ test_build_ollama_chat_request :: proc(t: ^testing.T) {
 		},
 	}
 
-	wire := build_ollama_chat_request(request)
+	wire := build_ollama_chat_request(request, allocator = context.temp_allocator)
 	assert(wire.model == "llama3.2", "expected model to be propagated to Ollama payload")
 	assert(len(wire.messages) == 2, "expected Ollama payload to include all messages")
 	assert(wire.messages[0].role == "system", "expected first Ollama role to be system")
@@ -364,7 +373,7 @@ test_ollama_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_ollama_chat_request(request)
+	wire := build_ollama_chat_request(request, allocator = context.temp_allocator)
 	assert(len(wire.tools) == 1, "expected Ollama request tool")
 	assert(wire.tools[0].type == "function", "expected Ollama function tool")
 	assert(wire.tools[0].function.name == "read_file", "expected Ollama tool name")
@@ -396,7 +405,7 @@ test_ollama_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_ollama_chat_request(request)
+	wire := build_ollama_chat_request(request, allocator = context.temp_allocator)
 	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
 	assert(len(wire.messages[0].tool_calls) == 1, "expected Ollama tool-call history")
 	assert(
@@ -416,7 +425,7 @@ test_build_anthropic_stream_request :: proc(t: ^testing.T) {
 		maxTokens = 128,
 	}
 
-	wire := build_anthropic_request(request)
+	wire := build_anthropic_request(request, allocator = context.temp_allocator)
 	assert(!wire.stream, "expected Anthropic message payload to disable streaming")
 
 	streamWire := build_anthropic_stream_request(request)
@@ -427,11 +436,11 @@ test_build_anthropic_stream_request :: proc(t: ^testing.T) {
 @(test)
 test_parse_openai_chat_response :: proc(t: ^testing.T) {
 	payload := `{"model":"llama3.2","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
-	response, err := parse_openai_chat_response(payload)
+	response, err := parse_openai_chat_response(payload, allocator = context.temp_allocator)
 	defer {
-		delete(response.content)
-		delete(response.model)
-		delete(response.finishReason)
+		delete(response.content, allocator = context.temp_allocator)
+		delete(response.model, allocator = context.temp_allocator)
+		delete(response.finishReason, allocator = context.temp_allocator)
 	}
 	assert(err == .None, "expected valid OpenAI response payload to parse")
 	assert(response.content == "hi", "expected parsed OpenAI content to match payload")
@@ -442,11 +451,11 @@ test_parse_openai_chat_response :: proc(t: ^testing.T) {
 @(test)
 test_parse_ollama_chat_response :: proc(t: ^testing.T) {
 	payload := `{"model":"llama3.2","message":{"role":"assistant","content":"hi"},"done":true,"done_reason":"stop"}`
-	response, err := parse_ollama_chat_response(payload)
+	response, err := parse_ollama_chat_response(payload, allocator = context.temp_allocator)
 	defer {
-		delete(response.content)
-		delete(response.model)
-		delete(response.finishReason)
+		delete(response.content, allocator = context.temp_allocator)
+		delete(response.model, allocator = context.temp_allocator)
+		delete(response.finishReason, allocator = context.temp_allocator)
 	}
 	assert(err == .None, "expected valid Ollama response payload to parse")
 	assert(response.content == "hi", "expected parsed Ollama content to match payload")
@@ -458,11 +467,11 @@ test_parse_ollama_chat_response :: proc(t: ^testing.T) {
 @(test)
 test_parse_anthropic_response :: proc(t: ^testing.T) {
 	payload := `{"model":"claude-sonnet-4","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn"}`
-	response, err := parse_anthropic_response(payload)
+	response, err := parse_anthropic_response(payload, allocator = context.temp_allocator)
 	defer {
-		delete(response.content)
-		delete(response.model)
-		delete(response.finishReason)
+		delete(response.content, allocator = context.temp_allocator)
+		delete(response.model, allocator = context.temp_allocator)
+		delete(response.finishReason, allocator = context.temp_allocator)
 	}
 	assert(err == .None, "expected valid Anthropic response payload to parse")
 	assert(response.content == "hello", "expected parsed Anthropic content to match payload")
@@ -483,13 +492,13 @@ test_anthropic_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_anthropic_request(request)
+	wire := build_anthropic_request(request, allocator = context.temp_allocator)
 	assert(len(wire.tools) == 1, "expected Anthropic request tool")
 	assert(wire.tools[0].name == "read_file", "expected Anthropic tool name")
 
 	payload := `{"model":"claude-test","content":[{"type":"tool_use","id":"tool-1","name":"read_file","input":{"file_path":"main.odin"}}],"stop_reason":"tool_use"}`
-	response, err := parse_anthropic_response(payload, context.allocator)
-	defer chat_response_destroy(&response, context.allocator)
+	response, err := parse_anthropic_response(payload, allocator = context.temp_allocator)
+	defer chat_response_destroy(&response, context.temp_allocator)
 	assert(err == .None, "expected Anthropic tool call response")
 	assert(len(response.toolCalls) == 1, "expected parsed Anthropic tool call")
 	assert(response.toolCalls[0].arguments != "", "expected serialized Anthropic arguments")
@@ -513,15 +522,21 @@ test_anthropic_request_serializes_tool_call_history :: proc(t: ^testing.T) {
 			},
 		},
 	}
-	wire := build_anthropic_request(request)
+	wire := build_anthropic_request(request, allocator = context.temp_allocator)
 	assert(len(wire.messages) == 2, "expected assistant call and tool result messages")
 	assert(wire.messages[0].role == "assistant", "expected Anthropic assistant role")
 	assert(wire.messages[1].role == "user", "expected Anthropic tool result user role")
-	toolUseJSON, toolUseErr := json.unparse(wire.messages[0].content)
+	toolUseJSON, toolUseErr := json.unparse(
+		wire.messages[0].content,
+		allocator = context.temp_allocator,
+	)
 	assert(toolUseErr == nil, "expected Anthropic tool-use blocks to serialize")
 	assert(strings.contains(toolUseJSON, `"tool_use"`), "expected tool_use block")
 	assert(strings.contains(toolUseJSON, `"file_path"`), "expected raw tool input")
-	toolResultJSON, toolResultErr := json.unparse(wire.messages[1].content)
+	toolResultJSON, toolResultErr := json.unparse(
+		wire.messages[1].content,
+		allocator = context.temp_allocator,
+	)
 	assert(toolResultErr == nil, "expected Anthropic tool-result blocks to serialize")
 	assert(strings.contains(toolResultJSON, `"tool_result"`), "expected tool_result block")
 	assert(strings.contains(toolResultJSON, `"tool-1"`), "expected tool result call ID")
@@ -930,8 +945,8 @@ test_stream_chunk_callback_stop :: proc(t: ^testing.T) {
 @(test)
 test_parse_openai_models_response :: proc(t: ^testing.T) {
 	payload := `{"data":[{"id":"qwen3.6"},{"id":"gemma4"}]}`
-	models, err := parse_openai_models_response(payload)
-	defer free_model_list(models)
+	models, err := parse_openai_models_response(payload, allocator = context.temp_allocator)
+	defer free_model_list(&models, allocator = context.temp_allocator)
 
 	assert(err == .None, "expected valid OpenAI models response payload to parse")
 	assert(len(models) == 2, "expected OpenAI models response to return two model IDs")
@@ -943,8 +958,8 @@ test_parse_openai_models_response :: proc(t: ^testing.T) {
 @(test)
 test_parse_ollama_models_response :: proc(t: ^testing.T) {
 	payload := `{"models":[{"name":"completion-only","capabilities":["completion"]},{"name":"chat","capabilities":["completion","tools"]},{"name":"embedding","capabilities":["embedding"]},{"name":"all","capabilities":["completion","tools","embedding"]},{"name":"unknown"}]}`
-	models, err := parse_ollama_models_response(payload)
-	defer models_destroy(&models)
+	models, err := parse_ollama_models_response(payload, allocator = context.temp_allocator)
+	defer models_destroy(&models, allocator = context.temp_allocator)
 
 	assert(err == .None, "expected valid Ollama models response payload to parse")
 	assert(len(models) == 5, "expected Ollama models response to return all models")
@@ -992,8 +1007,8 @@ test_parse_ollama_model_context_window_missing_or_invalid :: proc(t: ^testing.T)
 @(test)
 test_parse_anthropic_models_response :: proc(t: ^testing.T) {
 	payload := `{"data":[{"id":"claude-sonnet-4"},{"id":"claude-haiku-3.5"}]}`
-	models, err := parse_anthropic_models_response(payload)
-	defer free_model_list(models)
+	models, err := parse_anthropic_models_response(payload, allocator = context.temp_allocator)
+	defer free_model_list(&models, allocator = context.temp_allocator)
 
 	assert(err == .None, "expected valid Anthropic models response payload to parse")
 	assert(len(models) == 2, "expected Anthropic models response to return two model IDs")
@@ -1005,7 +1020,7 @@ test_parse_anthropic_models_response :: proc(t: ^testing.T) {
 @(test)
 test_probe_ollama_endpoint_rejects_invalid_url :: proc(t: ^testing.T) {
 	models, err := probe_ollama_endpoint("localhost:11434", context.temp_allocator)
-	defer models_destroy(&models)
+	defer models_destroy(&models, allocator = context.temp_allocator)
 
 	assert(err == .Invalid_Request, "expected invalid Ollama endpoint URL to reject")
 	assert(len(models) == 0, "expected invalid Ollama endpoint to return no models")
@@ -1061,7 +1076,11 @@ test_ollama_openai_compatible_integration :: proc(t: ^testing.T) {
 
 	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
 	if endpoint == "" {
-		endpoint = fmt.aprintf("http://%s:11434/v1", TEST_OLLAMA_SERVER, context.temp_allocator)
+		endpoint = fmt.aprintf(
+			"http://%s:11434/v1",
+			TEST_OLLAMA_SERVER,
+			allocator = context.temp_allocator,
+		)
 	}
 
 	client := Client {
@@ -1079,15 +1098,15 @@ test_ollama_openai_compatible_integration :: proc(t: ^testing.T) {
 		},
 	)
 	defer {
-		delete(response.content)
-		delete(response.model)
-		delete(response.finishReason)
+		delete(response.content, allocator = context.temp_allocator)
+		delete(response.model, allocator = context.temp_allocator)
+		delete(response.finishReason, allocator = context.temp_allocator)
 	}
 	assert(err == .None, "expected Ollama OpenAI-compatible request to succeed")
 	assert(len(response.content) > 0, "expected Ollama response content to be non-empty")
 
-	models, modelsErr := list_models(client)
-	defer free_model_list(models)
+	models, modelsErr := list_models(client, allocator = context.temp_allocator)
+	defer free_model_list(&models, allocator = context.temp_allocator)
 	assert(modelsErr == .None, "expected Ollama OpenAI-compatible model list request to succeed")
 	assert(len(models) > 0, "expected Ollama model list to be non-empty")
 	_ = t
@@ -1109,7 +1128,11 @@ test_ollama_native_integration :: proc(t: ^testing.T) {
 
 	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
 	if endpoint == "" {
-		endpoint = fmt.aprintf("http://%s:11434", TEST_OLLAMA_SERVER, context.temp_allocator)
+		endpoint = fmt.aprintf(
+			"http://%s:11434",
+			TEST_OLLAMA_SERVER,
+			allocator = context.temp_allocator,
+		)
 	}
 
 	client := Client {
@@ -1127,15 +1150,15 @@ test_ollama_native_integration :: proc(t: ^testing.T) {
 		},
 	)
 	defer {
-		delete(response.content)
-		delete(response.model)
-		delete(response.finishReason)
+		delete(response.content, allocator = context.temp_allocator)
+		delete(response.model, allocator = context.temp_allocator)
+		delete(response.finishReason, allocator = context.temp_allocator)
 	}
 	assert(err == .None, "expected native Ollama request to succeed")
 	assert(len(response.content) > 0, "expected native Ollama response content to be non-empty")
 
-	models, modelsErr := list_models(client)
-	defer free_model_list(models)
+	models, modelsErr := list_models(client, allocator = context.temp_allocator)
+	defer free_model_list(&models, allocator = context.temp_allocator)
 	assert(modelsErr == .None, "expected native Ollama model list request to succeed")
 	assert(len(models) > 0, "expected native Ollama model list to be non-empty")
 	_ = t
@@ -1157,23 +1180,32 @@ test_ollama_openai_compatible_embedding_integration :: proc(t: ^testing.T) {
 
 	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
 	if endpoint == "" {
-		endpoint = fmt.aprintf("http://%s:11434/v1", TEST_OLLAMA_SERVER, context.temp_allocator)
+		endpoint = fmt.aprintf(
+			"http://%s:11434/v1",
+			TEST_OLLAMA_SERVER,
+			allocator = context.temp_allocator,
+		)
 	}
 	client := Client {
 		iface = Interface{name = "ollama", type = .OpenAI, endpoint = http.url_parse(endpoint)},
 		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
 	}
 
-	response, err := send_embedding(client, Embedding_Request{model = model, input = "hello"})
-	defer embedding_response_destroy(&response)
+	response, err := send_embedding(
+		client,
+		Embedding_Request{model = model, input = "hello"},
+		allocator = context.temp_allocator,
+	)
+	defer embedding_response_destroy(&response, allocator = context.temp_allocator)
 	assert(err == .None, "expected OpenAI-compatible Ollama embedding request to succeed")
 	assert(len(response.embedding) > 0, "expected OpenAI-compatible embedding vector")
 
 	batch, batchErr := send_embeddings(
 		client,
 		Embedding_Batch_Request{model = model, inputs = []string{"hello", "goodbye"}},
+		allocator = context.temp_allocator,
 	)
-	defer embedding_batch_response_destroy(&batch)
+	defer embedding_batch_response_destroy(&batch, allocator = context.temp_allocator)
 	assert(batchErr == .None, "expected OpenAI-compatible Ollama embedding batch to succeed")
 	assert(len(batch.embeddings) == 2, "expected two OpenAI-compatible embedding vectors")
 	assert(len(batch.embeddings[0]) > 0, "expected first OpenAI-compatible embedding vector")
@@ -1196,23 +1228,32 @@ test_ollama_native_embedding_integration :: proc(t: ^testing.T) {
 
 	endpoint := os.get_env("AI_OLLAMA_ENDPOINT", context.temp_allocator)
 	if endpoint == "" {
-		endpoint = fmt.aprintf("http://%s:11434", TEST_OLLAMA_SERVER, context.temp_allocator)
+		endpoint = fmt.aprintf(
+			"http://%s:11434",
+			TEST_OLLAMA_SERVER,
+			allocator = context.temp_allocator,
+		)
 	}
 	client := Client {
 		iface = Interface{name = "ollama", type = .Ollama, endpoint = http.url_parse(endpoint)},
 		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
 	}
 
-	response, err := send_embedding(client, Embedding_Request{model = model, input = "hello"})
-	defer embedding_response_destroy(&response)
+	response, err := send_embedding(
+		client,
+		Embedding_Request{model = model, input = "hello"},
+		allocator = context.temp_allocator,
+	)
+	defer embedding_response_destroy(&response, allocator = context.temp_allocator)
 	assert(err == .None, "expected native Ollama embedding request to succeed")
 	assert(len(response.embedding) > 0, "expected native embedding vector")
 
 	batch, batchErr := send_embeddings(
 		client,
 		Embedding_Batch_Request{model = model, inputs = []string{"hello", "goodbye"}},
+		allocator = context.temp_allocator,
 	)
-	defer embedding_batch_response_destroy(&batch)
+	defer embedding_batch_response_destroy(&batch, allocator = context.temp_allocator)
 	assert(batchErr == .None, "expected native Ollama embedding batch to succeed")
 	assert(len(batch.embeddings) == 2, "expected two native embedding vectors")
 	assert(len(batch.embeddings[0]) > 0, "expected first native embedding vector")
