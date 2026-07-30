@@ -17,11 +17,23 @@ permission_grant_destroy :: proc(grant: ^Permission_Grant, allocator := context.
 	tool_policy.permission_grant_destroy(grant, allocator)
 }
 
-permission_normalize_absolute_path :: proc(path: string, allocator := context.allocator) -> (string, bool) {
+permission_normalize_absolute_path :: proc(
+	path: string,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
 	return tool_policy.permission_normalize_absolute_path(path, allocator)
 }
 
-permission_resolve_project_path :: proc(projectRoot, requestedPath: string, allocator := context.allocator) -> (string, bool) {
+permission_resolve_project_path :: proc(
+	projectRoot, requestedPath: string,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
 	return tool_policy.permission_resolve_project_path(projectRoot, requestedPath, allocator)
 }
 
@@ -33,10 +45,17 @@ permission_directory_contains_path :: proc(directory, path: string) -> bool {
 	return tool_policy.permission_directory_contains_path(directory, path)
 }
 
-permission_grant_matches_action :: proc(grant: Permission_Grant, action: Permission_Action) -> bool {
+permission_grant_matches_action :: proc(
+	grant: Permission_Grant,
+	action: Permission_Action,
+) -> bool {
 	return tool_policy.permission_grant_matches_action(grant, action)
 }
 
-permission_action_decision :: proc(action: Permission_Action, persistentGrants: []Permission_Grant, sessionGrants: []Permission_Grant) -> Permission_Decision {
+permission_action_decision :: proc(
+	action: Permission_Action,
+	persistentGrants: []Permission_Grant,
+	sessionGrants: []Permission_Grant,
+) -> Permission_Decision {
 	return tool_policy.permission_action_decision(action, persistentGrants, sessionGrants)
 }

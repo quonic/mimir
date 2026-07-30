@@ -19,7 +19,10 @@ tool_dispatcher_init :: proc(
 	projectRoot: string,
 	persistentGrants: []Permission_Grant,
 	allocator := context.allocator,
-) -> (Tool_Dispatcher, bool) {
+) -> (
+	Tool_Dispatcher,
+	bool,
+) {
 	return tool_policy.tool_dispatcher_init(projectRoot, persistentGrants, allocator)
 }
 
@@ -51,11 +54,17 @@ tool_dispatch_decide :: proc(
 tool_dispatch_grant_from_action :: proc(
 	action: Permission_Action,
 	allocator := context.allocator,
-) -> (Permission_Grant, bool) {
+) -> (
+	Permission_Grant,
+	bool,
+) {
 	return tool_policy.tool_dispatch_grant_from_action(action, allocator)
 }
 
-tool_dispatch_result_destroy :: proc(result: ^Tool_Dispatch_Result, allocator := context.allocator) {
+tool_dispatch_result_destroy :: proc(
+	result: ^Tool_Dispatch_Result,
+	allocator := context.allocator,
+) {
 	tool_policy.tool_dispatch_result_destroy(result, allocator)
 }
 
