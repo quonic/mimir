@@ -1,4 +1,4 @@
-package main
+package tool_policy
 
 import "core:testing"
 
