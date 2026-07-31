@@ -287,7 +287,7 @@ For small utilities, keep the code explicit, use `proc`, and favor simple data s
 
 ## 15. Useful references
 
-- Official language overview: https://odin-lang.org/docs/overview/
-- Installation guide: https://odin-lang.org/docs/install/
-- Package docs: https://pkg.odin-lang.org/
-- GitHub repository: https://github.com/odin-lang/Odin
+- Official language overview: <https://odin-lang.org/docs/overview/>
+- Installation guide: <https://odin-lang.org/docs/install/>
+- Package docs: <https://pkg.odin-lang.org/>
+- GitHub repository: <https://github.com/odin-lang/Odin>
