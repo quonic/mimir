@@ -24,7 +24,7 @@ Use this skill when:
 
 ## Workflow
 
-1. Read the bundled Odin reference guide.
+1. Read the bundled Odin reference guide. If the bundled reference guide does not cover the requested feature, state that explicitly and fall back to general Odin language knowledge, clearly noting the information is not from the reference guide.
 2. Identify the request type:
    - explanation
    - code generation
@@ -54,7 +54,7 @@ Use this skill when:
 
 - Prefer explicit, readable code.
 - Mention the main Odin-specific distinction when relevant.
-- Use the official Odin docs or repository examples when uncertain.
+- When uncertain, refer to the bundled reference guide at references/odin-for-open-weight-models.md first, then the official Odin language documentation at https://odin-lang.org/docs/.
 - Avoid claiming a snippet is correct without checking the language rules.
 
 ## Example prompts
