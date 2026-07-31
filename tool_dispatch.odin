@@ -1,6 +1,7 @@
 package main
 
 // Re-export types and functions from tool_policy for backward compatibility
+import builtin_tools "./builtin_tools"
 import tool_policy "./tool_policy"
 
 Tool_Call :: tool_policy.Tool_Call
@@ -68,87 +69,35 @@ tool_dispatch_result_destroy :: proc(
 	tool_policy.tool_dispatch_result_destroy(result, allocator)
 }
 
-// Tool execution functions remain in main as they depend on tools_procs.odin
-// These are NOT part of the extracted policy package per issue non-goals
+// Tool execution functions delegate to builtin_tools package
+// search_code and find_code remain application-provided per issue non-goals
 
 tool_dispatch_execute_approved :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> string {
-	prepared := tool_dispatch_prepare(dispatcher, call)
-	defer tool_dispatch_result_destroy(&prepared, dispatcher.allocator)
-	switch prepared.decision {
-	case .Denied:
-		return "Permission denied."
-	case .Approval_Required, .Allowed_Read_Only, .Allowed_Session, .Allowed_Persistent:
-	// The caller has either received policy approval or explicitly authorized this call once.
-	case:
-		return "Permission denied."
+	// Delegate to builtin_tools for builtins (excludes search_code/find_code which are app-provided)
+	if call.id != "search_code" && call.id != "find_code" {
+		return builtin_tools.execute_builtin_tool(
+			dispatcher,
+			tool_policy.Tool_Call {
+				callID = call.callID,
+				id = call.id,
+				filePath = call.filePath,
+				directoryPath = call.directoryPath,
+				startLine = call.startLine,
+				endLine = call.endLine,
+				content = call.content,
+				overwrite = call.overwrite,
+				command = call.command,
+				workingDirectory = call.workingDirectory,
+				timeout = call.timeout,
+				mcpServer = call.mcpServer,
+				query = call.query,
+				maxResults = call.maxResults,
+			},
+		)
 	}
 
-	switch call.id {
-	case "list_available_shells":
-		return list_available_shells_tool_proc()
-	case "read_file":
-		path, pathOK := permission_resolve_project_path(
-			dispatcher.projectRoot,
-			call.filePath,
-			dispatcher.allocator,
-		)
-		if !pathOK {
-			return "Permission denied."
-		}
-		defer delete(path, dispatcher.allocator)
-		return read_file_tool_proc(path)
-	case "write_file":
-		path, pathOK := permission_resolve_project_path(
-			dispatcher.projectRoot,
-			call.filePath,
-			dispatcher.allocator,
-		)
-		if !pathOK {
-			return "Permission denied."
-		}
-		defer delete(path, dispatcher.allocator)
-		return write_file_tool_proc(path, call.content, call.overwrite)
-	case "list_directory":
-		path, pathOK := permission_resolve_project_path(
-			dispatcher.projectRoot,
-			call.directoryPath,
-			dispatcher.allocator,
-		)
-		if !pathOK {
-			return "Permission denied."
-		}
-		defer delete(path, dispatcher.allocator)
-		return list_directory_tool_proc(path)
-	case "get_file_info":
-		path, pathOK := permission_resolve_project_path(
-			dispatcher.projectRoot,
-			call.filePath,
-			dispatcher.allocator,
-		)
-		if !pathOK {
-			return "Permission denied."
-		}
-		defer delete(path, dispatcher.allocator)
-		return get_file_info_tool_proc(path)
-	case "run_command":
-		workingDirectory := dispatcher.projectRoot
-		if call.workingDirectory != "" {
-			resolvedDirectory, directoryOK := permission_resolve_project_path(
-				dispatcher.projectRoot,
-				call.workingDirectory,
-				dispatcher.allocator,
-			)
-			if !directoryOK {
-				return "Permission denied."
-			}
-			defer delete(resolvedDirectory, dispatcher.allocator)
-			workingDirectory = resolvedDirectory
-		}
-		return run_command_tool_proc(call.command, workingDirectory, call.timeout)
-	case "mcp":
-		return "MCP tool dispatch is not implemented."
-	}
-	return "Permission denied."
+	// search_code and find_code are application-provided (require live code index + ai client)
+	return "Tool type not handled by builtin_tools."
 }
 
 tool_dispatch_execute :: proc(dispatcher: ^Tool_Dispatcher, call: Tool_Call) -> string {

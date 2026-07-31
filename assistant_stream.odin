@@ -2,6 +2,7 @@
 package main
 
 import agent "./agent"
+import builtin_tools "./builtin_tools"
 import "ai"
 import "code_index"
 import "core:encoding/json"
@@ -97,7 +98,7 @@ app_tool_definitions_for_provider :: proc(
 	if providerType == .None {
 		return make([dynamic]ai.Tool_Definition, 0, 0, allocator)
 	}
-	return builtin_ai_tool_definitions(allocator)
+	return builtin_tools.builtin_ai_tool_definitions(allocator)
 }
 
 app_assistant_stream_active :: proc(state: ^App_State) -> bool {
