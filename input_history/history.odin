@@ -1,4 +1,4 @@
-package main
+package input_history
 
 import json "core:encoding/json"
 import "core:fmt"
@@ -6,7 +6,7 @@ import "core:hash"
 import "core:os"
 import "core:strings"
 
-History_Error :: enum int {
+Error :: enum int {
 	None = 0,
 	Invalid_Path,
 	Not_Found,
@@ -14,7 +14,7 @@ History_Error :: enum int {
 	Invalid_JSON,
 }
 
-history_cache_dir :: proc(home: string, allocator := context.allocator) -> string {
+cache_directory :: proc(home: string, allocator := context.allocator) -> string {
 	if home == "" {
 		return ""
 	}
@@ -25,41 +25,42 @@ history_cache_dir :: proc(home: string, allocator := context.allocator) -> strin
 	return strings.to_string(builder)
 }
 
-input_history_path :: proc(
+project_history_path :: proc(
 	home: string,
 	workingDirectory: string,
 	allocator := context.allocator,
 ) -> string {
-	dir := history_cache_dir(home, allocator)
-	defer delete(dir, allocator)
-	if dir == "" || workingDirectory == "" {
+	directory := cache_directory(home, allocator)
+	defer delete(directory, allocator)
+	if directory == "" || workingDirectory == "" {
 		return ""
 	}
 	return fmt.aprintf(
 		"%s/history-%016x.json",
-		dir,
+		directory,
 		hash.fnv64a(transmute([]byte)workingDirectory),
 		allocator = allocator,
 	)
 }
 
-load_input_history_from_file :: proc(
+// The caller owns the returned dynamic array and every string it contains.
+load :: proc(
 	home: string,
 	workingDirectory: string,
 	allocator := context.allocator,
 ) -> (
 	[dynamic]string,
-	History_Error,
+	Error,
 ) {
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
+	path := project_history_path(home, workingDirectory, context.temp_allocator)
 	defer delete(path, context.temp_allocator)
 	if path == "" {
 		return nil, .Invalid_Path
 	}
 
-	data, readErr := os.read_entire_file(path, context.temp_allocator)
-	if readErr != nil {
-		#partial switch err in readErr {
+	data, readError := os.read_entire_file(path, context.temp_allocator)
+	if readError != nil {
+		#partial switch err in readError {
 		case os.General_Error:
 			if err == .Not_Exist {
 				return nil, .Not_Found
@@ -69,8 +70,8 @@ load_input_history_from_file :: proc(
 	}
 
 	wire: []string
-	decodeErr := json.unmarshal_string(string(data), &wire, allocator = context.temp_allocator)
-	if decodeErr != nil {
+	decodeError := json.unmarshal_string(string(data), &wire, allocator = context.temp_allocator)
+	if decodeError != nil {
 		return nil, .Invalid_JSON
 	}
 
@@ -81,36 +82,32 @@ load_input_history_from_file :: proc(
 	return history, .None
 }
 
-save_input_history_to_file :: proc(
-	home: string,
-	workingDirectory: string,
-	history: []string,
-) -> History_Error {
-	dir := history_cache_dir(home, context.temp_allocator)
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
-	defer delete(dir, context.temp_allocator)
+save :: proc(home: string, workingDirectory: string, history: []string) -> Error {
+	directory := cache_directory(home, context.temp_allocator)
+	path := project_history_path(home, workingDirectory, context.temp_allocator)
+	defer delete(directory, context.temp_allocator)
 	defer delete(path, context.temp_allocator)
-	if dir == "" || path == "" {
+	if directory == "" || path == "" {
 		return .Invalid_Path
 	}
 
-	if !os.exists(dir) {
-		mkdirErr := os.make_directory_all(dir)
-		if mkdirErr != nil {
+	if !os.exists(directory) {
+		makeDirectoryError := os.make_directory_all(directory)
+		if makeDirectoryError != nil {
 			return .Io_Error
 		}
 	}
 
-	payload := input_history_to_json(history, context.temp_allocator)
+	payload := history_to_json(history, context.temp_allocator)
 	defer delete(payload, context.temp_allocator)
-	if writeErr := os.write_entire_file_from_string(path, payload); writeErr != nil {
+	if writeError := os.write_entire_file_from_string(path, payload); writeError != nil {
 		return .Io_Error
 	}
 	return .None
 }
 
-clear_input_history_file :: proc(home: string, workingDirectory: string) -> History_Error {
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
+clear :: proc(home: string, workingDirectory: string) -> Error {
+	path := project_history_path(home, workingDirectory, context.temp_allocator)
 	defer delete(path, context.temp_allocator)
 	if path == "" {
 		return .Invalid_Path
@@ -118,13 +115,13 @@ clear_input_history_file :: proc(home: string, workingDirectory: string) -> Hist
 	if !os.exists(path) {
 		return .None
 	}
-	if removeErr := os.remove(path); removeErr != nil {
+	if removeError := os.remove(path); removeError != nil {
 		return .Io_Error
 	}
 	return .None
 }
 
-input_history_to_json :: proc(history: []string, allocator := context.allocator) -> string {
+history_to_json :: proc(history: []string, allocator := context.allocator) -> string {
 	builder: strings.Builder
 	strings.builder_init(&builder, allocator)
 	strings.write_string(&builder, "[")

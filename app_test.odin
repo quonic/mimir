@@ -1,6 +1,7 @@
 package main
 
 import agent "./agent"
+import input_history "./input_history"
 import settings "./settings"
 import "ai"
 import "code_index"
@@ -906,7 +907,7 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	assert(workingDirectoryErr == nil, "expected current working directory")
 	history := [1]string{"saved input"}
 	assert(
-		save_input_history_to_file(home, workingDirectory, history[:]) == .None,
+		input_history.save(home, workingDirectory, history[:]) == .None,
 		"expected persistent history to save",
 	)
 
@@ -920,7 +921,7 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	assert(state.inputHistory[0] == "saved input", "expected loaded input history entry")
 
 	app_record_input_history(&state, "new input")
-	loaded, loadErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
+	loaded, loadErr := input_history.load(home, workingDirectory, context.temp_allocator)
 	defer {
 		for &entry in loaded {
 			entry = ""
@@ -938,7 +939,7 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	assert(len(state.history) == 0, "expected clear command to reset panel history")
 	assert(state.historyScrollOffset == 0, "expected clear command to reset panel scroll position")
 	assert(state.status == "Input history cleared", "expected clear command success status")
-	_, missingErr := load_input_history_from_file(home, workingDirectory, context.temp_allocator)
+	_, missingErr := input_history.load(home, workingDirectory, context.temp_allocator)
 	assert(missingErr == .Not_Found, "expected clear command to remove persistent history")
 	_ = t
 }

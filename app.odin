@@ -2,6 +2,7 @@
 package main
 
 import agent "./agent"
+import input_history "./input_history"
 import settings "./settings"
 import "ai"
 import "code_index"
@@ -1623,11 +1624,7 @@ app_record_input_history :: proc(state: ^App_State, text: string) {
 	append(&state.inputHistory, strings.clone(text, state.allocator))
 	app_reset_input_history_browse(state)
 	if state.configHome != "" && state.workingDirectory != "" {
-		if save_input_history_to_file(
-			   state.configHome,
-			   state.workingDirectory,
-			   state.inputHistory[:],
-		   ) !=
+		if input_history.save(state.configHome, state.workingDirectory, state.inputHistory[:]) !=
 		   .None {
 			state.status = "Input history could not be saved"
 		}
@@ -1639,11 +1636,7 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 		return
 	}
 
-	loaded, loadErr := load_input_history_from_file(
-		state.configHome,
-		state.workingDirectory,
-		allocator,
-	)
+	loaded, loadErr := input_history.load(state.configHome, state.workingDirectory, allocator)
 	if loadErr != .None {
 		return
 	}
@@ -1676,7 +1669,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 		state.status = "Input history cleared"
 		return
 	}
-	if clear_input_history_file(state.configHome, state.workingDirectory) == .None {
+	if input_history.clear(state.configHome, state.workingDirectory) == .None {
 		state.status = "Input history cleared"
 	} else {
 		state.status = "Input history could not be cleared"
@@ -2639,7 +2632,7 @@ app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator
 		return
 	}
 
-	cacheDir := history_cache_dir(state.configHome, allocator)
+	cacheDir := input_history.cache_directory(state.configHome, allocator)
 	defer delete(cacheDir, allocator)
 	index, initError := code_index.code_index_init(
 		state.workingDirectory,
