@@ -182,6 +182,7 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 		}
 		return true
 	case .Tool_Requested:
+		state.agentHost.historyIndex = -1
 		return app_dispatch_agent_tool_request(state, event)
 	case .Completed:
 		state.status = "Assistant response complete"
@@ -252,7 +253,18 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		}
 		return true
 	}
-	state.status = "Tool call awaiting execution"
+	historyIndex := app_append_tool_history(state, call, "running")
+	if !app_start_agent_tool_execution(state, call, historyIndex, event.agentID, event.requestID) {
+		app_update_tool_history(state, historyIndex, call, "failed")
+		_ = agent.runtime_resolve_tool(
+			&state.agentHost.runtime,
+			event.agentID,
+			event.requestID,
+			.Denied,
+			"Tool call could not start.",
+		)
+		state.status = "Tool call could not start"
+	}
 	return true
 }
 

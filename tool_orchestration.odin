@@ -150,7 +150,11 @@ tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	outputOwned := app_tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
-		delete(output, context.allocator)
+		if execution.call.id == "search_code" || execution.call.id == "find_code" {
+			delete(output, execution.app.dispatcher.allocator)
+		} else {
+			delete(output, context.allocator)
+		}
 		output = ownedOutput
 	}
 	if len(output) > MAX_RETAINED_TOOL_OUTPUT_BYTES {

@@ -226,6 +226,40 @@ test_agent_deny_all_resolves_request_without_modal :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_agent_allowed_find_code_starts_tool_execution :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "find_code",
+				arguments = `{"query":"agent_host_start_background"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+
+	assert(app_poll_agent_host(&state), "expected allowed tool request to be dispatched")
+	assert(state.toolExecution.active, "expected allowed tool execution to start")
+	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Executing_Tool, "expected executing runtime state")
+	for !app_poll_tool_execution(&state) {
+	}
+	runtimeState, runtimeOK = agent.runtime_state(&state.agentHost.runtime, agentID)
+	assert(runtimeOK && runtimeState == .Streaming, "expected tool completion to resume runtime")
+	_ = t
+}
+
+@(test)
 test_agent_approve_all_starts_tool_without_modal :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -344,5 +378,66 @@ test_agent_tool_completion_starts_queued_tool_request :: proc(t: ^testing.T) {
 	assert(app_poll_agent_host(&state), "expected queued tool request to open approval")
 	assert(state.mode == .Approval, "expected queued tool approval")
 	assert(state.approval.agentRequestID == "call-2", "expected second tool request")
+	_ = t
+}
+
+@(test)
+test_agent_continuation_text_starts_after_tool_history :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.config.approvalMethod = .Approve_All
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "I will check the repository."},
+		) ==
+		.None,
+		"expected pre-tool text delta",
+	)
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta {
+				hasToolCall = true,
+				toolCall = ai.Tool_Call {
+					id = "call-1",
+					name = "run_command",
+					arguments = `{"command":"pwd"}`,
+				},
+				done = true,
+			},
+		) ==
+		.None,
+		"expected tool request delta",
+	)
+	assert(app_poll_agent_host(&state), "expected pre-tool text and tool request projection")
+	assert(state.agentHost.historyIndex == -1, "expected tool request to close assistant entry")
+	for !app_poll_tool_execution(&state) {
+	}
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "Repository status is clean."},
+		) ==
+		.None,
+		"expected continuation text delta",
+	)
+	assert(app_poll_agent_host(&state), "expected continuation text projection")
+	assert(
+		state.history[len(state.history) - 1].content == "Repository status is clean.",
+		"expected continuation in a new assistant entry",
+	)
+	assert(
+		state.history[len(state.history) - 3].content == "I will check the repository.",
+		"expected pre-tool text to remain unchanged",
+	)
 	_ = t
 }

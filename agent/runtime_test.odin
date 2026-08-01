@@ -195,6 +195,12 @@ test_runtime_post_tool_stream_uses_a_new_assistant_buffer :: proc(t: ^testing.T)
 		runtime_finish_tool(&runtime, agentID, "contents", false) == .None,
 		"expected tool result",
 	)
+	instanceIndex, instanceOK := runtime_find_index(&runtime, agentID)
+	assert(instanceOK, "expected runtime instance")
+	assert(
+		!runtime.instances[instanceIndex].streamConfig.continuationPending,
+		"expected manually driven stream not to schedule a provider continuation",
+	)
 	resultEvent, resultEventOK := runtime_next_event(&runtime, agentID)
 	assert(resultEventOK, "expected tool result event")
 	agent_event_destroy(&resultEvent, context.temp_allocator)

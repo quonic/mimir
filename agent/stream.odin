@@ -44,27 +44,79 @@ runtime_start_stream :: proc(
 	   len(instance.conversation) == 0 {
 		return .Invalid_Stream_Request
 	}
+	runtime_stream_configuration_destroy(&instance.streamConfig, runtime.allocator)
+	instance.streamConfig = runtime_stream_configuration_clone(
+		client,
+		model,
+		tools,
+		temperature,
+		maxTokens,
+		runtime.allocator,
+	)
+	return runtime_start_configured_stream(runtime, index)
+}
+
+runtime_start_configured_stream :: proc(runtime: ^Runtime, index: int) -> Agent_Error {
+	instance := &runtime.instances[index]
+	configuration := &instance.streamConfig
+	if instance.state != .Streaming ||
+	   instance.stream != nil ||
+	   !configuration.configured ||
+	   configuration.model == "" ||
+	   len(instance.conversation) == 0 {
+		return .Invalid_Stream_Request
+	}
 
 	stream := new(Stream_Worker_State, runtime.allocator)
 	stream.allocator = runtime.allocator
 	stream.pendingDeltas = make([dynamic]ai.Chat_Stream_Delta, 0, 0, runtime.allocator)
 	worker := new(Stream_Worker, runtime.allocator)
 	worker.state = stream
-	worker.client = client
+	worker.client = configuration.client
 	worker.request = runtime_stream_request_clone(
-		model,
+		configuration.model,
 		instance.conversation[:],
-		tools,
-		temperature,
-		maxTokens,
+		configuration.tools[:],
+		configuration.temperature,
+		configuration.maxTokens,
 		runtime.allocator,
 	)
 	stream.workerData = worker
 	stream.worker = thread.create(runtime_stream_worker_proc)
 	stream.worker.data = rawptr(worker)
 	instance.stream = stream
+	configuration.continuationPending = false
 	thread.start(stream.worker)
 	return .None
+}
+
+runtime_stream_configuration_clone :: proc(
+	client: ai.Client,
+	model: string,
+	tools: []ai.Tool_Definition,
+	temperature: f32,
+	maxTokens: int,
+	allocator := context.allocator,
+) -> Stream_Configuration {
+	configuration := Stream_Configuration {
+		client      = client,
+		model       = strings.clone(model, allocator),
+		tools       = make([dynamic]ai.Tool_Definition, 0, len(tools), allocator),
+		temperature = temperature,
+		maxTokens   = maxTokens,
+		configured  = true,
+	}
+	for tool in tools {
+		append(
+			&configuration.tools,
+			ai.Tool_Definition {
+				name = strings.clone(tool.name, allocator),
+				description = strings.clone(tool.description, allocator),
+				parametersJSON = strings.clone(tool.parametersJSON, allocator),
+			},
+		)
+	}
+	return configuration
 }
 
 runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Error) {
@@ -75,6 +127,21 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 	instance := &runtime.instances[index]
 	stream := instance.stream
 	if stream == nil {
+		if instance.streamConfig.continuationPending {
+			if runtime_start_configured_stream(runtime, index) != .None {
+				instance.state = .Failed
+				runtime_emit_event(
+					runtime,
+					index,
+					Agent_Event {
+						type = .Failed,
+						content = "Assistant continuation failed.",
+						isError = true,
+					},
+				)
+			}
+			return true, .None
+		}
 		return false, .None
 	}
 
