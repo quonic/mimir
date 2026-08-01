@@ -16,6 +16,11 @@ assert_sequence :: proc(t: ^testing.T, actual, expected, message: string) {
 	_ = t
 }
 
+assert_owned_sequence :: proc(t: ^testing.T, actual, expected, message: string) {
+	defer delete(actual)
+	assert_sequence(t, actual, expected, message)
+}
+
 assert_written_sequence :: proc(
 	t: ^testing.T,
 	sequence, expected, write_message, sequence_message: string,
@@ -52,19 +57,19 @@ test_cursor_sequences :: proc(t: ^testing.T) {
 		"\x1b[?2004l",
 		"expected bracketed paste mode to disable",
 	)
-	assert_sequence(
+	assert_owned_sequence(
 		t,
 		osc52_clipboard_sequence("Mimir"),
 		"\x1b]52;c;TWltaXI=\a",
 		"expected OSC 52 sequence to encode clipboard text",
 	)
-	assert_sequence(
+	assert_owned_sequence(
 		t,
 		osc52_clipboard_sequence("é"),
 		"\x1b]52;c;w6k=\a",
 		"expected OSC 52 sequence to preserve UTF-8 clipboard text",
 	)
-	assert_sequence(
+	assert_owned_sequence(
 		t,
 		osc52_clipboard_sequence(""),
 		"\x1b]52;c;\a",
@@ -219,7 +224,7 @@ test_display_sequences :: proc(t: ^testing.T) {
 		"\x1b[?2026l",
 		"expected synchronized update end to disable DEC mode 2026",
 	)
-	assert_sequence(
+	assert_owned_sequence(
 		t,
 		synchronized_output_sequence("frame"),
 		"\x1b[?2026hframe\x1b[?2026l",

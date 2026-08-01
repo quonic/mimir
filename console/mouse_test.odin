@@ -3,6 +3,49 @@ package console
 import "core:testing"
 
 @(test)
+test_mouse_input_buffer :: proc(t: ^testing.T) {
+	buffer: Mouse_Input_Buffer
+	quit_result, quit_sequence := mouse_input_push_byte(&buffer, 'q')
+	assert(quit_result == .Quit, "expected q to signal quit immediately")
+	assert(quit_sequence == "", "expected q to produce no mouse sequence")
+
+	upper_quit_result, upper_quit_sequence := mouse_input_push_byte(&buffer, 'Q')
+	assert(upper_quit_result == .Quit, "expected Q to signal quit immediately")
+	assert(upper_quit_sequence == "", "expected Q to produce no mouse sequence")
+
+	input_sequence := "\x1b[<0;12;7M"
+	for index := 0; index < len(input_sequence); index += 1 {
+		result, sequence := mouse_input_push_byte(&buffer, input_sequence[index])
+		if index < len(input_sequence) - 1 {
+			assert(result == .None, "expected incomplete mouse sequence to remain pending")
+			assert(sequence == "", "expected incomplete mouse sequence to produce no output")
+			continue
+		}
+		assert(result == .Mouse_Sequence, "expected final mouse byte to complete the sequence")
+		assert(
+			sequence == input_sequence,
+			"expected completed mouse sequence to preserve exact bytes",
+		)
+	}
+	assert(buffer.pending_len == 0, "expected completed mouse sequence to reset the buffer")
+
+	_, _ = mouse_input_push_byte(&buffer, 0x1b)
+	_, _ = mouse_input_push_byte(&buffer, 'x')
+	assert(buffer.pending_len == 0, "expected malformed mouse prefix to reset the buffer")
+	result_after_invalid, sequence_after_invalid := mouse_input_push_byte(&buffer, 'q')
+	assert(result_after_invalid == .Quit, "expected buffer to recover after malformed input")
+	assert(
+		sequence_after_invalid == "",
+		"expected recovery quit input to produce no mouse sequence",
+	)
+
+	_, _ = mouse_input_push_byte(&buffer, 0x1b)
+	mouse_input_reset(&buffer)
+	assert(buffer.pending_len == 0, "expected explicit reset to clear pending input")
+	_ = t
+}
+
+@(test)
 test_mouse_mode_sequences :: proc(t: ^testing.T) {
 	assert_sequence(
 		t,
