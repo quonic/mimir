@@ -85,7 +85,8 @@ test_agent_host_projects_thinking_spinner_before_text :: proc(t: ^testing.T) {
 			&state.agentHost.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
-		) == .None,
+		) ==
+		.None,
 		"expected thinking delta",
 	)
 	assert(app_poll_agent_host(&state), "expected thinking projection")
@@ -100,7 +101,8 @@ test_agent_host_projects_thinking_spinner_before_text :: proc(t: ^testing.T) {
 			&state.agentHost.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Visible response"},
-		) == .None,
+		) ==
+		.None,
 		"expected text delta",
 	)
 	assert(app_poll_agent_host(&state), "expected text projection")
