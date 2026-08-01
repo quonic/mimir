@@ -17,11 +17,8 @@ test_setting_row_formats_control_labels :: proc(t: ^testing.T) {
 		"expected button label",
 	)
 	assert(
-		setting_row_choice(
-			"Approval method",
-			"Always ask",
-			context.temp_allocator,
-		) == "Approval method: < Always ask >",
+		setting_row_choice("Approval method", "Always ask", context.temp_allocator) ==
+		"Approval method: < Always ask >",
 		"expected choice label",
 	)
 	_ = t

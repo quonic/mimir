@@ -2,7 +2,11 @@ package widgets
 
 import "core:strings"
 
-setting_row_checkbox :: proc(label: string, checked: bool, allocator := context.allocator) -> string {
+setting_row_checkbox :: proc(
+	label: string,
+	checked: bool,
+	allocator := context.allocator,
+) -> string {
 	marker := "[ ] "
 	if checked {
 		marker = "[x] "
