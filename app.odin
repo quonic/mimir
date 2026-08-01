@@ -3,7 +3,6 @@ package main
 
 import agent "./agent"
 import approval_safety "./approval_safety"
-import builtin_tools "./builtin_tools"
 import input_history "./input_history"
 import settings "./settings"
 import tool_policy "./tool_policy"
