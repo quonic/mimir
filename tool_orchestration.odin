@@ -322,9 +322,9 @@ app_search_code_results_json :: proc(
 		location, locationOK := code_index.code_index_search_result_location(result)
 		strings.write_string(&builder, `{"path":`)
 		if locationOK {
-			write_json_string(&builder, location.relativePath)
+			write_tool_json_string(&builder, location.relativePath)
 		} else {
-			write_json_string(&builder, result.metadata)
+			write_tool_json_string(&builder, result.metadata)
 		}
 		strings.write_string(&builder, `,"start_line":`)
 		if locationOK {
@@ -345,11 +345,44 @@ app_search_code_results_json :: proc(
 		)
 		defer delete(excerpt, allocator)
 		strings.write_string(&builder, `,"excerpt":`)
-		write_json_string(&builder, excerpt)
+		write_tool_json_string(&builder, excerpt)
 		strings.write_byte(&builder, '}')
 	}
 	strings.write_string(&builder, `]}`)
 	return strings.to_string(builder)
+}
+
+write_tool_json_string :: proc(builder: ^strings.Builder, text: string) {
+	strings.write_byte(builder, '"')
+	hex := "0123456789abcdef"
+	for index := 0; index < len(text); index += 1 {
+		b := text[index]
+		switch b {
+		case '"':
+			strings.write_string(builder, "\\\"")
+		case '\\':
+			strings.write_string(builder, "\\\\")
+		case '\b':
+			strings.write_string(builder, "\\b")
+		case '\f':
+			strings.write_string(builder, "\\f")
+		case '\n':
+			strings.write_string(builder, "\\n")
+		case '\r':
+			strings.write_string(builder, "\\r")
+		case '\t':
+			strings.write_string(builder, "\\t")
+		case:
+			if b < 0x20 {
+				strings.write_string(builder, "\\u00")
+				strings.write_byte(builder, hex[int((b>>4)&0x0f)])
+				strings.write_byte(builder, hex[int(b&0x0f)])
+			} else {
+				strings.write_byte(builder, b)
+			}
+		}
+	}
+	strings.write_byte(builder, '"')
 }
 
 write_decimal :: proc(builder: ^strings.Builder, value: int) {
