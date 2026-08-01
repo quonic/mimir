@@ -354,12 +354,18 @@ app_search_code_results_json :: proc(
 
 write_tool_json_string :: proc(builder: ^strings.Builder, text: string) {
 	strings.write_byte(builder, '"')
+	hex := "0123456789abcdef"
 	for index := 0; index < len(text); index += 1 {
-		switch text[index] {
+		b := text[index]
+		switch b {
 		case '"':
 			strings.write_string(builder, "\\\"")
 		case '\\':
 			strings.write_string(builder, "\\\\")
+		case '\b':
+			strings.write_string(builder, "\\b")
+		case '\f':
+			strings.write_string(builder, "\\f")
 		case '\n':
 			strings.write_string(builder, "\\n")
 		case '\r':
@@ -367,7 +373,13 @@ write_tool_json_string :: proc(builder: ^strings.Builder, text: string) {
 		case '\t':
 			strings.write_string(builder, "\\t")
 		case:
-			strings.write_byte(builder, text[index])
+			if b < 0x20 {
+				strings.write_string(builder, "\\u00")
+				strings.write_byte(builder, hex[int((b>>4)&0x0f)])
+				strings.write_byte(builder, hex[int(b&0x0f)])
+			} else {
+				strings.write_byte(builder, b)
+			}
 		}
 	}
 	strings.write_byte(builder, '"')
