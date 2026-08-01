@@ -1,20 +1,18 @@
 package main
 
-import agent "./agent"
-import approval_safety "./approval_safety"
-import builtin_tools "./builtin_tools"
-import commands "./commands"
-import input_history "./input_history"
-import settings "./settings"
-import tool_policy "./tool_policy"
-import widgets "./widgets"
+import "agent"
 import "ai"
-import "code_index"
+import "approval_safety"
+import "commands"
 import "console"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import text_input "text_input"
+import "input_history"
+import "settings"
+import "text_input"
+import "tool_policy"
+import "widgets"
 
 @(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {

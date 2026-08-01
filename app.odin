@@ -1,15 +1,11 @@
 #+vet explicit-allocators
 package main
 
-import agent "./agent"
-import approval_safety "./approval_safety"
-import commands "./commands"
-import input_history "./input_history"
-import settings "./settings"
-import tool_policy "./tool_policy"
-import widgets "./widgets"
+import "agent"
 import "ai"
+import "approval_safety"
 import "code_index"
+import "commands"
 import "console"
 import "core:c"
 import "core:fmt"
@@ -20,7 +16,11 @@ import "core:strings"
 import "core:sys/posix"
 import "core:time"
 import "core:unicode/utf8"
-import text_input "text_input"
+import "input_history"
+import "settings"
+import "text_input"
+import "tool_policy"
+import "widgets"
 
 APP_POLL_INTERVAL_MS :: 25
 APP_CURSOR_BLINK_INTERVAL :: 500 * time.Millisecond

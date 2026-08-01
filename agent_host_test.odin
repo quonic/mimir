@@ -1,9 +1,9 @@
 package main
 
-import agent "./agent"
-import tool_policy "./tool_policy"
+import "agent"
 import "ai"
 import "core:testing"
+import "tool_policy"
 
 @(test)
 test_agent_host_starts_active_and_background_agents :: proc(t: ^testing.T) {

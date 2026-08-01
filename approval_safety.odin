@@ -1,10 +1,10 @@
 package main
 
-import approval_safety "./approval_safety"
-import settings "./settings"
 import "ai"
+import "approval_safety"
 import "core:strings"
-import text_input "text_input"
+import "settings"
+import "text_input"
 
 APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES :: 200
 

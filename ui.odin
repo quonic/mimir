@@ -1,12 +1,12 @@
 package main
 
-import settings "./settings"
-import tool_policy "./tool_policy"
-import widgets "./widgets"
 import "console"
 import "core:fmt"
 import "core:strings"
-import text_input "text_input"
+import "settings"
+import "text_input"
+import "tool_policy"
+import "widgets"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
 MIN_INPUT_PANEL_HEIGHT :: 3

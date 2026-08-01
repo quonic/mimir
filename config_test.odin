@@ -1,9 +1,9 @@
 package main
 
-import settings "./settings"
 import "ai"
 import "core:os"
 import "core:testing"
+import "settings"
 
 @(test)
 test_provider_type_round_trip :: proc(t: ^testing.T) {
