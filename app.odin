@@ -2,6 +2,7 @@
 package main
 
 import agent "./agent"
+import approval_safety "./approval_safety"
 import input_history "./input_history"
 import settings "./settings"
 import "ai"
@@ -51,7 +52,7 @@ Approval_State :: struct {
 	historyIndex:   int,
 	agentID:        agent.Agent_ID,
 	agentRequestID: string,
-	safety:         Approval_Safety_State,
+	safety:         approval_safety.State,
 	choice:         Approval_Choice,
 	input:          Approval_Input_State,
 }
@@ -1136,16 +1137,24 @@ app_apply_approval_method :: proc(state: ^App_State) -> bool {
 		app_apply_approval_choice(state, .Deny)
 		return true
 	case .Approve_Safe:
-		if !app_approval_safety_ready(state) || state.approval.safety.unavailable {
-			return false
-		}
-		if app_approval_safety_verdict(state) != .Safe {
+		if !app_safety_allows_automatic_approval(
+			app_approval_safety_ready(state),
+			app_approval_safety_unavailable(state),
+			app_approval_safety_verdict(state),
+		) {
 			return false
 		}
 		app_apply_approval_choice(state, .Allow_Once)
 		return true
 	}
 	return false
+}
+
+app_safety_allows_automatic_approval :: proc(
+	ready, unavailable: bool,
+	verdict: approval_safety.Verdict,
+) -> bool {
+	return ready && !unavailable && verdict == .Safe
 }
 
 app_clear_approval :: proc(state: ^App_State) {
@@ -1171,7 +1180,19 @@ app_move_approval_choice :: proc(state: ^App_State, delta: int) {
 }
 
 app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
-	if !app_approval_safety_ready(state) {
+	return app_handle_approval_input_with_safety_ready(
+		state,
+		input,
+		app_approval_safety_ready(state),
+	)
+}
+
+app_handle_approval_input_with_safety_ready :: proc(
+	state: ^App_State,
+	input: byte,
+	safetyReady: bool,
+) -> bool {
+	if !safetyReady {
 		return false
 	}
 
