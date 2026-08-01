@@ -4,6 +4,7 @@ package main
 import agent "./agent"
 import builtin_tools "./builtin_tools"
 import settings "./settings"
+import tool_policy "./tool_policy"
 import "ai"
 import "code_index"
 import "core:encoding/json"
@@ -23,7 +24,7 @@ Tool_Execution_State :: struct {
 	allocator:      mem.Allocator,
 	worker:         ^thread.Thread,
 	app:            ^App_State,
-	call:           Tool_Call,
+	call:           tool_policy.Tool_Call,
 	result:         string,
 	resultOwned:    bool,
 	historyIndex:   int,
@@ -61,7 +62,7 @@ app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
 		execution.worker = nil
 	}
 	if execution.call.id != "" {
-		tool_call_destroy(&execution.call, execution.allocator)
+		tool_policy.tool_call_destroy(&execution.call, execution.allocator)
 	}
 	if execution.resultOwned {
 		delete(execution.result, execution.allocator)
@@ -95,7 +96,7 @@ app_build_ai_messages :: proc(
 
 app_start_agent_tool_execution :: proc(
 	state: ^App_State,
-	call: Tool_Call,
+	call: tool_policy.Tool_Call,
 	historyIndex: int,
 	agentID: agent.Agent_ID,
 	requestID: string,
@@ -121,7 +122,7 @@ app_start_agent_tool_execution :: proc(
 
 app_start_tool_execution_for_agent :: proc(
 	state: ^App_State,
-	call: Tool_Call,
+	call: tool_policy.Tool_Call,
 	historyIndex: int,
 	agentID: agent.Agent_ID,
 	requestID: string,
@@ -131,7 +132,7 @@ app_start_tool_execution_for_agent :: proc(
 		return false
 	}
 	execution.app = state
-	execution.call = tool_call_clone(call, execution.allocator)
+	execution.call = tool_policy.tool_call_clone(call, execution.allocator)
 	execution.historyIndex = historyIndex
 	execution.agentID = agentID
 	execution.agentRequestID = strings.clone(requestID, execution.allocator)
@@ -197,7 +198,7 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 		_ = agent.runtime_finish_tool(&state.agentHost.runtime, agentID, output, isError)
 	}
 	app_destroy_tool_output_if_owned(output, outputOwned, execution.allocator)
-	tool_call_destroy(&execution.call, execution.allocator)
+	tool_policy.tool_call_destroy(&execution.call, execution.allocator)
 	delete(execution.agentRequestID, execution.allocator)
 	execution.call = {}
 	execution.result = ""
@@ -234,11 +235,11 @@ app_tool_call_from_ai :: proc(
 	aiCall: ai.Tool_Call,
 	allocator := context.allocator,
 ) -> (
-	Tool_Call,
+	tool_policy.Tool_Call,
 	bool,
 ) {
 	if aiCall.name == "" || aiCall.arguments == "" {
-		return Tool_Call{}, false
+		return tool_policy.Tool_Call{}, false
 	}
 
 	arguments: AI_Tool_Call_Arguments
@@ -248,10 +249,10 @@ app_tool_call_from_ai :: proc(
 		allocator = context.temp_allocator,
 	)
 	if decodeErr != nil {
-		return Tool_Call{}, false
+		return tool_policy.Tool_Call{}, false
 	}
 
-	call := Tool_Call {
+	call := tool_policy.Tool_Call {
 		callID           = strings.clone(aiCall.id, allocator),
 		id               = strings.clone(aiCall.name, allocator),
 		filePath         = strings.clone(arguments.file_path, allocator),
@@ -267,8 +268,8 @@ app_tool_call_from_ai :: proc(
 	}
 	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
-			tool_call_destroy(&call, allocator)
-			return Tool_Call{}, false
+			tool_policy.tool_call_destroy(&call, allocator)
+			return tool_policy.Tool_Call{}, false
 		}
 		if call.maxResults == 0 {
 			call.maxResults = SEARCH_CODE_DEFAULT_MAX_RESULTS
@@ -279,9 +280,9 @@ app_tool_call_from_ai :: proc(
 	return call, true
 }
 
-app_execute_tool_call :: proc(state: ^App_State, call: Tool_Call) -> string {
+app_execute_tool_call :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> string {
 	if call.id != "search_code" && call.id != "find_code" {
-		return tool_dispatch_execute_approved(&state.dispatcher, call)
+		return builtin_tools.execute_builtin_tool(&state.dispatcher, call)
 	}
 	if call.id == "find_code" {
 		results := app_find_code(state, call.query, call.maxResults, state.dispatcher.allocator)

@@ -2,6 +2,7 @@ package main
 
 import agent "./agent"
 import settings "./settings"
+import tool_policy "./tool_policy"
 import "ai"
 import "core:mem"
 import "core:strings"
@@ -225,7 +226,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		if toolID == "" {
 			toolID = "unknown"
 		}
-		app_append_tool_history(state, Tool_Call{id = toolID}, "failed")
+		app_append_tool_history(state, tool_policy.Tool_Call{id = toolID}, "failed")
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
@@ -236,9 +237,9 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		state.status = "Tool call rejected"
 		return true
 	}
-	defer tool_call_destroy(&call, state.dispatcher.allocator)
+	defer tool_policy.tool_call_destroy(&call, state.dispatcher.allocator)
 
-	decision := tool_dispatch_decide(&state.dispatcher, call)
+	decision := tool_policy.tool_dispatch_decide(&state.dispatcher, call)
 	if decision == .Denied {
 		app_append_tool_history(state, call, "denied")
 		_ = agent.runtime_resolve_tool(
@@ -282,7 +283,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 
 app_show_agent_approval :: proc(
 	state: ^App_State,
-	call: Tool_Call,
+	call: tool_policy.Tool_Call,
 	agentID: agent.Agent_ID,
 	requestID: string,
 ) -> bool {

@@ -1,6 +1,7 @@
 package main
 
 import settings "./settings"
+import tool_policy "./tool_policy"
 import "console"
 import "core:fmt"
 import "core:strings"
@@ -214,7 +215,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 	}
 }
 
-approval_effect_label :: proc(effect: Permission_Effect) -> string {
+approval_effect_label :: proc(effect: tool_policy.Permission_Effect) -> string {
 	switch effect {
 	case .Read:
 		return "Read"
