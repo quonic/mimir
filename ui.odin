@@ -3,6 +3,7 @@ package main
 import "console"
 import "core:fmt"
 import "core:strings"
+import text_input "text_input"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
 MIN_INPUT_PANEL_HEIGHT :: 3
@@ -81,7 +82,10 @@ render_app_frame_sequence :: proc(
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
 	defer console.batch_destroy(&batch)
@@ -260,7 +264,10 @@ render_app_input_panel_sequence :: proc(
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
 	defer console.batch_destroy(&batch)
@@ -283,7 +290,10 @@ render_app_history_panel_sequence :: proc(
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(rows, columns, input_lines)
 	batch := console.batch_init(allocator)
 	defer console.batch_destroy(&batch)
@@ -391,7 +401,7 @@ render_history_selection :: proc(
 		}
 
 		selectionStart := 0
-		selectionEnd := unicode_text_width(text)
+		selectionEnd := text_input.unicode_text_width(text)
 		if lineNumber == originalStartLine {
 			selectionStart = startColumn - region.left_column
 		}
@@ -407,11 +417,11 @@ render_history_selection :: proc(
 
 		column := 0
 		for byteIndex := 0; byteIndex < len(text); {
-			next := unicode_next_grapheme_offset(text, byteIndex)
+			next := text_input.unicode_next_grapheme_offset(text, byteIndex)
 			if next <= byteIndex {
 				break
 			}
-			graphemeWidth := unicode_grapheme_width_at(text, byteIndex)
+			graphemeWidth := text_input.unicode_grapheme_width_at(text, byteIndex)
 			if column + graphemeWidth > selectionStart && column < selectionEnd {
 				console.batch_move_to(
 					batch,
@@ -674,7 +684,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	   setting.providerIndex == state.configEditingSetting.providerIndex {
 		strings.write_string(&builder, config_setting_label(setting.id))
 		strings.write_string(&builder, ": ")
-		strings.write_string(&builder, input_buffer_string(&state.configEdit))
+		strings.write_string(&builder, text_input.input_buffer_string(&state.configEdit))
 		return strings.to_string(builder)
 	}
 
@@ -843,9 +853,9 @@ config_modal_footer :: proc(state: ^App_State) -> string {
 }
 
 render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
-	text := input_buffer_string(&state.input)
-	selectionStart := input_buffer_selection_start(&state.input)
-	selectionEnd := input_buffer_selection_end(&state.input)
+	text := text_input.input_buffer_string(&state.input)
+	selectionStart := text_input.input_buffer_selection_start(&state.input)
+	selectionEnd := text_input.input_buffer_selection_end(&state.input)
 	if !state.cursorBlinkOn {
 		render_input_with_cursor(batch, region, text, -1, selectionStart, selectionEnd)
 		return
@@ -854,7 +864,7 @@ render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_
 		batch,
 		region,
 		text,
-		input_buffer_cursor_position(&state.input),
+		text_input.input_buffer_cursor_position(&state.input),
 		selectionStart,
 		selectionEnd,
 	)
@@ -877,7 +887,7 @@ render_input_with_cursor :: proc(
 	lineStartGrapheme := 0
 	for index := 0; index <= len(text) && row <= region.bottom_row; index += 1 {
 		if index == len(text) || text[index] == '\n' || text[index] == '\r' {
-			lineGraphemes := unicode_grapheme_count(text[start:index])
+			lineGraphemes := text_input.unicode_grapheme_count(text[start:index])
 			cursorInLine := -1
 			if cursorPosition >= lineStartGrapheme &&
 			   cursorPosition <= lineStartGrapheme + lineGraphemes {
@@ -925,8 +935,8 @@ render_wrapped_input_line :: proc(
 	startGrapheme := 0
 	for start < len(text) && row <= region.bottom_row {
 		finish, next := wrapped_text_slice(text, start, width)
-		sliceGraphemes := unicode_grapheme_count(text[start:finish])
-		nextGraphemes := unicode_grapheme_count(text[start:next])
+		sliceGraphemes := text_input.unicode_grapheme_count(text[start:finish])
+		nextGraphemes := text_input.unicode_grapheme_count(text[start:next])
 		cursorInSlice := -1
 		if cursorInLine >= startGrapheme && cursorInLine <= startGrapheme + nextGraphemes {
 			cursorInSlice = cursorInLine - startGrapheme
@@ -951,7 +961,7 @@ render_wrapped_input_line :: proc(
 		if next <= start {
 			break
 		}
-		startGrapheme += unicode_grapheme_count(text[start:next])
+		startGrapheme += text_input.unicode_grapheme_count(text[start:next])
 		start = next
 	}
 	return rows_written
@@ -967,10 +977,13 @@ render_input_slice :: proc(
 	width := console.region_width(region)
 	console.batch_move_to(batch, row, region.left_column)
 	slice := text[start:finish]
-	sliceGraphemes := unicode_grapheme_count(slice)
+	sliceGraphemes := text_input.unicode_grapheme_count(slice)
 	if selectionEnd > selectionStart {
 		for grapheme := 0; grapheme < sliceGraphemes; grapheme += 1 {
-			graphemeStart, graphemeFinish := unicode_grapheme_byte_range(slice, grapheme)
+			graphemeStart, graphemeFinish := text_input.unicode_grapheme_byte_range(
+				slice,
+				grapheme,
+			)
 			if grapheme == cursorInLine {
 				render_input_cursor_cell(batch, slice[graphemeStart:graphemeFinish])
 			} else if grapheme >= selectionStart && grapheme < selectionEnd {
@@ -980,7 +993,7 @@ render_input_slice :: proc(
 			}
 		}
 		if cursorInLine == sliceGraphemes {
-			cursorColumn := unicode_text_width(slice)
+			cursorColumn := text_input.unicode_text_width(slice)
 			if cursorColumn >= width {
 				cursorColumn = width - 1
 				console.batch_move_to(batch, row, region.left_column + cursorColumn)
@@ -995,7 +1008,7 @@ render_input_slice :: proc(
 	}
 
 	if cursorInLine < sliceGraphemes {
-		cursorStart, cursorFinish := unicode_grapheme_byte_range(slice, cursorInLine)
+		cursorStart, cursorFinish := text_input.unicode_grapheme_byte_range(slice, cursorInLine)
 		console.batch_write_text(batch, slice[:cursorStart])
 		render_input_cursor_cell(batch, slice[cursorStart:cursorFinish])
 		console.batch_write_text(batch, slice[cursorFinish:])
@@ -1004,7 +1017,7 @@ render_input_slice :: proc(
 
 	console.batch_write_text(batch, slice)
 	if cursorInLine == sliceGraphemes {
-		cursorColumn := unicode_text_width(slice)
+		cursorColumn := text_input.unicode_text_width(slice)
 		if cursorColumn >= width {
 			cursorColumn = width - 1
 			console.batch_move_to(batch, row, region.left_column + cursorColumn)
@@ -1066,8 +1079,8 @@ render_status :: proc(batch: ^console.Batch, region: console.Region, state: ^App
 text_display_width :: proc(text: string) -> int {
 	width := 0
 	for index := 0; index < len(text); {
-		width += unicode_grapheme_width_at(text, index)
-		next := unicode_next_grapheme_offset(text, index)
+		width += text_input.unicode_grapheme_width_at(text, index)
+		next := text_input.unicode_next_grapheme_offset(text, index)
 		if next <= index {
 			break
 		}
@@ -1083,8 +1096,8 @@ right_clipped_text :: proc(text: string, width: int) -> string {
 	totalWidth := text_display_width(text)
 	start := 0
 	for totalWidth > width && start < len(text) {
-		graphemeWidth := unicode_grapheme_width_at(text, start)
-		next := unicode_next_grapheme_offset(text, start)
+		graphemeWidth := text_input.unicode_grapheme_width_at(text, start)
+		next := text_input.unicode_next_grapheme_offset(text, start)
 		if next <= start {
 			break
 		}
@@ -1291,8 +1304,8 @@ wrapped_text_slice :: proc(text: string, start, width: int) -> (finish, next: in
 	currentWidth := 0
 	index := start
 	for index < len(text) {
-		graphemeFinish := unicode_next_grapheme_offset(text, index)
-		graphemeWidth := unicode_grapheme_width_at(text, index)
+		graphemeFinish := text_input.unicode_next_grapheme_offset(text, index)
+		graphemeWidth := text_input.unicode_grapheme_width_at(text, index)
 		if graphemeFinish <= index {
 			break
 		}
@@ -1350,8 +1363,8 @@ write_clipped_line :: proc(batch: ^console.Batch, row, column, width: int, text:
 	finish := 0
 	remaining := width
 	for finish < len(text) && remaining > 0 {
-		next := unicode_next_grapheme_offset(text, finish)
-		graphemeWidth := unicode_grapheme_width_at(text, finish)
+		next := text_input.unicode_next_grapheme_offset(text, finish)
+		graphemeWidth := text_input.unicode_grapheme_width_at(text, finish)
 		if next <= finish || graphemeWidth > remaining {
 			break
 		}
