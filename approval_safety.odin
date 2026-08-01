@@ -19,12 +19,12 @@ app_start_approval_safety :: proc(state: ^App_State) {
 
 	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
 	if !safetyModelOK {
-		approval_safety.mark_unavailable(approval)
+		approval_safety.mark_unavailable(approval, state.dispatcher.allocator)
 		return
 	}
 	client, clientErr := ai.new_client(safetyModel.provider.name, safetyModel.provider.apiKey)
 	if clientErr != .None {
-		approval_safety.mark_unavailable(approval)
+		approval_safety.mark_unavailable(approval, state.dispatcher.allocator)
 		return
 	}
 
