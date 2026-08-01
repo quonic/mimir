@@ -168,6 +168,11 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 	case .Thinking_Changed:
 		state.agentHost.thinking = event.thinking
 		if state.agentHost.thinking {
+			if state.agentHost.historyIndex < 0 ||
+			   state.agentHost.historyIndex >= len(state.history) {
+				append_history(state, .Assistant, "")
+				state.agentHost.historyIndex = len(state.history) - 1
+			}
 			state.status = "Assistant thinking"
 		}
 		return true

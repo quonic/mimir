@@ -72,6 +72,46 @@ test_agent_host_projects_streamed_text_into_one_history_entry :: proc(t: ^testin
 }
 
 @(test)
+test_agent_host_projects_thinking_spinner_before_text :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
+		) == .None,
+		"expected thinking delta",
+	)
+	assert(app_poll_agent_host(&state), "expected thinking projection")
+	assert(state.agentHost.historyIndex >= 0, "expected pending assistant history entry")
+	assert(
+		history_display_line(&state, state.agentHost.historyIndex, context.temp_allocator) ==
+		SPINNER_FRAMES[0],
+		"expected spinner in pending assistant entry",
+	)
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "Visible response"},
+		) == .None,
+		"expected text delta",
+	)
+	assert(app_poll_agent_host(&state), "expected text projection")
+	assert(
+		state.history[state.agentHost.historyIndex].content == "Visible response",
+		"expected visible text to replace spinner",
+	)
+	_ = t
+}
+
+@(test)
 test_agent_host_denies_invalid_tool_requests_and_resumes_agent :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
