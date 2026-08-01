@@ -2,6 +2,7 @@ package main
 
 import settings "./settings"
 import tool_policy "./tool_policy"
+import widgets "./widgets"
 import "console"
 import "core:fmt"
 import "core:strings"
@@ -607,27 +608,29 @@ render_config_categories :: proc(
 		return
 	}
 	write_clipped_line(batch, region.top_row, region.left_column, width, "Categories")
+	categoryLabels := make(
+		[dynamic]string,
+		0,
+		int(Config_Category.Advanced) + 1,
+		context.temp_allocator,
+	)
 	for categoryIndex := 0; categoryIndex <= int(Config_Category.Advanced); categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
-		row := region.top_row + 2 + categoryIndex
-		if row > region.bottom_row {
-			break
-		}
-		cursor := "  "
-		if category == state.configCategory {
-			cursor = "* "
-			if state.configFocus == .Categories {
-				cursor = "> "
-			}
-		}
-		write_clipped_line(
-			batch,
-			row,
-			region.left_column,
-			width,
-			config_prefixed_line(cursor, config_category_label(category)),
-		)
+		append(&categoryLabels, config_category_label(category))
 	}
+	listRegion := region
+	listRegion.top_row += 2
+	widgets.list_render(
+		batch,
+		listRegion,
+		categoryLabels[:],
+		widgets.List_Render_Options {
+			cursorIndex = int(state.configCategory),
+			selectedIndex = int(state.configCategory),
+			focused = state.configFocus == .Categories,
+			showSelectedMarker = true,
+		},
+	)
 }
 
 config_category_label :: proc(category: Config_Category) -> string {
@@ -659,23 +662,21 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 		config_category_label(state.configCategory),
 	)
 	row := region.top_row + 2
-	for setting, index in state.configSettings {
-		if row > region.bottom_row {
-			break
-		}
-		cursor := "  "
-		if state.configFocus == .Settings && index == state.configSettingCursor {
-			cursor = "> "
-		}
-		write_clipped_line(
-			batch,
-			row,
-			region.left_column,
-			width,
-			config_prefixed_line(cursor, config_setting_line(state, setting)),
-		)
-		row += 1
+	settingLabels := make([dynamic]string, 0, len(state.configSettings), context.temp_allocator)
+	for setting in state.configSettings {
+		append(&settingLabels, config_setting_line(state, setting))
 	}
+	listRegion := region
+	listRegion.top_row = row
+	widgets.list_render(
+		batch,
+		listRegion,
+		settingLabels[:],
+		widgets.List_Render_Options {
+			cursorIndex = state.configSettingCursor,
+			focused = state.configFocus == .Settings,
+		},
+	)
 }
 
 config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> string {

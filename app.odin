@@ -7,6 +7,7 @@ import commands "./commands"
 import input_history "./input_history"
 import settings "./settings"
 import tool_policy "./tool_policy"
+import widgets "./widgets"
 import "ai"
 import "code_index"
 import "console"
@@ -2084,12 +2085,11 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 		state.configSettingCursor = 0
 		app_rebuild_config_settings(state)
 	} else if len(state.configSettings) > 0 {
-		state.configSettingCursor += delta
-		if state.configSettingCursor < 0 {
-			state.configSettingCursor = len(state.configSettings) - 1
-		} else if state.configSettingCursor >= len(state.configSettings) {
-			state.configSettingCursor = 0
-		}
+		state.configSettingCursor = widgets.list_cursor_after_move(
+			state.configSettingCursor,
+			len(state.configSettings),
+			delta,
+		)
 	}
 	state.status = "Config: arrows/Tab, Enter, Esc"
 }

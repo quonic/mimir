@@ -1524,6 +1524,23 @@ test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_settings_cursor_wraps :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+
+	app_move_config_cursor(&state, -1)
+	assert(
+		state.configSettingCursor == len(state.configSettings) - 1,
+		"expected settings cursor to wrap to final row",
+	)
+	app_move_config_cursor(&state, 1)
+	assert(state.configSettingCursor == 0, "expected settings cursor to wrap to first row")
+	_ = t
+}
+
+@(test)
 test_config_modal_toggles_provider_enabled_and_cancels_text_edit :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
