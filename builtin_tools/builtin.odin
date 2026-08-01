@@ -32,7 +32,10 @@ write_file :: proc(file_path: string, content: string, overwrite: string) -> str
 	if overwrite == "false" {
 		if _, err := os.stat(file_path, context.allocator); err == nil {
 			fmt.println("File already exists. Use overwrite option to replace it.")
-			return "File already exists. Use overwrite option to replace it."
+			return strings.clone(
+				"File already exists. Use overwrite option to replace it.",
+				context.allocator,
+			)
 		}
 	} else if overwrite == "true" {
 		if _, err := os.stat(file_path, context.allocator); err == nil {
@@ -48,7 +51,7 @@ write_file :: proc(file_path: string, content: string, overwrite: string) -> str
 	if err != nil {
 		return fmt.aprintf("Error writing file: %s", err)
 	}
-	return "File written successfully"
+	return strings.clone("File written successfully", context.allocator)
 }
 
 list_directory :: proc(directory_path: string) -> string {
@@ -102,6 +105,7 @@ get_default_shell :: proc() -> string {
 
 list_available_shells :: proc() -> string {
 	shells := [dynamic]string{}
+	defer delete(shells)
 	if ODIN_OS == .Windows {
 		if os.exists(`C:\Windows\System32\cmd.exe`) {
 			append(&shells, `C:\Windows\System32\cmd.exe`)
@@ -113,8 +117,9 @@ list_available_shells :: proc() -> string {
 			append(&shells, `C:\Program Files\PowerShell\7\pwsh.exe`)
 		}
 		if len(shells) == 0 {
-			return(
-				"list_available_shells_tool: No shells found on Windows. This should not happen. Please report this issue to the user." \
+			return strings.clone(
+				"list_available_shells_tool: No shells found on Windows. This should not happen. Please report this issue to the user.",
+				context.allocator,
 			)
 		}
 
@@ -125,7 +130,9 @@ list_available_shells :: proc() -> string {
 	   ODIN_OS == .NetBSD {
 		data, err := os.read_entire_file_from_path("/etc/shells", context.allocator)
 		if err == nil {
+			defer delete(data, context.allocator)
 			lines := strings.split(string(data), "\n")
+			defer delete(lines)
 			for &line in lines {
 				line = strings.trim(line, " \t")
 				if line != "" && !strings.starts_with(line, "#") {

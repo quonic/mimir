@@ -385,7 +385,12 @@ app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, b
 }
 app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
-	case "read_file", "list_directory", "get_file_info", "list_available_shells", "run_command":
+	case "read_file",
+	     "write_file",
+	     "list_directory",
+	     "get_file_info",
+	     "list_available_shells",
+	     "run_command":
 		return true
 	case "search_code", "find_code":
 		return true
