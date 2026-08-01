@@ -1055,14 +1055,9 @@ app_context_usage_status_text :: proc(
 	if state == nil {
 		return ""
 	}
-	usage: ai.Chat_Usage
-	contextWindowTokens := 0
-	active := false
-	if sync.mutex_guard(&state.stream.mutex) {
-		usage = state.stream.usage
-		contextWindowTokens = state.stream.contextWindowTokens
-		active = state.stream.active
-	}
+	usage := state.agentHost.usage
+	contextWindowTokens := state.agentHost.contextWindowTokens
+	active := app_agent_host_stream_active(state)
 	if !usage.hasInputTokens {
 		if active {
 			return "ctx ..."

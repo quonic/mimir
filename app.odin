@@ -544,7 +544,7 @@ run_app :: proc() {
 		if app_poll_tool_execution(&state) {
 			frameDirty = true
 		}
-		if app_poll_assistant_stream(&state) {
+		if app_poll_agent_host(&state) {
 			frameDirty = true
 			if state.historyRenderOnly {
 				historyDirty = true
@@ -1652,6 +1652,12 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 }
 
 app_clear_input_history :: proc(state: ^App_State) {
+	if app_agent_host_stream_active(state) {
+		app_cancel_agent_host_stream(state)
+	}
+	state.agentHost.historyIndex = -1
+	state.agentHost.thinking = false
+	state.agentHost.spinnerVisible = false
 	for &entry in state.inputHistory {
 		delete(entry, state.stream.bufferAllocator)
 		entry = ""
@@ -1747,14 +1753,13 @@ app_submit_input :: proc(state: ^App_State) {
 
 	app_record_input_history(state, text)
 
-	if app_assistant_stream_active(state) {
+	if app_agent_host_stream_active(state) {
 		state.status = "Assistant stream already active; use /stop first"
 		return
 	}
 
-	app_clear_assistant_stream_conversation(&state.stream)
 	append_history(state, .User, text)
-	app_start_assistant_stream(state)
+	_ = app_start_agent_host_stream(state)
 }
 
 app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
@@ -1768,7 +1773,7 @@ app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
 		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
 	case .Stop:
-		app_cancel_assistant_stream(state)
+		app_cancel_agent_host_stream(state)
 	case .Clear:
 		app_clear_input_history(state)
 	case .Unknown:
@@ -1847,7 +1852,7 @@ app_complete_setup :: proc(state: ^App_State) {
 }
 
 app_show_config :: proc(state: ^App_State) {
-	if app_assistant_stream_active(state) {
+	if app_agent_host_stream_active(state) {
 		state.status = "Assistant stream active; use /stop before changing config"
 		return
 	}

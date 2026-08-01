@@ -1,14 +1,22 @@
 package main
 
 import agent "./agent"
+import settings "./settings"
 import "ai"
 import "core:mem"
 import "core:strings"
 
+import "core:time"
 Agent_Host :: struct {
-	runtime:       agent.Runtime,
-	activeAgentID: agent.Agent_ID,
-	historyIndex:  int,
+	runtime:             agent.Runtime,
+	activeAgentID:       agent.Agent_ID,
+	historyIndex:        int,
+	thinking:            bool,
+	spinnerVisible:      bool,
+	spinnerFrameIndex:   int,
+	spinnerLastFrame:    time.Tick,
+	usage:               ai.Chat_Usage,
+	contextWindowTokens: int,
 }
 
 agent_host_init :: proc(allocator := context.allocator) -> Agent_Host {
@@ -59,6 +67,25 @@ agent_host_poll_active :: proc(host: ^Agent_Host) -> (bool, agent.Agent_Error) {
 	return agent.runtime_poll_stream(&host.runtime, host.activeAgentID)
 }
 
+app_agent_host_stream_active :: proc(state: ^App_State) -> bool {
+	activeID := state.agentHost.activeAgentID
+	if agent.agent_id_is_none(activeID) {
+		return false
+	}
+	activeState, activeOK := agent.runtime_state(&state.agentHost.runtime, activeID)
+	return activeOK && !agent.agent_state_is_terminal(activeState)
+}
+
+app_cancel_agent_host_stream :: proc(state: ^App_State) {
+	activeID := state.agentHost.activeAgentID
+	if agent.agent_id_is_none(activeID) ||
+	   agent.runtime_cancel(&state.agentHost.runtime, activeID) != .None {
+		state.status = "No assistant stream to cancel"
+		return
+	}
+	state.status = "Canceling assistant stream"
+}
+
 app_poll_agent_host :: proc(state: ^App_State) -> bool {
 	dirty, pollErr := agent_host_poll_active(&state.agentHost)
 	if pollErr != .None {
@@ -72,11 +99,53 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 			break
 		}
 		dirty = app_apply_agent_event(state, event) || dirty
-		agent.agent_event_destroy(&event, context.allocator)
+		agent.agent_event_destroy(&event, state.agentHost.runtime.allocator)
 	}
+	spinnerDirty := app_update_agent_host_spinner(&state.agentHost)
+	if spinnerDirty &&
+	   state.agentHost.historyIndex >= 0 &&
+	   state.agentHost.historyIndex < len(state.history) {
+		entry := &state.history[state.agentHost.historyIndex]
+		entry.cachedLineWidth = 0
+		entry.cachedLineCount = 0
+		state.historyRenderOnly = true
+	}
+	dirty = spinnerDirty || dirty
 	return dirty
 }
 
+app_update_agent_host_spinner :: proc(host: ^Agent_Host) -> bool {
+	if !host.thinking {
+		if !host.spinnerVisible {
+			return false
+		}
+		host.spinnerVisible = false
+		host.spinnerFrameIndex = 0
+		host.spinnerLastFrame = {}
+		return true
+	}
+	if !host.spinnerVisible {
+		host.spinnerVisible = true
+		host.spinnerFrameIndex = 0
+		host.spinnerLastFrame = time.tick_now()
+		return true
+	}
+	if time.tick_since(host.spinnerLastFrame) < SPINNER_FRAME_INTERVAL {
+		return false
+	}
+	host.spinnerFrameIndex = (host.spinnerFrameIndex + 1) % len(SPINNER_FRAMES)
+	host.spinnerLastFrame = time.tick_now()
+	return true
+}
+
+app_agent_host_spinner_frame :: proc(state: ^App_State) -> string {
+	host := &state.agentHost
+	if !host.spinnerVisible {
+		return ""
+	}
+	frames := SPINNER_FRAMES
+	return frames[host.spinnerFrameIndex]
+}
 app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bool {
 	switch event.type {
 	case .Text_Delta:
@@ -92,6 +161,22 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 			entry.cachedLineCount = 0
 		}
 		state.historyRenderOnly = true
+		return true
+	case .Thinking_Changed:
+		state.agentHost.thinking = event.thinking
+		if state.agentHost.thinking {
+			state.status = "Assistant thinking"
+		}
+		return true
+	case .Usage_Updated:
+		if event.usage.hasInputTokens {
+			state.agentHost.usage.inputTokens = event.usage.inputTokens
+			state.agentHost.usage.hasInputTokens = true
+		}
+		if event.usage.hasOutputTokens {
+			state.agentHost.usage.outputTokens = event.usage.outputTokens
+			state.agentHost.usage.hasOutputTokens = true
+		}
 		return true
 	case .Tool_Requested:
 		return app_dispatch_agent_tool_request(state, event)
@@ -111,7 +196,7 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 	case .Child_Completed:
 		append_history(state, .Tool, event.content)
 		return true
-	case .None, .Thinking_Changed, .Tool_Resolved:
+	case .None, .Tool_Resolved:
 		return false
 	}
 	return false
@@ -225,6 +310,16 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		return false
 	}
 	activeID := state.agentHost.activeAgentID
+	state.agentHost.thinking = false
+	state.agentHost.spinnerVisible = false
+	state.agentHost.spinnerFrameIndex = 0
+	state.agentHost.spinnerLastFrame = {}
+	state.agentHost.usage = {}
+	state.agentHost.contextWindowTokens = settings.config_context_window_tokens(
+		&state.config,
+		provider.name,
+		model,
+	)
 	if agent.runtime_set_conversation(&state.agentHost.runtime, activeID, messages[:]) != .None {
 		_ = agent.runtime_cancel(&state.agentHost.runtime, activeID)
 		state.status = "Agent runtime could not prepare its conversation"

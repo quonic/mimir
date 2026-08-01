@@ -283,7 +283,11 @@ runtime_receive_stream_delta :: proc(
 		runtime_emit_event(
 			runtime,
 			index,
-			Agent_Event{type = .Thinking_Changed, content = delta.content},
+			Agent_Event {
+				type = .Thinking_Changed,
+				content = delta.content,
+				thinking = delta.isThinking,
+			},
 		)
 	}
 	if delta.content != "" && !delta.isThinking {
@@ -293,6 +297,9 @@ runtime_receive_stream_delta :: proc(
 			index,
 			Agent_Event{type = .Text_Delta, content = delta.content},
 		)
+	}
+	if delta.usage.hasInputTokens || delta.usage.hasOutputTokens {
+		runtime_emit_event(runtime, index, Agent_Event{type = .Usage_Updated, usage = delta.usage})
 	}
 	if delta.hasToolCall {
 		append(
