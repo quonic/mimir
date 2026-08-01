@@ -221,6 +221,11 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		state.dispatcher.allocator,
 	)
 	if !callOK {
+		toolID := event.toolRequest.name
+		if toolID == "" {
+			toolID = "unknown"
+		}
+		app_append_tool_history(state, Tool_Call{id = toolID}, "failed")
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
@@ -235,6 +240,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 
 	decision := tool_dispatch_decide(&state.dispatcher, call)
 	if decision == .Denied {
+		app_append_tool_history(state, call, "denied")
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
@@ -247,6 +253,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 	}
 	if decision == .Approval_Required {
 		if !app_show_agent_approval(state, call, event.agentID, event.requestID) {
+			app_append_tool_history(state, call, "denied")
 			_ = agent.runtime_resolve_tool(
 				&state.agentHost.runtime,
 				event.agentID,
@@ -284,6 +291,7 @@ app_show_agent_approval :: proc(
 	}
 	state.approval.agentID = agentID
 	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
+	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
 	_ = app_apply_approval_method(state)
 	return true
 }

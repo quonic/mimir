@@ -1247,6 +1247,14 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if choice == .Deny {
 		output := "Permission denied."
+		if state.approval.historyIndex >= 0 {
+			app_update_tool_history(
+				state,
+				state.approval.historyIndex,
+				state.approval.call,
+				"denied",
+			)
+		}
 		if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
 			_ = agent.runtime_resolve_tool(
 				&state.agentHost.runtime,

@@ -133,6 +133,9 @@ test_agent_host_denies_invalid_tool_requests_and_resumes_agent :: proc(t: ^testi
 	)
 	assert(app_poll_agent_host(&state), "expected tool event to be dispatched")
 	assert(state.status == "Tool call denied", "expected denied tool status")
+	entry := state.history[len(state.history) - 1]
+	assert(entry.role == .Tool, "expected denied tool history entry")
+	assert(entry.content == "unknown_tool (denied)", "expected denied tool history status")
 	agentState, agentOK := agent.runtime_state(&state.agentHost.runtime, agentID)
 	assert(agentOK && agentState == .Streaming, "expected denied tool to resume the agent")
 	_ = t
@@ -159,6 +162,12 @@ test_agent_host_approval_retains_runtime_request_identity :: proc(t: ^testing.T)
 	assert(state.mode == .Approval, "expected approval mode")
 	assert(state.approval.agentID == agentID, "expected approval agent ID")
 	assert(state.approval.agentRequestID == "call-1", "expected approval request ID")
+	entry := state.history[len(state.history) - 1]
+	assert(entry.role == .Tool, "expected pending tool history entry")
+	assert(
+		entry.content == "write_file: generated/output.txt (awaiting approval)",
+		"expected pending tool history status",
+	)
 	_ = t
 }
 
@@ -195,8 +204,39 @@ test_agent_approval_denial_resolves_the_runtime_request :: proc(t: ^testing.T) {
 	app_apply_approval_choice(&state, .Deny)
 	assert(state.mode == .Chat, "expected approval denial to return to chat")
 	assert(state.status == "Tool call denied", "expected denial status")
+	entry := state.history[len(state.history) - 1]
+	assert(entry.role == .Tool, "expected denied tool history entry")
+	assert(
+		entry.content == "write_file: generated/output.txt (denied)",
+		"expected pending entry to become denied",
+	)
 	agentState, agentOK := agent.runtime_state(&state.agentHost.runtime, agentID)
 	assert(agentOK && agentState == .Streaming, "expected denied request to resume agent")
+	_ = t
+}
+
+@(test)
+test_agent_host_records_invalid_tool_requests :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			agentID,
+			agent.Tool_Request{id = "call-1", name = "run_command", arguments = ""},
+		) ==
+		.None,
+		"expected tool request",
+	)
+	assert(app_poll_agent_host(&state), "expected invalid tool request to be dispatched")
+	entry := state.history[len(state.history) - 1]
+	assert(entry.role == .Tool, "expected invalid tool history entry")
+	assert(entry.content == "run_command (failed)", "expected invalid tool history status")
 	_ = t
 }
 
