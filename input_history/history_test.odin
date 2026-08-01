@@ -9,7 +9,7 @@ destroy_history :: proc(history: ^[dynamic]string, allocator := context.allocato
 		delete(entry, allocator)
 		entry = ""
 	}
-	delete(history^, allocator)
+	delete(history^)
 }
 
 @(test)
