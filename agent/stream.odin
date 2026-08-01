@@ -128,6 +128,8 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 	stream := instance.stream
 	if stream == nil {
 		if instance.streamConfig.continuationPending {
+			// Ensure we don't repeatedly retry/emit failures if the continuation can't be started.
+			instance.streamConfig.continuationPending = false
 			if runtime_start_configured_stream(runtime, index) != .None {
 				instance.state = .Failed
 				runtime_emit_event(
