@@ -1180,7 +1180,19 @@ app_move_approval_choice :: proc(state: ^App_State, delta: int) {
 }
 
 app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
-	if !app_approval_safety_ready(state) {
+	return app_handle_approval_input_with_safety_ready(
+		state,
+		input,
+		app_approval_safety_ready(state),
+	)
+}
+
+app_handle_approval_input_with_safety_ready :: proc(
+	state: ^App_State,
+	input: byte,
+	safetyReady: bool,
+) -> bool {
+	if !safetyReady {
 		return false
 	}
 

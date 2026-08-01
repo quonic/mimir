@@ -166,6 +166,17 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
 		"expected write call to open approval modal",
 	)
+	assert(
+		!app_handle_approval_input_with_safety_ready(&state, '4', false),
+		"expected pending safety analysis to ignore choice",
+	)
+	assert(
+		!app_handle_approval_input_with_safety_ready(&state, '\r', false),
+		"expected pending safety analysis to ignore approval",
+	)
+	assert(state.mode == .Approval, "expected pending analysis to keep modal open")
+	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
+
 	approval_safety.mark_unavailable(&state.approval.safety)
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
 	assert(app_handle_approval_input(&state, '\r'), "expected unavailable advice to allow denial")
