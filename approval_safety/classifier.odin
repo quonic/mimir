@@ -143,8 +143,8 @@ destroy :: proc(state: ^State) {
 	state^ = {}
 }
 
-mark_unavailable :: proc(state: ^State) {
-	init(state, state.bufferAllocator)
+mark_unavailable :: proc(state: ^State, allocator := context.allocator) {
+	init(state, allocator)
 	state.unavailable = true
 }
 
