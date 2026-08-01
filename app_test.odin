@@ -6,6 +6,7 @@ import "console"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import settings "./settings"
 
 @(test)
 test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
@@ -217,7 +218,10 @@ test_approval_safety_model_falls_back_to_chat_selection :: proc(t: ^testing.T) {
 
 	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
 	assert(safetyModelOK, "expected empty safety selection to use chat model")
-	assert(safetyModel.provider.name == DEFAULT_CONFIG_PROVIDER, "expected chat provider fallback")
+	assert(
+		safetyModel.provider.name == settings.DEFAULT_CONFIG_PROVIDER,
+		"expected chat provider fallback",
+	)
 	assert(safetyModel.model == "chat-model", "expected chat model fallback")
 	_ = t
 }
@@ -362,11 +366,16 @@ test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testin
 	state: App_State
 	state.config.embeddingProvider = "embeddings"
 	state.config.embeddingModel = "nomic-embed-text"
-	state.config.providers = make([dynamic]Provider_Config, 0, 1, context.temp_allocator)
+	state.config.providers = make(
+		[dynamic]settings.Provider_Config,
+		0,
+		1,
+		context.temp_allocator,
+	)
 	defer delete(state.config.providers)
 	append(
 		&state.config.providers,
-		Provider_Config {
+		settings.Provider_Config {
 			name = "embeddings",
 			type = .Ollama,
 			endpoint = "http://localhost:11434",
@@ -1771,7 +1780,7 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 	app_commit_config_edit(&state)
 
 	assert(
-		state.config.toolContinuations == DEFAULT_TOOL_CONTINUATIONS,
+		state.config.toolContinuations == settings.DEFAULT_TOOL_CONTINUATIONS,
 		"expected invalid continuation limit to preserve previous value",
 	)
 	assert(
@@ -2086,33 +2095,36 @@ test_render_history_wraps_panel_text :: proc(t: ^testing.T) {
 @(test)
 test_config_and_skill_paths :: proc(t: ^testing.T) {
 	assert(
-		config_path("/home/test", context.temp_allocator) ==
+		settings.config_path("/home/test", context.temp_allocator) ==
 		"/home/test/.config/mimir/config.json",
 		"expected config path under XDG-style user config directory",
 	)
 	assert(
-		global_skill_dir("/home/test", context.temp_allocator) ==
+		settings.global_skill_dir("/home/test", context.temp_allocator) ==
 		"/home/test/.config/mimir/skills",
 		"expected global skills under mimir config directory",
 	)
 	assert(
-		project_skill_dir("/repo", context.temp_allocator) == "/repo/.mimir/skills",
+		settings.project_skill_dir("/repo", context.temp_allocator) == "/repo/.mimir/skills",
 		"expected project skills under project .mimir directory",
 	)
-	assert(skill_name_from_path("/repo/.mimir/skills/odin.md") == "odin", "expected skill name")
+	assert(
+		settings.skill_name_from_path("/repo/.mimir/skills/odin.md") == "odin",
+		"expected skill name",
+	)
 	_ = t
 }
 
 @(test)
 test_default_config_json_shape :: proc(t: ^testing.T) {
-	config := default_ollama_config(context.temp_allocator)
+	config := settings.default_ollama_config(context.temp_allocator)
 	defer {
 		delete(config.providers)
 		delete(config.mcpServers)
 		delete(config.skillPaths)
 	}
 
-	json := config_to_json(config, context.temp_allocator)
+	json := settings.config_to_json(config, context.temp_allocator)
 	assert(json[:1] == "{", "expected config JSON object")
 	assert(
 		contains_string(json, "\"endpoint\": \"http://localhost:11434\""),
@@ -2133,7 +2145,7 @@ test_default_app_state_has_registries :: proc(t: ^testing.T) {
 	assert(state.terminal.columns == 80, "expected default terminal columns")
 	assert(len(state.config.providers) == 1, "expected default Ollama provider")
 	assert(
-		state.config.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT,
+		state.config.providers[0].endpoint == settings.DEFAULT_CONFIG_ENDPOINT,
 		"expected default endpoint",
 	)
 	assert(len(state.tools.definitions) >= 3, "expected built-in tool registry entries")
@@ -2161,7 +2173,7 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 	assert(tempErr == nil, "expected temp home directory")
 	defer os.remove_all(home)
 
-	config := default_ollama_config(context.temp_allocator)
+	config := settings.default_ollama_config(context.temp_allocator)
 	config.selectedModel = "llama3.2"
 	config.providers[0].model = "llama3.2"
 	defer {
@@ -2169,7 +2181,10 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 		delete(config.mcpServers)
 		delete(config.skillPaths)
 	}
-	assert(save_config_to_file(home, config) == .None, "expected test config save")
+	assert(
+		settings.save_config_to_file(home, config) == .None,
+		"expected test config save",
+	)
 
 	state := app_init_with_home(home, false, context.temp_allocator)
 	defer app_destroy(&state)

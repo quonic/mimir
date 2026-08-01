@@ -12,6 +12,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import settings "./settings"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
@@ -168,7 +169,7 @@ app_start_assistant_stream :: proc(state: ^App_State) {
 	}
 
 	app_reset_assistant_stream_state(&state.stream)
-	state.stream.contextWindowTokens = config_context_window_tokens(
+	state.stream.contextWindowTokens = settings.config_context_window_tokens(
 		&state.config,
 		provider.name,
 		model,
@@ -729,6 +730,24 @@ app_search_code_results_json :: proc(
 	}
 	strings.write_string(&builder, `]}`)
 	return strings.to_string(builder)
+}
+
+write_decimal :: proc(builder: ^strings.Builder, value: int) {
+	if value == 0 {
+		strings.write_byte(builder, '0')
+		return
+	}
+	digits: [20]byte
+	length := 0
+	remaining := value
+	for remaining > 0 {
+		digits[length] = byte(remaining % 10) + '0'
+		length += 1
+		remaining /= 10
+	}
+	for index := length - 1; index >= 0; index -= 1 {
+		strings.write_byte(builder, digits[index])
+	}
 }
 
 app_record_stream_tool_turn :: proc(state: ^App_State) -> bool {

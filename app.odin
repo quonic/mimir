@@ -5,6 +5,7 @@ import agent "./agent"
 import "ai"
 import "code_index"
 import "console"
+import settings "./settings"
 import "core:c"
 import "core:fmt"
 import "core:os"
@@ -178,7 +179,7 @@ App_State :: struct {
 	historyRenderOnly:      bool,
 	mouseSelectionPanel:    Mouse_Selection_Panel,
 	historySelection:       History_Selection,
-	config:                 Mimir_Config,
+	config:                 settings.Mimir_Config,
 	configStringsOwned:     bool,
 	configHome:             string,
 	workingDirectory:       string,
@@ -189,8 +190,8 @@ App_State :: struct {
 	dispatcher:             Tool_Dispatcher,
 	dispatcherReady:        bool,
 	approval:               Approval_State,
-	mcp:                    MCP_Registry,
-	skills:                 Skill_Registry,
+	mcp:                    settings.MCP_Registry,
+	skills:                 settings.Skill_Registry,
 	codeIndex:              code_index.Code_Index,
 	codeIndexReady:         bool,
 	agentHost:              Agent_Host,
@@ -251,7 +252,7 @@ app_init_with_home :: proc(
 		state.workingDirectory = workingDirectory
 	}
 	ai.set_raw_http_log_home(state.configHome)
-	state.config = default_ollama_config(allocator)
+	state.config = settings.default_ollama_config(allocator)
 	app_bootstrap_config(&state, home, probeOllama, allocator)
 	app_load_input_history(&state, allocator)
 	app_rebuild_code_index(&state, allocator)
@@ -261,8 +262,8 @@ app_init_with_home :: proc(
 		state.config.permissionGrants[:],
 		allocator,
 	)
-	state.mcp = mcp_registry_from_config(state.config.mcpServers[:], allocator)
-	state.skills = skill_registry_init(allocator)
+	state.mcp = settings.mcp_registry_from_config(state.config.mcpServers[:], allocator)
+	state.skills = settings.skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
 	state.configEdit = input_buffer_init(allocator)
@@ -277,11 +278,11 @@ app_bootstrap_config :: proc(
 	allocator := context.allocator,
 ) {
 	if home != "" {
-		loaded, loadErr := load_config_from_file(home, allocator)
+		loaded, loadErr := settings.load_config_from_file(home, allocator)
 		switch loadErr {
 		case .None:
 			if state.configStringsOwned {
-				config_destroy(&state.config)
+				settings.config_destroy(&state.config)
 			} else {
 				delete(state.config.providers)
 				delete(state.config.mcpServers)
@@ -308,7 +309,7 @@ app_bootstrap_config :: proc(
 	}
 
 	ai.clear_interfaces()
-	registerResult := register_config_interfaces(
+	registerResult := app_register_config_interfaces(
 		state.config,
 		probeOllama && state.mode != .Setup,
 		allocator,
@@ -326,7 +327,7 @@ app_create_default_config_from_ollama :: proc(
 	home: string,
 	allocator := context.allocator,
 ) -> bool {
-	models, err := ai.probe_ollama_endpoint(DEFAULT_CONFIG_ENDPOINT, allocator)
+	models, err := ai.probe_ollama_endpoint(settings.DEFAULT_CONFIG_ENDPOINT, allocator)
 	if err != .None {
 		return false
 	}
@@ -343,12 +344,47 @@ app_create_default_config_from_ollama :: proc(
 		}
 	}
 
-	if save_config_to_file(home, state.config) == .None {
+	if settings.save_config_to_file(home, state.config) == .None {
 		state.status = "Default Ollama config saved"
 	} else {
 		state.status = "Default Ollama config created; save failed"
 	}
 	return true
+}
+
+Config_Register_Result :: struct {
+	ollamaProbeFailed: bool,
+	modelCount:        int,
+}
+
+app_register_config_interfaces :: proc(
+	config: settings.Mimir_Config,
+	probeOllama := false,
+	allocator := context.allocator,
+) -> Config_Register_Result {
+	result: Config_Register_Result
+	for provider in config.providers {
+		if !provider.enabled {
+			continue
+		}
+		if probeOllama && provider.type == .Ollama {
+			models, err := ai.probe_ollama_endpoint(provider.endpoint, allocator)
+			if err == .None {
+				result.modelCount += len(models)
+				ai.add_interface_with_models(
+					provider.name,
+					provider.type,
+					provider.endpoint,
+					models[:],
+				)
+				ai.models_destroy(&models, allocator)
+				continue
+			}
+			result.ollamaProbeFailed = true
+		}
+		ai.add_interface(provider.name, provider.type, provider.endpoint)
+	}
+	return result
 }
 
 app_enter_setup :: proc(state: ^App_State, status: string) {
@@ -382,10 +418,10 @@ app_destroy :: proc(state: ^App_State) {
 		code_index.code_index_destroy(&state.codeIndex, context.allocator)
 	}
 	if state.configStringsOwned {
-		config_destroy(&state.config)
+		settings.config_destroy(&state.config)
 	} else {
 		for &provider in state.config.providers {
-			provider_config_destroy(&provider, context.allocator)
+			settings.provider_config_destroy(&provider, context.allocator)
 		}
 		delete(state.config.providers)
 		for &entry in state.config.contextWindows {
@@ -1241,7 +1277,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			append(&state.config.permissionGrants, grant)
 			state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 			if state.configHome != "" &&
-			   save_config_to_file(state.configHome, state.config) != .None {
+			   settings.save_config_to_file(state.configHome, state.config) != .None {
 				grant = pop(&state.config.permissionGrants)
 				permission_grant_destroy(&grant, state.dispatcher.allocator)
 				state.dispatcher.persistentGrants = state.config.permissionGrants[:]
@@ -1727,7 +1763,7 @@ app_submit_setup_input :: proc(state: ^App_State, text: string) {
 	case .Endpoint:
 		endpoint := text
 		if endpoint == "" {
-			endpoint = DEFAULT_CONFIG_ENDPOINT
+			endpoint = settings.DEFAULT_CONFIG_ENDPOINT
 		}
 		if state.setupEndpoint != "" {
 			delete(state.setupEndpoint, context.allocator)
@@ -1757,7 +1793,7 @@ app_complete_setup :: proc(state: ^App_State) {
 	delete(state.config.mcpServers)
 	delete(state.config.skillPaths)
 	delete(state.config.permissionGrants)
-	state.config = default_ollama_config(context.allocator)
+	state.config = settings.default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
 	state.config.providers[0].endpointOwned = true
 	state.config.providers[0].apiKey = strings.clone(state.setupAPIKey, context.allocator)
@@ -1781,9 +1817,9 @@ app_complete_setup :: proc(state: ^App_State) {
 	)
 
 	delete(state.mcp.servers)
-	state.mcp = mcp_registry_from_config(state.config.mcpServers[:], context.allocator)
+	state.mcp = settings.mcp_registry_from_config(state.config.mcpServers[:], context.allocator)
 	state.mode = .Chat
-	if save_config_to_file(state.configHome, state.config) == .None {
+	if settings.save_config_to_file(state.configHome, state.config) == .None {
 		state.status = "Setup complete; config saved"
 	} else {
 		state.status = "Setup complete; config save failed"
@@ -2140,7 +2176,7 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	case .Provider_Context_Window:
 		value = fmt.tprintf(
 			"%d",
-			config_context_window_tokens(&state.config, provider.name, provider.model),
+			settings.config_context_window_tokens(&state.config, provider.name, provider.model),
 		)
 	case:
 		return
@@ -2318,7 +2354,7 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 		provider := state.config.providers[setting.providerIndex]
 		if provider.model == "" ||
-		   !config_set_context_window_tokens(
+		   !settings.config_set_context_window_tokens(
 				   &state.config,
 				   provider.name,
 				   provider.model,
@@ -2348,10 +2384,10 @@ app_add_config_provider :: proc(state: ^App_State) {
 	}
 	append(
 		&state.config.providers,
-		Provider_Config {
+		settings.Provider_Config {
 			name = strings.clone(name, context.allocator),
 			type = .Ollama,
-			endpoint = strings.clone(DEFAULT_CONFIG_ENDPOINT, context.allocator),
+			endpoint = strings.clone(settings.DEFAULT_CONFIG_ENDPOINT, context.allocator),
 			nameOwned = true,
 			endpointOwned = true,
 		},
@@ -2378,7 +2414,7 @@ app_remove_config_provider :: proc(state: ^App_State, providerIndex: int) {
 		state.status = "Choose another safety model before removing this provider"
 		return
 	}
-	provider_config_destroy(&state.config.providers[providerIndex], context.allocator)
+	settings.provider_config_destroy(&state.config.providers[providerIndex], context.allocator)
 	ordered_remove(&state.config.providers, providerIndex)
 	if state.configProviderIndex >= len(state.config.providers) {
 		state.configProviderIndex = len(state.config.providers) - 1
@@ -2417,7 +2453,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 			)
 			if contextWindowErr == .None && contextWindowTokens > 0 {
 				contextWindowsChanged =
-					config_update_context_window_tokens(
+					settings.config_update_context_window_tokens(
 						&state.config,
 						provider.name,
 						model.name,
@@ -2450,7 +2486,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 	app_rebuild_config_settings(state)
 	if contextWindowsChanged &&
 	   state.configHome != "" &&
-	   save_config_to_file(state.configHome, state.config) != .None {
+	   settings.save_config_to_file(state.configHome, state.config) != .None {
 		state.status = "Provider models refreshed; context window save failed"
 		return
 	}
@@ -2550,9 +2586,10 @@ app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
 
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 	ai.clear_interfaces()
-	register_config_interfaces(state.config, false, context.allocator)
+	app_register_config_interfaces(state.config, false, context.allocator)
 	app_rebuild_model_entries(state, context.allocator)
-	if state.configHome != "" && save_config_to_file(state.configHome, state.config) != .None {
+	if state.configHome != "" &&
+	   settings.save_config_to_file(state.configHome, state.config) != .None {
 		state.status = "Config changed; save failed"
 		return
 	}
@@ -2723,7 +2760,7 @@ app_rebuild_model_entries :: proc(state: ^App_State, allocator := context.alloca
 
 app_append_model_entry :: proc(
 	state: ^App_State,
-	provider: Provider_Config,
+	provider: settings.Provider_Config,
 	model: ai.Model,
 	allocator := context.allocator,
 ) {
@@ -2739,13 +2776,16 @@ app_append_model_entry :: proc(
 	)
 }
 
-app_find_provider :: proc(config: Mimir_Config, name: string) -> (Provider_Config, bool) {
+app_find_provider :: proc(
+	config: settings.Mimir_Config,
+	name: string,
+) -> (settings.Provider_Config, bool) {
 	for provider in config.providers {
 		if provider.name == name {
 			return provider, true
 		}
 	}
-	return Provider_Config{}, false
+	return settings.Provider_Config{}, false
 }
 
 app_model_list_text :: proc(models: []string, allocator := context.allocator) -> string {

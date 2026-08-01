@@ -1,9 +1,8 @@
-package main
+package settings
 
-import "ai"
+import ai "../ai"
+import tool_policy "../tool_policy"
 import json "core:encoding/json"
-import "core:fmt"
-import "core:hash"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -22,14 +21,6 @@ Approval_Method :: enum int {
 Config_Error :: enum int {
 	None = 0,
 	Invalid_Home,
-	Not_Found,
-	Io_Error,
-	Invalid_JSON,
-}
-
-History_Error :: enum int {
-	None = 0,
-	Invalid_Path,
 	Not_Found,
 	Io_Error,
 	Invalid_JSON,
@@ -106,13 +97,8 @@ Mimir_Config :: struct {
 	contextWindows:      [dynamic]Context_Window_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
 	skillPaths:          [dynamic]string,
-	permissionGrants:    [dynamic]Permission_Grant,
+	permissionGrants:    [dynamic]tool_policy.Permission_Grant,
 	allocationAllocator: mem.Allocator,
-}
-
-Config_Register_Result :: struct {
-	ollamaProbeFailed: bool,
-	modelCount:        int,
 }
 
 approval_method_from_string :: proc(value: string) -> (Approval_Method, bool) {
@@ -167,53 +153,6 @@ config_path :: proc(home: string, allocator := context.allocator) -> string {
 	return strings.to_string(builder)
 }
 
-history_cache_dir :: proc(home: string, allocator := context.allocator) -> string {
-	if home == "" {
-		return ""
-	}
-	builder: strings.Builder
-	strings.builder_init(&builder, allocator)
-	strings.write_string(&builder, home)
-	strings.write_string(&builder, "/.cache/mimir")
-	return strings.to_string(builder)
-}
-
-write_decimal :: proc(builder: ^strings.Builder, value: int) {
-	if value == 0 {
-		strings.write_byte(builder, '0')
-		return
-	}
-	digits: [20]byte
-	length := 0
-	remaining := value
-	for remaining > 0 {
-		digits[length] = byte(remaining % 10) + '0'
-		length += 1
-		remaining /= 10
-	}
-	for index := length - 1; index >= 0; index -= 1 {
-		strings.write_byte(builder, digits[index])
-	}
-}
-
-input_history_path :: proc(
-	home: string,
-	workingDirectory: string,
-	allocator := context.allocator,
-) -> string {
-	dir := history_cache_dir(home, allocator)
-	defer delete(dir, allocator)
-	if dir == "" || workingDirectory == "" {
-		return ""
-	}
-	return fmt.aprintf(
-		"%s/history-%016x.json",
-		dir,
-		hash.fnv64a(transmute([]byte)workingDirectory),
-		allocator = allocator,
-	)
-}
-
 default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config: Mimir_Config
 	config.allocationAllocator = allocator
@@ -224,7 +163,7 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, 0, allocator)
 	config.skillPaths = make([dynamic]string, 0, 2, allocator)
-	config.permissionGrants = make([dynamic]Permission_Grant, 0, 0, allocator)
+	config.permissionGrants = make([dynamic]tool_policy.Permission_Grant, 0, 0, allocator)
 	append(
 		&config.providers,
 		Provider_Config {
@@ -351,45 +290,13 @@ config_destroy :: proc(config: ^Mimir_Config) {
 		delete(path, config.allocationAllocator)
 	}
 	for &grant in config.permissionGrants {
-		permission_grant_destroy(&grant, config.allocationAllocator)
+		tool_policy.permission_grant_destroy(&grant, config.allocationAllocator)
 	}
 	delete(config.providers)
 	delete(config.contextWindows)
 	delete(config.mcpServers)
 	delete(config.skillPaths)
 	delete(config.permissionGrants)
-}
-
-register_config_interfaces :: proc(
-	config: Mimir_Config,
-	probeOllama := false,
-	allocator := context.allocator,
-) -> Config_Register_Result {
-	result: Config_Register_Result
-	for provider in config.providers {
-		if !provider.enabled {
-			continue
-		}
-
-		if probeOllama && provider.type == .Ollama {
-			models, err := ai.probe_ollama_endpoint(provider.endpoint, allocator)
-			if err == .None {
-				result.modelCount += len(models)
-				ai.add_interface_with_models(
-					provider.name,
-					provider.type,
-					provider.endpoint,
-					models[:],
-				)
-				ai.models_destroy(&models, allocator)
-				continue
-			}
-			result.ollamaProbeFailed = true
-		}
-
-		ai.add_interface(provider.name, provider.type, provider.endpoint)
-	}
-	return result
 }
 
 provider_type_to_string :: proc(providerType: ai.Interface_Type) -> string {
@@ -412,7 +319,7 @@ provider_type_from_string :: proc(text: string) -> (ai.Interface_Type, bool) {
 	return .None, false
 }
 
-permission_grant_kind_from_string :: proc(text: string) -> (Permission_Grant_Kind, bool) {
+permission_grant_kind_from_string :: proc(text: string) -> (tool_policy.Permission_Grant_Kind, bool) {
 	switch text {
 	case "directorySubtree":
 		return .Directory_Subtree, true
@@ -424,7 +331,7 @@ permission_grant_kind_from_string :: proc(text: string) -> (Permission_Grant_Kin
 	return .Directory_Subtree, false
 }
 
-permission_grant_kind_to_string :: proc(kind: Permission_Grant_Kind) -> string {
+permission_grant_kind_to_string :: proc(kind: tool_policy.Permission_Grant_Kind) -> string {
 	switch kind {
 	case .Directory_Subtree:
 		return "directorySubtree"
@@ -440,40 +347,40 @@ permission_grant_from_wire :: proc(
 	wire: Permission_Grant_Wire,
 	allocator := context.allocator,
 ) -> (
-	Permission_Grant,
+	tool_policy.Permission_Grant,
 	bool,
 ) {
 	kind, kindOK := permission_grant_kind_from_string(wire.kind)
-	projectRoot, rootOK := permission_normalize_absolute_path(wire.projectRoot, allocator)
+	projectRoot, rootOK := tool_policy.permission_normalize_absolute_path(wire.projectRoot, allocator)
 	if !kindOK || !rootOK {
-		return Permission_Grant{}, false
+		return tool_policy.Permission_Grant{}, false
 	}
 
-	grant := Permission_Grant {
-		kind        = kind,
+	grant := tool_policy.Permission_Grant {
+		kind = kind,
 		projectRoot = projectRoot,
 	}
 	switch kind {
 	case .Directory_Subtree:
-		directory, directoryOK := permission_normalize_absolute_path(wire.directory, allocator)
-		if !directoryOK || !permission_path_is_within_project(projectRoot, directory) {
-			permission_grant_destroy(&grant, allocator)
+		directory, directoryOK := tool_policy.permission_normalize_absolute_path(wire.directory, allocator)
+		if !directoryOK || !tool_policy.permission_path_is_within_project(projectRoot, directory) {
+			tool_policy.permission_grant_destroy(&grant, allocator)
 			if directory != "" {
 				delete(directory, allocator)
 			}
-			return Permission_Grant{}, false
+			return tool_policy.Permission_Grant{}, false
 		}
 		grant.directory = directory
 	case .Command_Prefix:
 		if wire.command == "" {
-			permission_grant_destroy(&grant, allocator)
-			return Permission_Grant{}, false
+			tool_policy.permission_grant_destroy(&grant, allocator)
+			return tool_policy.Permission_Grant{}, false
 		}
 		grant.command = strings.clone(wire.command, allocator)
 	case .MCP_Server:
 		if wire.mcpServer == "" {
-			permission_grant_destroy(&grant, allocator)
-			return Permission_Grant{}, false
+			tool_policy.permission_grant_destroy(&grant, allocator)
+			return tool_policy.Permission_Grant{}, false
 		}
 		grant.mcpServer = strings.clone(wire.mcpServer, allocator)
 	}
@@ -525,7 +432,7 @@ parse_config_from_json :: proc(
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, len(wire.mcpServers), allocator)
 	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
 	config.permissionGrants = make(
-		[dynamic]Permission_Grant,
+		[dynamic]tool_policy.Permission_Grant,
 		0,
 		len(wire.permissionGrants),
 		allocator,
@@ -567,11 +474,9 @@ parse_config_from_json :: proc(
 			},
 		)
 	}
-
 	for server in wire.mcpServers {
 		append(&config.mcpServers, server)
 	}
-
 	for path in wire.skillPaths {
 		append(&config.skillPaths, strings.clone(path, allocator))
 	}
@@ -583,7 +488,6 @@ parse_config_from_json :: proc(
 		}
 		append(&config.permissionGrants, grant)
 	}
-
 	return config, .None
 }
 
@@ -599,7 +503,6 @@ load_config_from_file :: proc(
 	if path == "" {
 		return Mimir_Config{}, .Invalid_Home
 	}
-
 	data, readErr := os.read_entire_file(path, context.temp_allocator)
 	if readErr != nil {
 		#partial switch err in readErr {
@@ -610,46 +513,7 @@ load_config_from_file :: proc(
 		}
 		return Mimir_Config{}, .Io_Error
 	}
-
 	return parse_config_from_json(string(data), allocator)
-}
-
-load_input_history_from_file :: proc(
-	home: string,
-	workingDirectory: string,
-	allocator := context.allocator,
-) -> (
-	[dynamic]string,
-	History_Error,
-) {
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
-	defer delete(path, context.temp_allocator)
-	if path == "" {
-		return nil, .Invalid_Path
-	}
-
-	data, readErr := os.read_entire_file(path, context.temp_allocator)
-	if readErr != nil {
-		#partial switch err in readErr {
-		case os.General_Error:
-			if err == .Not_Exist {
-				return nil, .Not_Found
-			}
-		}
-		return nil, .Io_Error
-	}
-
-	wire: []string
-	decodeErr := json.unmarshal_string(string(data), &wire, allocator = context.temp_allocator)
-	if decodeErr != nil {
-		return nil, .Invalid_JSON
-	}
-
-	history := make([dynamic]string, 0, len(wire), allocator)
-	for entry in wire {
-		append(&history, strings.clone(entry, allocator))
-	}
-	return history, .None
 }
 
 save_config_to_file :: proc(home: string, config: Mimir_Config) -> Config_Error {
@@ -660,83 +524,19 @@ save_config_to_file :: proc(home: string, config: Mimir_Config) -> Config_Error 
 	if dir == "" || path == "" {
 		return .Invalid_Home
 	}
-
 	if !os.exists(dir) {
 		mkdirErr := os.make_directory_all(dir)
 		if mkdirErr != nil {
 			return .Io_Error
 		}
 	}
-
 	payload := config_to_json(config, context.temp_allocator)
 	defer delete(payload, context.temp_allocator)
 	writeErr := os.write_entire_file(path, payload)
 	if writeErr != nil {
 		return .Io_Error
 	}
-
 	return .None
-}
-
-save_input_history_to_file :: proc(
-	home: string,
-	workingDirectory: string,
-	history: []string,
-) -> History_Error {
-	dir := history_cache_dir(home, context.temp_allocator)
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
-	defer delete(dir, context.temp_allocator)
-	defer delete(path, context.temp_allocator)
-	if dir == "" || path == "" {
-		return .Invalid_Path
-	}
-
-	if !os.exists(dir) {
-		mkdirErr := os.make_directory_all(dir)
-		if mkdirErr != nil {
-			return .Io_Error
-		}
-	}
-
-	payload := input_history_to_json(history, context.temp_allocator)
-	defer delete(payload, context.temp_allocator)
-	if writeErr := os.write_entire_file_from_string(path, payload); writeErr != nil {
-		return .Io_Error
-	}
-	return .None
-}
-
-clear_input_history_file :: proc(home: string, workingDirectory: string) -> History_Error {
-	path := input_history_path(home, workingDirectory, context.temp_allocator)
-	defer delete(path, context.temp_allocator)
-	if path == "" {
-		return .Invalid_Path
-	}
-	if !os.exists(path) {
-		return .None
-	}
-	if removeErr := os.remove(path); removeErr != nil {
-		return .Io_Error
-	}
-	return .None
-}
-
-input_history_to_json :: proc(history: []string, allocator := context.allocator) -> string {
-	builder: strings.Builder
-	strings.builder_init(&builder, allocator)
-	strings.write_string(&builder, "[")
-	for entry, index in history {
-		if index > 0 {
-			strings.write_string(&builder, ",")
-		}
-		strings.write_string(&builder, "\n  ")
-		write_json_string(&builder, entry)
-	}
-	if len(history) > 0 {
-		strings.write_string(&builder, "\n")
-	}
-	strings.write_string(&builder, "]\n")
-	return strings.to_string(builder)
 }
 
 config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> string {
@@ -843,6 +643,24 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, "]\n")
 	strings.write_string(&builder, "}\n")
 	return strings.to_string(builder)
+}
+
+write_decimal :: proc(builder: ^strings.Builder, value: int) {
+	if value == 0 {
+		strings.write_byte(builder, '0')
+		return
+	}
+	digits: [20]byte
+	length := 0
+	remaining := value
+	for remaining > 0 {
+		digits[length] = byte(remaining % 10) + '0'
+		length += 1
+		remaining /= 10
+	}
+	for index := length - 1; index >= 0; index -= 1 {
+		strings.write_byte(builder, digits[index])
+	}
 }
 
 write_json_string :: proc(builder: ^strings.Builder, text: string) {
