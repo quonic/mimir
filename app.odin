@@ -2,10 +2,10 @@
 package main
 
 import agent "./agent"
+import settings "./settings"
 import "ai"
 import "code_index"
 import "console"
-import settings "./settings"
 import "core:c"
 import "core:fmt"
 import "core:os"
@@ -2779,7 +2779,10 @@ app_append_model_entry :: proc(
 app_find_provider :: proc(
 	config: settings.Mimir_Config,
 	name: string,
-) -> (settings.Provider_Config, bool) {
+) -> (
+	settings.Provider_Config,
+	bool,
+) {
 	for provider in config.providers {
 		if provider.name == name {
 			return provider, true

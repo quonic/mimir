@@ -1,12 +1,12 @@
 package main
 
+import settings "./settings"
 import "ai"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
-import settings "./settings"
 
 APPROVAL_SAFETY_SYSTEM_PROMPT :: `You are a tool action safety classifier.
 
@@ -107,7 +107,10 @@ app_start_approval_safety :: proc(state: ^App_State) {
 
 approval_safety_model_from_config :: proc(
 	config: settings.Mimir_Config,
-) -> (Approval_Safety_Model, bool) {
+) -> (
+	Approval_Safety_Model,
+	bool,
+) {
 	providerName := config.selectedProvider
 	model := config.selectedModel
 	explicitSafetyModel := config.safetyProvider != "" || config.safetyModel != ""

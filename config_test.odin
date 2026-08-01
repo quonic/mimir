@@ -1,16 +1,19 @@
 package main
 
+import settings "./settings"
 import "ai"
 import "core:os"
 import "core:testing"
-import settings "./settings"
 
 @(test)
 test_provider_type_round_trip :: proc(t: ^testing.T) {
 	providerType, ok := settings.provider_type_from_string("ollama")
 	assert(ok, "expected ollama provider type string to parse")
 	assert(providerType == .Ollama, "expected ollama provider type")
-	assert(settings.provider_type_to_string(providerType) == "ollama", "expected ollama round trip")
+	assert(
+		settings.provider_type_to_string(providerType) == "ollama",
+		"expected ollama round trip",
+	)
 
 	_, invalidOk := settings.provider_type_from_string("wat")
 	assert(!invalidOk, "expected unknown provider type to fail")
@@ -169,7 +172,10 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	}
 
 	assert(loadErr == .None, "expected config load to succeed")
-	assert(loaded.selectedProvider == settings.DEFAULT_CONFIG_PROVIDER, "expected selected provider")
+	assert(
+		loaded.selectedProvider == settings.DEFAULT_CONFIG_PROVIDER,
+		"expected selected provider",
+	)
 	assert(loaded.selectedModel == "llama3.2", "expected selected model round trip")
 	assert(loaded.embeddingProvider == "ollama", "expected embedding provider round trip")
 	assert(loaded.embeddingModel == "nomic-embed-text", "expected embedding model round trip")

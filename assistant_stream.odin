@@ -3,6 +3,7 @@ package main
 
 import agent "./agent"
 import builtin_tools "./builtin_tools"
+import settings "./settings"
 import "ai"
 import "code_index"
 import "core:encoding/json"
@@ -12,7 +13,6 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
-import settings "./settings"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5

@@ -1,9 +1,9 @@
 package main
 
+import settings "./settings"
 import "console"
 import "core:fmt"
 import "core:strings"
-import settings "./settings"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
 MIN_INPUT_PANEL_HEIGHT :: 3
@@ -751,7 +751,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			&builder,
 			fmt.tprintf(
 				"%d",
-				settings.config_context_window_tokens(&state.config, provider.name, provider.model),
+				settings.config_context_window_tokens(
+					&state.config,
+					provider.name,
+					provider.model,
+				),
 			),
 		)
 	case .Provider_Enabled:

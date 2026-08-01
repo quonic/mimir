@@ -319,7 +319,12 @@ provider_type_from_string :: proc(text: string) -> (ai.Interface_Type, bool) {
 	return .None, false
 }
 
-permission_grant_kind_from_string :: proc(text: string) -> (tool_policy.Permission_Grant_Kind, bool) {
+permission_grant_kind_from_string :: proc(
+	text: string,
+) -> (
+	tool_policy.Permission_Grant_Kind,
+	bool,
+) {
 	switch text {
 	case "directorySubtree":
 		return .Directory_Subtree, true
@@ -351,18 +356,24 @@ permission_grant_from_wire :: proc(
 	bool,
 ) {
 	kind, kindOK := permission_grant_kind_from_string(wire.kind)
-	projectRoot, rootOK := tool_policy.permission_normalize_absolute_path(wire.projectRoot, allocator)
+	projectRoot, rootOK := tool_policy.permission_normalize_absolute_path(
+		wire.projectRoot,
+		allocator,
+	)
 	if !kindOK || !rootOK {
 		return tool_policy.Permission_Grant{}, false
 	}
 
 	grant := tool_policy.Permission_Grant {
-		kind = kind,
+		kind        = kind,
 		projectRoot = projectRoot,
 	}
 	switch kind {
 	case .Directory_Subtree:
-		directory, directoryOK := tool_policy.permission_normalize_absolute_path(wire.directory, allocator)
+		directory, directoryOK := tool_policy.permission_normalize_absolute_path(
+			wire.directory,
+			allocator,
+		)
 		if !directoryOK || !tool_policy.permission_path_is_within_project(projectRoot, directory) {
 			tool_policy.permission_grant_destroy(&grant, allocator)
 			if directory != "" {

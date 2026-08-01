@@ -4,7 +4,7 @@ import "core:testing"
 
 @(test)
 test_mcp_registry_preserves_server_status :: proc(t: ^testing.T) {
-	servers := [2]MCP_Server_Config{
+	servers := [2]MCP_Server_Config {
 		{name = "enabled", command = "mcp-enabled", enabled = true},
 		{name = "disabled", command = "mcp-disabled", enabled = false},
 	}

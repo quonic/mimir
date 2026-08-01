@@ -1,12 +1,12 @@
 package main
 
+import settings "./settings"
 import "ai"
 import "code_index"
 import "console"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import settings "./settings"
 
 @(test)
 test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
@@ -366,12 +366,7 @@ test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testin
 	state: App_State
 	state.config.embeddingProvider = "embeddings"
 	state.config.embeddingModel = "nomic-embed-text"
-	state.config.providers = make(
-		[dynamic]settings.Provider_Config,
-		0,
-		1,
-		context.temp_allocator,
-	)
+	state.config.providers = make([dynamic]settings.Provider_Config, 0, 1, context.temp_allocator)
 	defer delete(state.config.providers)
 	append(
 		&state.config.providers,
@@ -2181,10 +2176,7 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 		delete(config.mcpServers)
 		delete(config.skillPaths)
 	}
-	assert(
-		settings.save_config_to_file(home, config) == .None,
-		"expected test config save",
-	)
+	assert(settings.save_config_to_file(home, config) == .None, "expected test config save")
 
 	state := app_init_with_home(home, false, context.temp_allocator)
 	defer app_destroy(&state)
