@@ -726,10 +726,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		return strings.to_string(builder)
 	}
 	if setting.id == .Approval_Method {
-		strings.write_string(&builder, "Approval method: < ")
-		strings.write_string(&builder, approval_method_label(state.config.approvalMethod))
-		strings.write_string(&builder, " >")
-		return strings.to_string(builder)
+		return widgets.setting_row_choice(
+			"Approval method",
+			approval_method_label(state.config.approvalMethod),
+			context.temp_allocator,
+		)
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
@@ -738,16 +739,16 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	provider := state.config.providers[setting.providerIndex]
 	#partial switch setting.id {
 	case .Provider:
-		strings.write_string(&builder, "Provider: < ")
-		strings.write_string(&builder, provider.name)
-		strings.write_string(&builder, " >")
+		return widgets.setting_row_choice("Provider", provider.name, context.temp_allocator)
 	case .Provider_Name:
 		strings.write_string(&builder, "Name: ")
 		strings.write_string(&builder, provider.name)
 	case .Provider_Type:
-		strings.write_string(&builder, "Type: < ")
-		strings.write_string(&builder, settings.provider_type_to_string(provider.type))
-		strings.write_string(&builder, " >")
+		return widgets.setting_row_choice(
+			"Type",
+			settings.provider_type_to_string(provider.type),
+			context.temp_allocator,
+		)
 	case .Provider_Endpoint:
 		strings.write_string(&builder, "Endpoint: ")
 		strings.write_string(&builder, provider.endpoint)
@@ -771,14 +772,9 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			),
 		)
 	case .Provider_Enabled:
-		if provider.enabled {
-			return "[x] Enabled"
-		}
-		return "[ ] Enabled"
+		return widgets.setting_row_checkbox("Enabled", provider.enabled, context.temp_allocator)
 	case .Refresh_Models, .Add_Provider, .Remove_Provider:
-		strings.write_string(&builder, "[ ")
-		strings.write_string(&builder, config_setting_label(setting.id))
-		strings.write_string(&builder, " ]")
+		return widgets.setting_row_button(config_setting_label(setting.id), context.temp_allocator)
 	case:
 		return config_setting_label(setting.id)
 	}

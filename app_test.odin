@@ -1525,6 +1525,27 @@ test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_formats_provider_control_rows :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+
+	assert(
+		config_setting_line(&state, state.configSettings[0]) == "Provider: < ollama >",
+		"expected provider choice row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[7]) == "[x] Enabled",
+		"expected enabled checkbox row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[8]) == "[ Refresh models ]",
+		"expected refresh button row",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_settings_cursor_wraps :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
