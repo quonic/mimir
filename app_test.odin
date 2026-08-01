@@ -1560,11 +1560,20 @@ test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 test_config_modal_formats_provider_control_rows :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
+	state.config.providers[0].apiKey = "secret-key"
 	app_show_config(&state)
 
 	assert(
 		config_setting_line(&state, state.configSettings[0]) == "Provider: < ollama >",
 		"expected provider choice row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[3]) == "Endpoint: http://localhost:11434",
+		"expected provider value row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[4]) == "API key: ********",
+		"expected masked provider API key row",
 	)
 	assert(
 		config_setting_line(&state, state.configSettings[7]) == "[x] Enabled",

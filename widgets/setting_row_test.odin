@@ -22,6 +22,11 @@ test_setting_row_formats_control_labels :: proc(t: ^testing.T) {
 		"expected choice label",
 	)
 	assert(
+		setting_row_value("Endpoint", "http://localhost:11434", context.temp_allocator) ==
+		"Endpoint: http://localhost:11434",
+		"expected value label",
+	)
+	assert(
 		setting_row_option("ollama / chat", true, context.temp_allocator) == "* ollama / chat",
 		"expected selected option label",
 	)

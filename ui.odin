@@ -680,15 +680,14 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 }
 
 config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> string {
-	builder: strings.Builder
-	strings.builder_init(&builder, context.temp_allocator)
 	if state.configEditing &&
 	   setting.id == state.configEditingSetting.id &&
 	   setting.providerIndex == state.configEditingSetting.providerIndex {
-		strings.write_string(&builder, config_setting_label(setting.id))
-		strings.write_string(&builder, ": ")
-		strings.write_string(&builder, widgets.text_editor_string(&state.configEditor))
-		return strings.to_string(builder)
+		return widgets.setting_row_value(
+			config_setting_label(setting.id),
+			widgets.text_editor_string(&state.configEditor),
+			context.temp_allocator,
+		)
 	}
 
 	if (setting.id == .Chat_Model ||
@@ -720,9 +719,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		return widgets.setting_row_option(label, selected, context.temp_allocator)
 	}
 	if setting.id == .Tool_Continuations {
-		strings.write_string(&builder, "Tool continuation limit: ")
-		strings.write_string(&builder, fmt.tprintf("%d", state.config.toolContinuations))
-		return strings.to_string(builder)
+		return widgets.setting_row_value(
+			"Tool continuation limit",
+			fmt.tprintf("%d", state.config.toolContinuations),
+			context.temp_allocator,
+		)
 	}
 	if setting.id == .Approval_Method {
 		return widgets.setting_row_choice(
@@ -740,8 +741,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	case .Provider:
 		return widgets.setting_row_choice("Provider", provider.name, context.temp_allocator)
 	case .Provider_Name:
-		strings.write_string(&builder, "Name: ")
-		strings.write_string(&builder, provider.name)
+		return widgets.setting_row_value("Name", provider.name, context.temp_allocator)
 	case .Provider_Type:
 		return widgets.setting_row_choice(
 			"Type",
@@ -749,18 +749,22 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			context.temp_allocator,
 		)
 	case .Provider_Endpoint:
-		strings.write_string(&builder, "Endpoint: ")
-		strings.write_string(&builder, provider.endpoint)
+		return widgets.setting_row_value("Endpoint", provider.endpoint, context.temp_allocator)
 	case .Provider_API_Key:
-		strings.write_string(&builder, "API key: ")
-		strings.write_string(&builder, config_masked_value(provider.apiKey))
+		return widgets.setting_row_value(
+			"API key",
+			config_masked_value(provider.apiKey),
+			context.temp_allocator,
+		)
 	case .Provider_Model:
-		strings.write_string(&builder, "Configured model: ")
-		strings.write_string(&builder, provider.model)
+		return widgets.setting_row_value(
+			"Configured model",
+			provider.model,
+			context.temp_allocator,
+		)
 	case .Provider_Context_Window:
-		strings.write_string(&builder, "Context window tokens: ")
-		strings.write_string(
-			&builder,
+		return widgets.setting_row_value(
+			"Context window tokens",
 			fmt.tprintf(
 				"%d",
 				settings.config_context_window_tokens(
@@ -769,6 +773,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 					provider.model,
 				),
 			),
+			context.temp_allocator,
 		)
 	case .Provider_Enabled:
 		return widgets.setting_row_checkbox("Enabled", provider.enabled, context.temp_allocator)
@@ -777,7 +782,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	case:
 		return config_setting_label(setting.id)
 	}
-	return strings.to_string(builder)
+	return config_setting_label(setting.id)
 }
 
 config_prefixed_line :: proc(prefix, text: string, allocator := context.temp_allocator) -> string {
