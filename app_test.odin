@@ -335,6 +335,9 @@ test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testin
 	_ = t
 }
 
+/* Legacy assistant stream queue and continuation tests were superseded by
+agent_host_test.odin, which verifies runtime request routing and continuation. */
+/*
 @(test)
 test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
@@ -806,6 +809,7 @@ test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
 	assert(message.toolCalls[0].id == "call-1", "expected retained tool call ID")
 	_ = t
 }
+*/
 
 @(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
@@ -1348,15 +1352,27 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 	assert(state.historyScrollOffset == 0, "expected new history entry to return to the bottom")
 
 	assert(app_scroll_history_page(&state, 1), "expected history to remain scrollable")
-	state.stream.assistantIndex = len(state.history) - 1
-	assistant_stream_append_partial(&state.stream, "streamed entry")
-	assert(app_sync_assistant_history_entry(&state), "expected streamed content to update history")
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "streamed entry"},
+		) ==
+		.None,
+		"expected streamed text delta",
+	)
+	assert(app_poll_agent_host(&state), "expected streamed content to update history")
 	assert(
 		state.historyScrollOffset == 0,
 		"expected streamed history text to return to the bottom",
 	)
 	assert(
-		state.history[state.stream.assistantIndex].cachedLineCount == 0,
+		state.history[state.agentHost.historyIndex].cachedLineCount == 0,
 		"expected streamed content to invalidate its wrapping cache",
 	)
 	_ = t

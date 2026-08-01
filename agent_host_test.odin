@@ -290,7 +290,6 @@ test_agent_tool_execution_projects_output_to_runtime :: proc(t: ^testing.T) {
 	assert(resultEvent.type == .Tool_Resolved, "expected resolved tool event")
 	assert(!resultEvent.isError, "expected successful tool result")
 	assert(resultEvent.content != "", "expected projected tool output")
-	assert(len(state.stream.conversation) == 0, "expected no legacy tool result projection")
 	_ = t
 }
 

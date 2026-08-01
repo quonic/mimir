@@ -7,6 +7,9 @@ import "core:mem"
 import "core:strings"
 
 import "core:time"
+
+SPINNER_FRAME_INTERVAL :: 100 * time.Millisecond
+
 Agent_Host :: struct {
 	runtime:             agent.Runtime,
 	activeAgentID:       agent.Agent_ID,
