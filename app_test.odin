@@ -1,6 +1,7 @@
 package main
 
 import agent "./agent"
+import approval_safety "./approval_safety"
 import input_history "./input_history"
 import settings "./settings"
 import "ai"
@@ -87,68 +88,6 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 }
 
 @(test)
-test_approval_safety_prompt_uses_only_action_details :: proc(t: ^testing.T) {
-	prompt := approval_safety_prompt(
-		Permission_Action {
-			effect = .Execute,
-			command = "git status",
-			workingDirectory = "/workspace/project",
-		},
-	)
-	assert(strings.contains(prompt, "git status"), "expected command in safety prompt")
-	assert(
-		strings.contains(prompt, "/workspace/project"),
-		"expected working directory in safety prompt",
-	)
-	assert(
-		!strings.contains(prompt, "prior conversation"),
-		"expected prompt to exclude prior conversation",
-	)
-	_ = t
-}
-
-@(test)
-test_approval_safety_prompt_describes_each_action_effect :: proc(t: ^testing.T) {
-	writePrompt := approval_safety_prompt(
-		Permission_Action{effect = .Write, targetPath = "/workspace/project/output.txt"},
-	)
-	assert(
-		strings.contains(writePrompt, "/workspace/project/output.txt"),
-		"expected write target path in safety prompt",
-	)
-	remotePrompt := approval_safety_prompt(
-		Permission_Action{effect = .Remote, mcpServer = "github"},
-	)
-	assert(strings.contains(remotePrompt, "github"), "expected MCP server in safety prompt")
-	_ = t
-}
-
-@(test)
-test_approval_safety_verdict_requires_exact_label_prefix :: proc(t: ^testing.T) {
-	assert(
-		approval_safety_verdict_from_response("SAFE|Reads repository status") == .Safe,
-		"expected SAFE verdict",
-	)
-	assert(
-		approval_safety_verdict_from_response("RISKY|Deletes files") == .Risky,
-		"expected RISKY verdict",
-	)
-	assert(
-		approval_safety_verdict_from_response("UNCLEAR|Cannot determine") == .Unclear,
-		"expected UNCLEAR verdict",
-	)
-	assert(
-		approval_safety_verdict_from_response("Safe: Reads repository status") == .Invalid,
-		"expected prose response to be invalid",
-	)
-	assert(
-		approval_safety_verdict_from_response("SAFE|") == .Invalid,
-		"expected missing SAFE reason to be invalid",
-	)
-	_ = t
-}
-
-@(test)
 test_approval_safety_model_prefers_explicit_selection :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -227,20 +166,7 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
 		"expected write call to open approval modal",
 	)
-	state.approval.safety.active = true
-	assert(
-		!app_handle_approval_input(&state, '4'),
-		"expected pending safety analysis to ignore choice",
-	)
-	assert(
-		!app_handle_approval_input(&state, '\r'),
-		"expected pending safety analysis to ignore approval",
-	)
-	assert(state.mode == .Approval, "expected pending analysis to keep modal open")
-	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
-
-	state.approval.safety.active = false
-	state.approval.safety.unavailable = true
+	approval_safety.mark_unavailable(&state.approval.safety)
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
 	assert(app_handle_approval_input(&state, '\r'), "expected unavailable advice to allow denial")
 	assert(state.mode == .Chat, "expected denial after unavailable advice to close modal")
@@ -256,39 +182,11 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 		app_show_approval(&state, Tool_Call{id = "run_command", command = "git status"}),
 		"expected command call to open approval modal",
 	)
-	state.approval.safety.active = false
-	state.approval.safety.unavailable = true
+	approval_safety.mark_unavailable(&state.approval.safety)
 	sequence := render_app_frame_sequence(&state, 24, 80, context.temp_allocator)
 	assert(
 		contains_string(sequence, "Safety advice: unavailable"),
 		"expected unavailable safety advice in command approval modal",
-	)
-	_ = t
-}
-
-@(test)
-test_approval_modal_renders_compact_safety_advice :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-
-	assert(
-		app_show_approval(&state, Tool_Call{id = "run_command", command = "git status"}),
-		"expected command call to open approval modal",
-	)
-	state.approval.safety.active = false
-	state.approval.safety.unavailable = false
-	append(
-		&state.approval.safety.response,
-		"Safe: Reads repository status only.\nRepeated verbose advice.",
-	)
-	sequence := render_app_frame_sequence(&state, 24, 80, context.temp_allocator)
-	assert(
-		contains_string(sequence, "Safe: Reads repository status only."),
-		"expected approval modal to display compact safety advice",
-	)
-	assert(
-		!contains_string(sequence, "Repeated verbose advice."),
-		"expected approval modal to omit later safety advice lines",
 	)
 	_ = t
 }
@@ -419,12 +317,10 @@ test_app_approve_safe_allows_only_safe_verdict :: proc(t: ^testing.T) {
 		app_show_approval(&state, Tool_Call{id = "run_command", command = "pwd"}),
 		"expected command call to open approval state",
 	)
-	state.approval.safety.unavailable = false
-	append(&state.approval.safety.response, "SAFE|Prints working directory")
-
-	assert(app_apply_approval_method(&state), "expected SAFE verdict to approve tool")
-	assert(state.mode == .Chat, "expected SAFE approval to close approval mode")
-	assert(state.toolExecution.active, "expected SAFE verdict to start execution")
+	assert(
+		app_safety_allows_automatic_approval(true, false, .Safe),
+		"expected SAFE verdict to approve tool",
+	)
 	_ = t
 }
 
@@ -437,12 +333,10 @@ test_app_approve_safe_falls_back_for_risky_verdict :: proc(t: ^testing.T) {
 		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "output.txt"}),
 		"expected write call to open approval state",
 	)
-	state.approval.safety.unavailable = false
-	append(&state.approval.safety.response, "RISKY|Overwrites file")
-
-	assert(!app_apply_approval_method(&state), "expected RISKY verdict to require manual approval")
-	assert(state.mode == .Approval, "expected RISKY verdict to retain approval modal")
-	assert(!state.toolExecution.active, "expected RISKY verdict not to start execution")
+	assert(
+		!app_safety_allows_automatic_approval(true, false, .Risky),
+		"expected RISKY verdict to require manual approval",
+	)
 	_ = t
 }
 

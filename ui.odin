@@ -168,7 +168,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			adviceRegion := interior
 			adviceRegion.top_row = row
 			adviceRegion.bottom_row = interior.bottom_row - 4
-			if state.approval.safety.active {
+			if !app_approval_safety_ready(state) {
 				write_clipped_line(
 					batch,
 					row,
@@ -177,7 +177,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 					"Safety advice: assessing action...",
 				)
 				row += 1
-			} else if state.approval.safety.unavailable {
+			} else if app_approval_safety_unavailable(state) {
 				write_clipped_line(
 					batch,
 					row,
