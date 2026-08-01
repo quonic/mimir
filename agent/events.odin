@@ -2,10 +2,12 @@ package agent
 
 import "core:strings"
 
+import ai "../ai"
 Agent_Event_Type :: enum int {
 	None,
 	Text_Delta,
 	Thinking_Changed,
+	Usage_Updated,
 	Tool_Requested,
 	Tool_Resolved,
 	Completed,
@@ -27,6 +29,8 @@ Agent_Event :: struct {
 	requestID:   string,
 	content:     string,
 	toolRequest: Tool_Request,
+	usage:       ai.Chat_Usage,
+	thinking:    bool,
 	isError:     bool,
 }
 
@@ -53,6 +57,8 @@ agent_event_clone :: proc(event: Agent_Event, allocator := context.allocator) ->
 		requestID = strings.clone(event.requestID, allocator),
 		content = strings.clone(event.content, allocator),
 		toolRequest = tool_request_clone(event.toolRequest, allocator),
+		usage = event.usage,
+		thinking = event.thinking,
 		isError = event.isError,
 	}
 }

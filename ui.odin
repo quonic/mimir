@@ -462,8 +462,8 @@ history_display_line :: proc(
 	index: int,
 	allocator := context.allocator,
 ) -> string {
-	if state.stream.active && index == state.stream.assistantIndex {
-		spinnerFrame := app_assistant_stream_spinner_frame(state)
+	if app_agent_host_stream_active(state) && index == state.agentHost.historyIndex {
+		spinnerFrame := app_agent_host_spinner_frame(state)
 		if spinnerFrame != "" {
 			return history_entry_line(
 				History_Entry{role = .Assistant, content = spinnerFrame},

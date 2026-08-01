@@ -1,5 +1,6 @@
 package main
 
+import agent "./agent"
 import settings "./settings"
 import "ai"
 import "code_index"
@@ -334,6 +335,9 @@ test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testin
 	_ = t
 }
 
+/* Legacy assistant stream queue and continuation tests were superseded by
+agent_host_test.odin, which verifies runtime request routing and continuation. */
+/*
 @(test)
 test_app_queues_streamed_tool_call_for_approval :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
@@ -805,6 +809,7 @@ test_app_records_streamed_tool_turn_for_continuation :: proc(t: ^testing.T) {
 	assert(message.toolCalls[0].id == "call-1", "expected retained tool call ID")
 	_ = t
 }
+*/
 
 @(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
@@ -953,16 +958,10 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 1, "expected chat input to enter input history")
 	assert(state.inputHistory[0] == "hello", "expected chat input history entry")
-	assert(len(state.history) >= 3, "expected chat submit to append history entries")
-	assert(state.history[len(state.history) - 2].role == .User, "expected user history entry")
-	assert(
-		state.history[len(state.history) - 1].role == .Assistant,
-		"expected assistant error entry",
-	)
-	assert(
-		state.history[len(state.history) - 1].content == "No model selected",
-		"expected missing model to be reported in history",
-	)
+	assert(len(state.history) == 2, "expected chat submit to append only the user entry")
+	assert(state.history[len(state.history) - 1].role == .User, "expected user history entry")
+	assert(state.history[len(state.history) - 1].content == "hello", "expected user content")
+	assert(state.status == "No model selected", "expected missing model status")
 
 	text_input.input_buffer_push_text(&state.input, "/exit")
 	app_submit_input(&state)
@@ -995,10 +994,17 @@ test_stop_command_requests_stream_cancel :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	state.stream.active = true
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
 	app_run_command(&state, parse_slash_command("/stop"))
 	assert(state.status == "Canceling assistant stream", "expected /stop to update status")
-	assert(state.stream.cancelRequested, "expected /stop to request cancellation")
+	agentState, agentOK := agent.runtime_state(
+		&state.agentHost.runtime,
+		state.agentHost.activeAgentID,
+	)
+	assert(agentOK && agentState == .Canceled, "expected /stop to cancel the active runtime")
 	_ = t
 }
 
@@ -1346,15 +1352,27 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 	assert(state.historyScrollOffset == 0, "expected new history entry to return to the bottom")
 
 	assert(app_scroll_history_page(&state, 1), "expected history to remain scrollable")
-	state.stream.assistantIndex = len(state.history) - 1
-	assistant_stream_append_partial(&state.stream, "streamed entry")
-	assert(app_sync_assistant_history_entry(&state), "expected streamed content to update history")
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	assert(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "streamed entry"},
+		) ==
+		.None,
+		"expected streamed text delta",
+	)
+	assert(app_poll_agent_host(&state), "expected streamed content to update history")
 	assert(
 		state.historyScrollOffset == 0,
 		"expected streamed history text to return to the bottom",
 	)
 	assert(
-		state.history[state.stream.assistantIndex].cachedLineCount == 0,
+		state.history[state.agentHost.historyIndex].cachedLineCount == 0,
 		"expected streamed content to invalidate its wrapping cache",
 	)
 	_ = t
@@ -1364,44 +1382,43 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 test_thinking_spinner_hides_reasoning_and_yields_to_content :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	append_history(&state, .Assistant, "")
-	state.stream.assistantIndex = len(state.history) - 1
-	state.stream.active = true
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
 
 	assert(
-		assistant_stream_delta_callback(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
 			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
-			rawptr(&state.stream),
-		),
-		"expected thinking delta callback to continue streaming",
+		) ==
+		.None,
+		"expected thinking delta to be accepted",
 	)
-	assert(
-		len(state.stream.partialBuffer) == 0,
-		"expected thinking text to stay out of the partial response buffer",
-	)
-	assert(app_poll_assistant_stream(&state), "expected thinking state to request a redraw")
-	assert(state.historyRenderOnly, "expected thinking state to request a history-only redraw")
-	assert(
-		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
-		SPINNER_FRAMES[0],
-		"expected first spinner frame in the pending assistant entry",
-	)
+	assert(app_poll_agent_host(&state), "expected thinking state to request a redraw")
+	assert(state.agentHost.thinking, "expected host to track thinking state")
+	assert(state.agentHost.spinnerVisible, "expected thinking state to show a spinner")
+	assert(state.status == "Assistant thinking", "expected thinking status")
 
 	state.historyRenderOnly = false
 	assert(
-		assistant_stream_delta_callback(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
 			ai.Chat_Stream_Delta{content = "Visible answer"},
-			rawptr(&state.stream),
-		),
-		"expected content delta callback to continue streaming",
+		) ==
+		.None,
+		"expected text delta to be accepted",
 	)
-	assert(app_poll_assistant_stream(&state), "expected content delta to request a redraw")
+	assert(app_poll_agent_host(&state), "expected content delta to request a redraw")
 	assert(
-		state.history[state.stream.assistantIndex].content == "Visible answer",
+		state.history[state.agentHost.historyIndex].content == "Visible answer",
 		"expected only normal content in assistant history",
 	)
 	assert(
-		history_display_line(&state, state.stream.assistantIndex, context.temp_allocator) ==
+		history_display_line(&state, state.agentHost.historyIndex, context.temp_allocator) ==
 		"Visible answer",
 		"expected normal content to replace the spinner",
 	)
@@ -1413,46 +1430,50 @@ test_thinking_spinner_invalidates_history_cache_and_clears :: proc(t: ^testing.T
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	append_history(&state, .Assistant, "")
-	state.stream.assistantIndex = len(state.history) - 1
-	state.stream.active = true
-	_ = history_entry_line_count(&state, state.stream.assistantIndex, 20)
+	state.agentHost.historyIndex = len(state.history) - 1
 	assert(
-		state.history[state.stream.assistantIndex].cachedLineCount > 0,
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	agentID := state.agentHost.activeAgentID
+	_ = history_entry_line_count(&state, state.agentHost.historyIndex, 20)
+	assert(
+		state.history[state.agentHost.historyIndex].cachedLineCount > 0,
 		"expected history line count to be cached",
 	)
 
 	assert(
-		assistant_stream_delta_callback(
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
 			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
-			rawptr(&state.stream),
-		),
-		"expected thinking delta callback to continue streaming",
+		) ==
+		.None,
+		"expected thinking delta to be accepted",
 	)
+	assert(app_poll_agent_host(&state), "expected spinner visibility change to request a redraw")
 	assert(
-		app_poll_assistant_stream(&state),
-		"expected spinner visibility change to request a redraw",
-	)
-	assert(
-		state.history[state.stream.assistantIndex].cachedLineCount == 0,
+		state.history[state.agentHost.historyIndex].cachedLineCount == 0,
 		"expected spinner visibility change to invalidate the wrapping cache",
 	)
-	state.stream.spinnerLastFrame = {}
-	spinnerUpdate := app_update_assistant_stream_spinner(&state.stream)
-	assert(spinnerUpdate.dirty, "expected elapsed spinner interval to request a redraw")
+	state.agentHost.spinnerLastFrame = {}
+	assert(app_poll_agent_host(&state), "expected elapsed spinner interval to request a redraw")
 	assert(
-		!spinnerUpdate.visibilityChanged,
-		"expected frame changes to preserve spinner visibility",
-	)
-	assert(
-		app_assistant_stream_spinner_frame(&state) == SPINNER_FRAMES[1],
+		app_agent_host_spinner_frame(&state) == SPINNER_FRAMES[1],
 		"expected elapsed spinner interval to advance to the next frame",
 	)
 	assert(
-		app_clear_assistant_stream_thinking(&state.stream),
-		"expected visible spinner state to clear",
+		agent.runtime_receive_stream_delta(
+			&state.agentHost.runtime,
+			agentID,
+			ai.Chat_Stream_Delta{content = "Visible answer"},
+		) ==
+		.None,
+		"expected text delta to clear thinking state",
 	)
+	assert(app_poll_agent_host(&state), "expected spinner state to clear")
 	assert(
-		app_assistant_stream_spinner_frame(&state) == "",
+		app_agent_host_spinner_frame(&state) == "",
 		"expected cleared stream state to hide the spinner",
 	)
 	_ = t
@@ -1735,11 +1756,11 @@ test_compute_app_layout_places_status_last :: proc(t: ^testing.T) {
 test_context_usage_status_text_and_right_clipping :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	state.stream.usage = ai.Chat_Usage {
+	state.agentHost.usage = ai.Chat_Usage {
 		inputTokens    = 12500,
 		hasInputTokens = true,
 	}
-	state.stream.contextWindowTokens = 32000
+	state.agentHost.contextWindowTokens = 32000
 
 	status := app_context_usage_status_text(&state, context.temp_allocator)
 	assert(status == "ctx 12.5k/32k 39%", "expected compact context usage status")

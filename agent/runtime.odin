@@ -14,10 +14,21 @@ Agent_Instance :: struct {
 	partialBuffer:  [dynamic]byte,
 	queuedTools:    [dynamic]Tool_Request,
 	stream:         ^Stream_Worker_State,
+	streamConfig:   Stream_Configuration,
 	finalResult:    string,
 	pendingTool:    Tool_Request,
 	pendingToolSet: bool,
 	thinking:       bool,
+}
+
+Stream_Configuration :: struct {
+	client:              ai.Client,
+	model:               string,
+	tools:               [dynamic]ai.Tool_Definition,
+	temperature:         f32,
+	maxTokens:           int,
+	configured:          bool,
+	continuationPending: bool,
 }
 
 Runtime :: struct {
@@ -37,6 +48,7 @@ runtime_init :: proc(allocator := context.allocator) -> Runtime {
 runtime_destroy :: proc(runtime: ^Runtime) {
 	for &instance in runtime.instances {
 		runtime_destroy_stream(&instance)
+		runtime_stream_configuration_destroy(&instance.streamConfig, runtime.allocator)
 		agent_start_options_destroy(&instance.options, runtime.allocator)
 		for &event in instance.events {
 			agent_event_destroy(&event, runtime.allocator)
@@ -61,6 +73,20 @@ runtime_destroy :: proc(runtime: ^Runtime) {
 
 runtime_message_destroy :: proc(message: ^ai.Message, allocator := context.allocator) {
 	ai.message_destroy(message, allocator)
+}
+
+runtime_stream_configuration_destroy :: proc(
+	configuration: ^Stream_Configuration,
+	allocator := context.allocator,
+) {
+	delete(configuration.model, allocator)
+	for &tool in configuration.tools {
+		delete(tool.name, allocator)
+		delete(tool.description, allocator)
+		delete(tool.parametersJSON, allocator)
+	}
+	delete(configuration.tools)
+	configuration^ = {}
 }
 
 runtime_start_background :: proc(
@@ -343,6 +369,7 @@ runtime_finish_tool_at_index :: proc(
 	instance.pendingToolSet = false
 	clear(&instance.partialBuffer)
 	instance.state = .Streaming
+	instance.streamConfig.continuationPending = instance.streamConfig.configured
 	runtime_emit_event(
 		runtime,
 		index,

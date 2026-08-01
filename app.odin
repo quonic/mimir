@@ -8,6 +8,7 @@ import "code_index"
 import "console"
 import "core:c"
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -158,6 +159,7 @@ Input_Escape_State :: enum int {
 }
 
 App_State :: struct {
+	allocator:              mem.Allocator,
 	mode:                   App_Mode,
 	input:                  text_input.Input_Buffer,
 	inputEscape:            Input_Escape_State,
@@ -196,7 +198,6 @@ App_State :: struct {
 	codeIndex:              code_index.Code_Index,
 	codeIndexReady:         bool,
 	agentHost:              Agent_Host,
-	stream:                 Assistant_Stream_State,
 	toolExecution:          Tool_Execution_State,
 	models:                 [dynamic]Model_Select_Entry,
 	modelProviderOwned:     bool,
@@ -228,11 +229,8 @@ app_init_with_home :: proc(
 	allocator := context.allocator,
 ) -> App_State {
 	state: App_State
+	state.allocator = allocator
 	state.mode = .Chat
-	state.stream.bufferAllocator = allocator
-	state.stream.partialBuffer = make([dynamic]byte, 0, 0, allocator)
-	state.stream.toolCalls = make([dynamic]ai.Tool_Call, 0, 0, allocator)
-	state.stream.contextWindowCache = make([dynamic]Context_Window_Cache_Entry, 0, 0, allocator)
 	state.agentHost = agent_host_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
@@ -395,17 +393,16 @@ app_enter_setup :: proc(state: ^App_State, status: string) {
 }
 
 app_destroy :: proc(state: ^App_State) {
-	app_destroy_assistant_stream(state)
 	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
 	text_input.input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
 	for entry in state.inputHistory {
-		delete(entry, state.stream.bufferAllocator)
+		delete(entry, state.allocator)
 	}
 	delete(state.inputHistory)
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
+		delete(state.inputHistoryDraft, state.allocator)
 	}
 	for entry in state.history {
 		delete(entry.content, context.allocator)
@@ -544,7 +541,7 @@ run_app :: proc() {
 		if app_poll_tool_execution(&state) {
 			frameDirty = true
 		}
-		if app_poll_assistant_stream(&state) {
+		if app_poll_agent_host(&state) {
 			frameDirty = true
 			if state.historyRenderOnly {
 				historyDirty = true
@@ -1250,6 +1247,14 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if choice == .Deny {
 		output := "Permission denied."
+		if state.approval.historyIndex >= 0 {
+			app_update_tool_history(
+				state,
+				state.approval.historyIndex,
+				state.approval.call,
+				"denied",
+			)
+		}
 		if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
 			_ = agent.runtime_resolve_tool(
 				&state.agentHost.runtime,
@@ -1258,17 +1263,10 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 				.Denied,
 				output,
 			)
-			state.status = "Tool call denied"
-			state.mode = .Chat
-			app_clear_approval(state)
-			return
 		}
-		app_update_tool_history(state, state.approval.historyIndex, state.approval.call, "denied")
-		app_append_tool_result(state, state.approval.call.callID, output, true)
 		state.status = "Tool call denied"
 		state.mode = .Chat
 		app_clear_approval(state)
-		app_start_tool_continuation_if_ready(state)
 		return
 	}
 
@@ -1304,6 +1302,13 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		}
 	}
 
+	if agent.agent_id_is_none(state.approval.agentID) || state.approval.agentRequestID == "" {
+		state.status = "Tool call is no longer active"
+		state.mode = .Chat
+		app_clear_approval(state)
+		return
+	}
+
 	if state.approval.historyIndex < 0 {
 		state.approval.historyIndex = app_append_tool_history(
 			state,
@@ -1313,18 +1318,13 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	} else {
 		app_update_tool_history(state, state.approval.historyIndex, state.approval.call, "running")
 	}
-	started := false
-	if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
-		started = app_start_agent_tool_execution(
-			state,
-			state.approval.call,
-			state.approval.historyIndex,
-			state.approval.agentID,
-			state.approval.agentRequestID,
-		)
-	} else {
-		started = app_start_tool_execution(state, state.approval.call, state.approval.historyIndex)
-	}
+	started := app_start_agent_tool_execution(
+		state,
+		state.approval.call,
+		state.approval.historyIndex,
+		state.approval.agentID,
+		state.approval.agentRequestID,
+	)
 	state.mode = .Chat
 	app_clear_approval(state)
 	if !started {
@@ -1620,7 +1620,7 @@ app_record_input_history :: proc(state: ^App_State, text: string) {
 		app_reset_input_history_browse(state)
 		return
 	}
-	append(&state.inputHistory, strings.clone(text, state.stream.bufferAllocator))
+	append(&state.inputHistory, strings.clone(text, state.allocator))
 	app_reset_input_history_browse(state)
 	if state.configHome != "" && state.workingDirectory != "" {
 		if save_input_history_to_file(
@@ -1652,13 +1652,18 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 }
 
 app_clear_input_history :: proc(state: ^App_State) {
+	if app_agent_host_stream_active(state) {
+		app_cancel_agent_host_stream(state)
+	}
+	state.agentHost.historyIndex = -1
+	state.agentHost.thinking = false
+	state.agentHost.spinnerVisible = false
 	for &entry in state.inputHistory {
-		delete(entry, state.stream.bufferAllocator)
+		delete(entry, state.allocator)
 		entry = ""
 	}
 	clear(&state.inputHistory)
 	app_reset_input_history_browse(state)
-	app_destroy_assistant_stream(state)
 	for &entry in state.history {
 		delete(entry.content, context.allocator)
 		entry = {}
@@ -1681,7 +1686,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 app_reset_input_history_browse :: proc(state: ^App_State) {
 	state.inputHistoryCursor = -1
 	if state.inputHistoryDraft != "" {
-		delete(state.inputHistoryDraft, state.stream.bufferAllocator)
+		delete(state.inputHistoryDraft, state.allocator)
 		state.inputHistoryDraft = ""
 	}
 }
@@ -1694,7 +1699,7 @@ app_input_history_previous :: proc(state: ^App_State) -> bool {
 	if state.inputHistoryCursor < 0 {
 		current := text_input.input_buffer_string(&state.input)
 		if current != "" {
-			state.inputHistoryDraft = strings.clone(current, state.stream.bufferAllocator)
+			state.inputHistoryDraft = strings.clone(current, state.allocator)
 		}
 		state.inputHistoryCursor = len(state.inputHistory) - 1
 	} else if state.inputHistoryCursor > 0 {
@@ -1747,14 +1752,13 @@ app_submit_input :: proc(state: ^App_State) {
 
 	app_record_input_history(state, text)
 
-	if app_assistant_stream_active(state) {
+	if app_agent_host_stream_active(state) {
 		state.status = "Assistant stream already active; use /stop first"
 		return
 	}
 
-	app_clear_assistant_stream_conversation(&state.stream)
 	append_history(state, .User, text)
-	app_start_assistant_stream(state)
+	_ = app_start_agent_host_stream(state)
 }
 
 app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
@@ -1768,7 +1772,7 @@ app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
 		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
 	case .Stop:
-		app_cancel_assistant_stream(state)
+		app_cancel_agent_host_stream(state)
 	case .Clear:
 		app_clear_input_history(state)
 	case .Unknown:
@@ -1847,7 +1851,7 @@ app_complete_setup :: proc(state: ^App_State) {
 }
 
 app_show_config :: proc(state: ^App_State) {
-	if app_assistant_stream_active(state) {
+	if app_agent_host_stream_active(state) {
 		state.status = "Assistant stream active; use /stop before changing config"
 		return
 	}

@@ -37,7 +37,7 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 				break
 			}
 		}
-		assert(found, fmt.aprintf("expected tool '%s' to be present", expected))
+		assert(found, "expected tool definition to be present")
 	}
 }
 
@@ -55,12 +55,14 @@ test_read_file_tool_reads_existing_file :: proc(t: ^testing.T) {
 
 	// Read the file using our tool
 	result := read_file(test_file_path)
+	defer delete(result, context.allocator)
 	assert(result == test_content, "expected to read file content")
 }
 
 @(test)
 test_read_file_tool_returns_error_for_nonexistent :: proc(t: ^testing.T) {
 	result := read_file("/nonexistent/path/to/file.txt")
+	defer delete(result, context.allocator)
 	assert(
 		strings.contains(result, "Error reading file"),
 		"expected error message for nonexistent file",
@@ -77,14 +79,13 @@ test_write_file_tool_creates_new_file :: proc(t: ^testing.T) {
 	test_content := "New file content"
 
 	result := write_file(test_file_path, test_content, "false")
-	assert(
-		result == "File written successfully",
-		fmt.aprintf("expected success message, got: %s", result),
-	)
+	defer delete(result, context.allocator)
+	assert(result == "File written successfully", "expected success message")
 }
 
 @(test)
 test_list_available_shells_returns_nonempty :: proc(t: ^testing.T) {
 	result := list_available_shells()
+	defer delete(result, context.allocator)
 	assert(len(result) > 0, "expected at least one shell to be listed")
 }
