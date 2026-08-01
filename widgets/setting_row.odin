@@ -21,3 +21,15 @@ setting_row_button :: proc(label: string, allocator := context.allocator) -> str
 setting_row_choice :: proc(label, value: string, allocator := context.allocator) -> string {
 	return strings.concatenate({label, ": < ", value, " >"}, allocator)
 }
+
+setting_row_option :: proc(
+	label: string,
+	selected: bool,
+	allocator := context.allocator,
+) -> string {
+	marker := "  "
+	if selected {
+		marker = "* "
+	}
+	return strings.concatenate({marker, label}, allocator)
+}

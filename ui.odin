@@ -697,28 +697,27 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	   setting.modelIndex >= 0 &&
 	   setting.modelIndex < len(state.models) {
 		entry := state.models[setting.modelIndex]
-		active := " "
+		selected := false
 		if setting.id == .Chat_Model &&
 		   entry.providerName == state.config.selectedProvider &&
 		   entry.model == state.config.selectedModel {
-			active = "*"
+			selected = true
 		}
 		if setting.id == .Embedding_Model &&
 		   entry.providerName == state.config.embeddingProvider &&
 		   entry.model == state.config.embeddingModel {
-			active = "*"
+			selected = true
 		}
 		if setting.id == .Safety_Model &&
 		   entry.providerName == state.config.safetyProvider &&
 		   entry.model == state.config.safetyModel {
-			active = "*"
+			selected = true
 		}
-		strings.write_string(&builder, active)
-		strings.write_string(&builder, " ")
-		strings.write_string(&builder, entry.providerName)
-		strings.write_string(&builder, " / ")
-		strings.write_string(&builder, entry.model)
-		return strings.to_string(builder)
+		label := strings.concatenate(
+			{entry.providerName, " / ", entry.model},
+			context.temp_allocator,
+		)
+		return widgets.setting_row_option(label, selected, context.temp_allocator)
 	}
 	if setting.id == .Tool_Continuations {
 		strings.write_string(&builder, "Tool continuation limit: ")

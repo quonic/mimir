@@ -1505,6 +1505,38 @@ test_safety_model_selection_accepts_chat_capability :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_formats_selected_model_options :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			model = strings.clone("chat", context.allocator),
+			supportsChat = true,
+		},
+	)
+	setting := Config_Setting {
+		id         = .Chat_Model,
+		kind       = .Single_Select,
+		modelIndex = 0,
+	}
+	state.config.selectedProvider = "ollama"
+	state.config.selectedModel = "chat"
+
+	assert(
+		config_setting_line(&state, setting) == "* ollama / chat",
+		"expected selected model option marker",
+	)
+	state.config.selectedModel = "other"
+	assert(
+		config_setting_line(&state, setting) == "  ollama / chat",
+		"expected unselected model option marker",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)

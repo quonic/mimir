@@ -21,5 +21,13 @@ test_setting_row_formats_control_labels :: proc(t: ^testing.T) {
 		"Approval method: < Always ask >",
 		"expected choice label",
 	)
+	assert(
+		setting_row_option("ollama / chat", true, context.temp_allocator) == "* ollama / chat",
+		"expected selected option label",
+	)
+	assert(
+		setting_row_option("ollama / chat", false, context.temp_allocator) == "  ollama / chat",
+		"expected unselected option label",
+	)
 	_ = t
 }
