@@ -376,8 +376,8 @@ write_tool_json_string :: proc(builder: ^strings.Builder, text: string) {
 		case:
 			if b < 0x20 {
 				strings.write_string(builder, "\\u00")
-				strings.write_byte(builder, hex[int((b>>4)&0x0f)])
-				strings.write_byte(builder, hex[int(b&0x0f)])
+				strings.write_byte(builder, hex[int((b >> 4) & 0x0f)])
+				strings.write_byte(builder, hex[int(b & 0x0f)])
 			} else {
 				strings.write_byte(builder, b)
 			}
