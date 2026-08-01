@@ -1,6 +1,7 @@
 package main
 
 import agent "./agent"
+import tool_policy "./tool_policy"
 import "ai"
 import "core:testing"
 
@@ -153,7 +154,7 @@ test_agent_host_approval_retains_runtime_request_identity :: proc(t: ^testing.T)
 	assert(
 		app_show_agent_approval(
 			&state,
-			Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
 			agentID,
 			"call-1",
 		),
@@ -195,7 +196,7 @@ test_agent_approval_denial_resolves_the_runtime_request :: proc(t: ^testing.T) {
 	assert(
 		app_show_agent_approval(
 			&state,
-			Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
 			agentID,
 			requestEvent.requestID,
 		),

@@ -2,8 +2,10 @@ package main
 
 import agent "./agent"
 import approval_safety "./approval_safety"
+import builtin_tools "./builtin_tools"
 import input_history "./input_history"
 import settings "./settings"
+import tool_policy "./tool_policy"
 import "ai"
 import "code_index"
 import "console"
@@ -18,7 +20,10 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		app_show_approval(
+			&state,
+			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+		),
 		"expected write call to open approval modal",
 	)
 	assert(state.mode == .Approval, "expected approval mode")
@@ -38,7 +43,10 @@ test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		app_show_approval(
+			&state,
+			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+		),
 		"expected write call to open approval modal",
 	)
 	motion := "\x1b[<35;44;44M"
@@ -77,7 +85,7 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 	)
 	assert(callOK, "expected command tool call to decode")
 	assert(app_show_approval(&state, call), "expected command call to open approval modal")
-	tool_call_destroy(&call, context.allocator)
+	tool_policy.tool_call_destroy(&call, context.allocator)
 
 	sequence := render_app_frame_sequence(&state, 18, 80, context.temp_allocator)
 	assert(
@@ -163,7 +171,10 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "generated/output.txt"}),
+		app_show_approval(
+			&state,
+			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+		),
 		"expected write call to open approval modal",
 	)
 	assert(
@@ -190,7 +201,10 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(&state, Tool_Call{id = "run_command", command = "git status"}),
+		app_show_approval(
+			&state,
+			tool_policy.Tool_Call{id = "run_command", command = "git status"},
+		),
 		"expected command call to open approval modal",
 	)
 	approval_safety.mark_unavailable(&state.approval.safety)
@@ -325,7 +339,7 @@ test_app_approve_safe_allows_only_safe_verdict :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	state.config.approvalMethod = .Approve_Safe
 	assert(
-		app_show_approval(&state, Tool_Call{id = "run_command", command = "pwd"}),
+		app_show_approval(&state, tool_policy.Tool_Call{id = "run_command", command = "pwd"}),
 		"expected command call to open approval state",
 	)
 	assert(
@@ -341,7 +355,7 @@ test_app_approve_safe_falls_back_for_risky_verdict :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	state.config.approvalMethod = .Approve_Safe
 	assert(
-		app_show_approval(&state, Tool_Call{id = "write_file", filePath = "output.txt"}),
+		app_show_approval(&state, tool_policy.Tool_Call{id = "write_file", filePath = "output.txt"}),
 		"expected write call to open approval state",
 	)
 	assert(
@@ -440,7 +454,7 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 		arguments = `{"file_path":"notes.txt","content":"hello","overwrite":"true"}`,
 	}
 	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
-	defer tool_call_destroy(&call, context.allocator)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
 	assert(ok, "expected JSON arguments to decode")
 	assert(call.id == "write_file", "expected decoded tool ID")
 	assert(call.filePath == "notes.txt", "expected decoded file path")
@@ -452,7 +466,7 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T) {
 	assert(
 		app_tool_history_content(
-			Tool_Call{id = "list_directory", directoryPath = "src/agent"},
+			tool_policy.Tool_Call{id = "list_directory", directoryPath = "src/agent"},
 			"running",
 		) ==
 		"list_directory: src/agent (running)",
@@ -460,20 +474,23 @@ test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T)
 	)
 	assert(
 		app_tool_history_content(
-			Tool_Call{id = "search_code", query = "permission dispatch"},
+			tool_policy.Tool_Call{id = "search_code", query = "permission dispatch"},
 			"completed",
 		) ==
 		"search_code: permission dispatch (completed)",
 		"expected search query in history",
 	)
 	assert(
-		app_tool_history_content(Tool_Call{id = "mcp", mcpServer = "github"}, "running") ==
+		app_tool_history_content(
+			tool_policy.Tool_Call{id = "mcp", mcpServer = "github"},
+			"running",
+		) ==
 		"mcp: github (running)",
 		"expected MCP server in history",
 	)
 	assert(
 		app_tool_history_content(
-			Tool_Call{id = "write_file", filePath = "notes.txt", content = "secret"},
+			tool_policy.Tool_Call{id = "write_file", filePath = "notes.txt", content = "secret"},
 			"running",
 		) ==
 		"write_file: notes.txt (running)",
@@ -481,14 +498,14 @@ test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T)
 	)
 	assert(
 		app_tool_history_content(
-			Tool_Call{id = "run_command", command = "printf 'one\ntwo'\x1b[2J"},
+			tool_policy.Tool_Call{id = "run_command", command = "printf 'one\ntwo'\x1b[2J"},
 			"running",
 		) ==
 		"run_command: printf 'one\\ntwo'\\e[2J (running)",
 		"expected command controls to be escaped",
 	)
 	assert(
-		app_tool_history_content(Tool_Call{id = "list_available_shells"}, "completed") ==
+		app_tool_history_content(tool_policy.Tool_Call{id = "list_available_shells"}, "completed") ==
 		"list_available_shells (completed)",
 		"expected targetless tool fallback",
 	)
@@ -503,7 +520,7 @@ test_app_decodes_search_code_tool_arguments :: proc(t: ^testing.T) {
 		arguments = `{"query":"permission dispatch","max_results":50}`,
 	}
 	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
-	defer tool_call_destroy(&call, context.allocator)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
 	assert(ok, "expected search_code arguments to decode")
 	assert(call.query == "permission dispatch", "expected search query")
 	assert(call.maxResults == SEARCH_CODE_MAX_RESULTS, "expected maximum results cap")
@@ -518,7 +535,7 @@ test_app_decodes_find_code_tool_arguments :: proc(t: ^testing.T) {
 		arguments = `{"query":"write_decimal","max_results":0}`,
 	}
 	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
-	defer tool_call_destroy(&call, context.allocator)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
 	assert(ok, "expected find_code arguments to decode")
 	assert(call.query == "write_decimal", "expected decoded exact query")
 	assert(call.maxResults == SEARCH_CODE_DEFAULT_MAX_RESULTS, "expected default result limit")
@@ -568,7 +585,7 @@ test_app_releases_retained_failed_command_output :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	append(&state.stream.conversation, ai.Message{role = .Assistant})
 
-	output := run_command_tool_proc("ip add")
+	output := builtin_tools.run_command("ip add")
 	app_append_tool_result(&state, "call-1", output, true)
 	delete(output, context.allocator)
 
@@ -1982,7 +1999,6 @@ test_default_app_state_has_registries :: proc(t: ^testing.T) {
 		state.config.providers[0].endpoint == settings.DEFAULT_CONFIG_ENDPOINT,
 		"expected default endpoint",
 	)
-	assert(len(state.tools.definitions) >= 3, "expected built-in tool registry entries")
 	_ = t
 }
 

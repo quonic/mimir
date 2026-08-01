@@ -5,6 +5,7 @@ import agent "./agent"
 import approval_safety "./approval_safety"
 import input_history "./input_history"
 import settings "./settings"
+import tool_policy "./tool_policy"
 import "ai"
 import "code_index"
 import "console"
@@ -45,9 +46,9 @@ Approval_Input_State :: enum int {
 }
 
 Approval_State :: struct {
-	call:           Tool_Call,
+	call:           tool_policy.Tool_Call,
 	callOwned:      bool,
-	prepared:       Tool_Dispatch_Result,
+	prepared:       tool_policy.Tool_Dispatch_Result,
 	preparedOwned:  bool,
 	historyIndex:   int,
 	agentID:        agent.Agent_ID,
@@ -191,8 +192,7 @@ App_State :: struct {
 	setupStep:              App_Setup_Step,
 	setupEndpoint:          string,
 	setupAPIKey:            string,
-	tools:                  Tool_Registry,
-	dispatcher:             Tool_Dispatcher,
+	dispatcher:             tool_policy.Tool_Dispatcher,
 	dispatcherReady:        bool,
 	approval:               Approval_State,
 	mcp:                    settings.MCP_Registry,
@@ -257,8 +257,7 @@ app_init_with_home :: proc(
 	app_bootstrap_config(&state, home, probeOllama, allocator)
 	app_load_input_history(&state, allocator)
 	app_rebuild_code_index(&state, allocator)
-	state.tools = builtin_tool_registry(allocator)
-	state.dispatcher, state.dispatcherReady = tool_dispatcher_init(
+	state.dispatcher, state.dispatcherReady = tool_policy.tool_dispatcher_init(
 		state.workingDirectory,
 		state.config.permissionGrants[:],
 		allocator,
@@ -412,7 +411,7 @@ app_destroy :: proc(state: ^App_State) {
 	delete(state.history)
 	app_clear_approval(state)
 	if state.dispatcherReady {
-		tool_dispatcher_destroy(&state.dispatcher)
+		tool_policy.tool_dispatcher_destroy(&state.dispatcher)
 	}
 	if state.codeIndexReady {
 		code_index.code_index_destroy(&state.codeIndex, context.allocator)
@@ -448,7 +447,6 @@ app_destroy :: proc(state: ^App_State) {
 	if state.setupAPIKey != "" {
 		delete(state.setupAPIKey, context.allocator)
 	}
-	delete(state.tools.definitions)
 	delete(state.mcp.servers)
 	delete(state.skills.skills)
 	if !state.configStringsOwned {
@@ -623,7 +621,7 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 	state.historySelection = {}
 }
 
-app_tool_history_content :: proc(call: Tool_Call, status: string) -> string {
+app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) -> string {
 	target := ""
 	switch call.id {
 	case "read_file", "write_file", "get_file_info":
@@ -644,7 +642,11 @@ app_tool_history_content :: proc(call: Tool_Call, status: string) -> string {
 	return fmt.tprintf("%s: %s (%s)", call.id, displayTarget, status)
 }
 
-app_append_tool_history :: proc(state: ^App_State, call: Tool_Call, status: string) -> int {
+app_append_tool_history :: proc(
+	state: ^App_State,
+	call: tool_policy.Tool_Call,
+	status: string,
+) -> int {
 	append_history(state, .Tool, app_tool_history_content(call, status))
 	return len(state.history) - 1
 }
@@ -652,7 +654,7 @@ app_append_tool_history :: proc(state: ^App_State, call: Tool_Call, status: stri
 app_update_tool_history :: proc(
 	state: ^App_State,
 	historyIndex: int,
-	call: Tool_Call,
+	call: tool_policy.Tool_Call,
 	status: string,
 ) {
 	if historyIndex < 0 || historyIndex >= len(state.history) {
@@ -1096,16 +1098,16 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	return false
 }
 
-app_show_approval :: proc(state: ^App_State, call: Tool_Call) -> bool {
+app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
 	if !state.dispatcherReady || state.mode == .Approval {
 		return false
 	}
 
-	approvalCall := tool_call_clone(call, state.dispatcher.allocator)
-	prepared := tool_dispatch_prepare(&state.dispatcher, approvalCall)
+	approvalCall := tool_policy.tool_call_clone(call, state.dispatcher.allocator)
+	prepared := tool_policy.tool_dispatch_prepare(&state.dispatcher, approvalCall)
 	if prepared.decision != .Approval_Required || !prepared.actionOK {
-		tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
-		tool_call_destroy(&approvalCall, state.dispatcher.allocator)
+		tool_policy.tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
+		tool_policy.tool_call_destroy(&approvalCall, state.dispatcher.allocator)
 		return false
 	}
 
@@ -1160,10 +1162,13 @@ app_safety_allows_automatic_approval :: proc(
 app_clear_approval :: proc(state: ^App_State) {
 	app_destroy_approval_safety(&state.approval.safety)
 	if state.approval.callOwned {
-		tool_call_destroy(&state.approval.call, state.dispatcher.allocator)
+		tool_policy.tool_call_destroy(&state.approval.call, state.dispatcher.allocator)
 	}
 	if state.approval.preparedOwned {
-		tool_dispatch_result_destroy(&state.approval.prepared, state.dispatcher.allocator)
+		tool_policy.tool_dispatch_result_destroy(
+			&state.approval.prepared,
+			state.dispatcher.allocator,
+		)
 	}
 	delete(state.approval.agentRequestID, state.dispatcher.allocator)
 	state.approval = {}
@@ -1293,7 +1298,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	}
 
 	if choice == .Allow_Session || choice == .Allow_Always {
-		grant, grantOK := tool_dispatch_grant_from_action(
+		grant, grantOK := tool_policy.tool_dispatch_grant_from_action(
 			state.approval.prepared.action,
 			state.dispatcher.allocator,
 		)
@@ -1303,15 +1308,15 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		}
 
 		if choice == .Allow_Session {
-			grantOK = tool_dispatcher_add_session_grant(&state.dispatcher, grant)
-			permission_grant_destroy(&grant, state.dispatcher.allocator)
+			grantOK = tool_policy.tool_dispatcher_add_session_grant(&state.dispatcher, grant)
+			tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
 		} else {
 			append(&state.config.permissionGrants, grant)
 			state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 			if state.configHome != "" &&
 			   settings.save_config_to_file(state.configHome, state.config) != .None {
 				grant = pop(&state.config.permissionGrants)
-				permission_grant_destroy(&grant, state.dispatcher.allocator)
+				tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
 				state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 				state.status = "Permission grant could not be saved"
 				return
