@@ -687,7 +687,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	   setting.providerIndex == state.configEditingSetting.providerIndex {
 		strings.write_string(&builder, config_setting_label(setting.id))
 		strings.write_string(&builder, ": ")
-		strings.write_string(&builder, text_input.input_buffer_string(&state.configEdit))
+		strings.write_string(&builder, widgets.text_editor_string(&state.configEditor))
 		return strings.to_string(builder)
 	}
 

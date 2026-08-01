@@ -216,11 +216,9 @@ App_State :: struct {
 	configSettings:         [dynamic]Config_Setting,
 	configSettingCursor:    int,
 	configProviderIndex:    int,
-	configEdit:             text_input.Input_Buffer,
+	configEditor:           widgets.Text_Editor,
 	configEditing:          bool,
 	configEditingSetting:   Config_Setting,
-	configUTF8Pending:      [utf8.UTF_MAX]byte,
-	configUTF8PendingLen:   int,
 }
 
 app_init :: proc(allocator := context.allocator) -> App_State {
@@ -268,7 +266,7 @@ app_init_with_home :: proc(
 	state.skills = settings.skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
-	state.configEdit = text_input.input_buffer_init(allocator)
+	state.configEditor = widgets.text_editor_init(allocator)
 	append_history(&state, .System, "Mimir the terminal harness is ready.")
 	return state
 }
@@ -473,7 +471,7 @@ app_destroy :: proc(state: ^App_State) {
 	}
 	app_clear_model_entries(state)
 	delete(state.configSettings)
-	text_input.input_buffer_destroy(&state.configEdit)
+	widgets.text_editor_destroy(&state.configEditor)
 	delete(state.models)
 	ai.clear_interfaces()
 }
@@ -1883,7 +1881,7 @@ app_show_config :: proc(state: ^App_State) {
 	state.configSettingCursor = 0
 	state.configProviderIndex = app_config_active_provider_index(state)
 	state.configEditing = false
-	text_input.input_buffer_clear(&state.configEdit)
+	widgets.text_editor_clear(&state.configEditor)
 	app_rebuild_config_settings(state)
 	state.mode = .Config
 	state.status = "Config: arrows/Tab, Enter, Esc"
@@ -2196,13 +2194,12 @@ app_cycle_approval_method :: proc(state: ^App_State) {
 
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	if setting.id == .Tool_Continuations {
-		text_input.input_buffer_set_text(
-			&state.configEdit,
+		widgets.text_editor_set_text(
+			&state.configEditor,
 			fmt.tprintf("%d", state.config.toolContinuations),
 		)
 		state.configEditingSetting = setting
 		state.configEditing = true
-		state.configUTF8PendingLen = 0
 		state.status = "Editing: Enter saves, Esc cancels"
 		return
 	}
@@ -2228,90 +2225,31 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	case:
 		return
 	}
-	text_input.input_buffer_set_text(&state.configEdit, value)
+	widgets.text_editor_set_text(&state.configEditor, value)
 	state.configEditingSetting = setting
 	state.configEditing = true
-	state.configUTF8PendingLen = 0
 	state.status = "Editing: Enter saves, Esc cancels"
 }
 
 app_handle_config_edit_input :: proc(state: ^App_State, input: byte) -> bool {
-	switch input {
-	case 1:
-		state.configUTF8PendingLen = 0
-		text_input.input_buffer_move_cursor_start(&state.configEdit)
-		return true
-	case 5:
-		state.configUTF8PendingLen = 0
-		text_input.input_buffer_move_cursor_end(&state.configEdit)
-		return true
-	case 8, 127:
-		state.configUTF8PendingLen = 0
-		return text_input.input_buffer_backspace(&state.configEdit)
-	case '\r':
-		state.configUTF8PendingLen = 0
+	handled, event := widgets.text_editor_handle_byte(&state.configEditor, input)
+	switch event {
+	case .None:
+	case .Commit:
 		app_commit_config_edit(state)
-		return true
-	case 0x1b:
+	case .Cancel:
 		state.configEditing = false
-		state.configUTF8PendingLen = 0
-		text_input.input_buffer_clear(&state.configEdit)
+		widgets.text_editor_clear(&state.configEditor)
 		state.status = "Config edit canceled"
-		return true
-	case:
-		if input >= 32 || input == '\t' {
-			return app_handle_config_text_byte(state, input)
-		}
 	}
-	return false
-}
-
-app_handle_config_text_byte :: proc(state: ^App_State, input: byte) -> bool {
-	if input < utf8.RUNE_SELF {
-		state.configUTF8PendingLen = 0
-		text_input.input_buffer_push_byte(&state.configEdit, input)
-		return true
-	}
-
-	if state.configUTF8PendingLen == 0 {
-		if app_utf8_sequence_length(input) == 0 {
-			return false
-		}
-		state.configUTF8Pending[0] = input
-		state.configUTF8PendingLen = 1
-	} else {
-		if input < utf8.LOCB ||
-		   input > utf8.HICB ||
-		   state.configUTF8PendingLen >= len(state.configUTF8Pending) {
-			state.configUTF8PendingLen = 0
-			return false
-		}
-		state.configUTF8Pending[state.configUTF8PendingLen] = input
-		state.configUTF8PendingLen += 1
-	}
-
-	expectedLength := app_utf8_sequence_length(state.configUTF8Pending[0])
-	if state.configUTF8PendingLen < expectedLength {
-		return false
-	}
-	_, width := utf8.decode_rune(state.configUTF8Pending[:expectedLength])
-	if width != expectedLength {
-		state.configUTF8PendingLen = 0
-		return false
-	}
-	text_input.input_buffer_push_text(
-		&state.configEdit,
-		string(state.configUTF8Pending[:expectedLength]),
-	)
-	state.configUTF8PendingLen = 0
-	return true
+	return handled
 }
 
 app_commit_config_edit :: proc(state: ^App_State) {
 	setting := state.configEditingSetting
-	text := text_input.input_buffer_string(&state.configEdit)
+	text := widgets.text_editor_string(&state.configEditor)
 	state.configEditing = false
-	text_input.input_buffer_clear(&state.configEdit)
+	widgets.text_editor_clear(&state.configEditor)
 
 	if setting.id == .Tool_Continuations {
 		continuations, continuationsOK := strconv.parse_int(text)

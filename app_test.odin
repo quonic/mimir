@@ -7,6 +7,7 @@ import commands "./commands"
 import input_history "./input_history"
 import settings "./settings"
 import tool_policy "./tool_policy"
+import widgets "./widgets"
 import "ai"
 import "code_index"
 import "console"
@@ -1582,6 +1583,25 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_accepts_utf8_text_edit :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	assert(!app_handle_input_byte(&state, 0xc3), "expected UTF-8 prefix to wait")
+	assert(app_handle_input_byte(&state, 0xa9), "expected UTF-8 sequence completion")
+	assert(app_handle_input_byte(&state, '\r'), "expected name text commit")
+	assert(
+		state.config.providers[0].name == "ollama\xc3\xa9",
+		"expected committed UTF-8 provider name",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1595,7 +1615,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
 	assert(state.configEditing, "expected continuation setting edit mode")
-	text_input.input_buffer_set_text(&state.configEdit, "2500")
+	widgets.text_editor_set_text(&state.configEditor, "2500")
 	app_commit_config_edit(&state)
 
 	assert(state.config.toolContinuations == 2500, "expected continuation limit to update")
@@ -1613,7 +1633,7 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 	app_rebuild_config_settings(&state)
 	state.configSettingCursor = 1
 	app_activate_config_setting(&state)
-	text_input.input_buffer_set_text(&state.configEdit, "0")
+	widgets.text_editor_set_text(&state.configEditor, "0")
 	app_commit_config_edit(&state)
 
 	assert(
