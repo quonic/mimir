@@ -3,6 +3,7 @@ package main
 
 import agent "./agent"
 import approval_safety "./approval_safety"
+import commands "./commands"
 import input_history "./input_history"
 import settings "./settings"
 import tool_policy "./tool_policy"
@@ -1763,7 +1764,7 @@ app_submit_input :: proc(state: ^App_State) {
 		return
 	}
 
-	command := parse_slash_command(text)
+	command := commands.parse_slash_command(text)
 	if command.isCommand {
 		app_run_command(state, command)
 		return
@@ -1780,23 +1781,23 @@ app_submit_input :: proc(state: ^App_State) {
 	_ = app_start_agent_host_stream(state)
 }
 
-app_run_command :: proc(state: ^App_State, command: Parsed_Command) {
+app_run_command :: proc(state: ^App_State, command: commands.Parsed_Command) {
 	switch command.kind {
-	case .Exit:
+	case commands.Slash_Command.Exit:
 		state.shouldQuit = true
 		state.status = "Exiting"
-	case .Config:
+	case commands.Slash_Command.Config:
 		app_show_config(state)
-	case .Help:
+	case commands.Slash_Command.Help:
 		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
-	case .Stop:
+	case commands.Slash_Command.Stop:
 		app_cancel_agent_host_stream(state)
-	case .Clear:
+	case commands.Slash_Command.Clear:
 		app_clear_input_history(state)
-	case .Unknown:
+	case commands.Slash_Command.Unknown:
 		state.status = "Unknown command"
-	case .None:
+	case commands.Slash_Command.None:
 		state.status = "Ready"
 	}
 }
