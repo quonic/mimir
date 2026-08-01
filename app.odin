@@ -13,6 +13,7 @@ import "core:strings"
 import "core:sys/posix"
 import "core:time"
 import "core:unicode/utf8"
+import text_input "text_input"
 
 APP_POLL_INTERVAL_MS :: 25
 APP_CURSOR_BLINK_INTERVAL :: 500 * time.Millisecond
@@ -157,7 +158,7 @@ Input_Escape_State :: enum int {
 
 App_State :: struct {
 	mode:                   App_Mode,
-	input:                  Input_Buffer,
+	input:                  text_input.Input_Buffer,
 	inputEscape:            Input_Escape_State,
 	inputEscapeParameter:   int,
 	inputEscapeModifier:    int,
@@ -209,7 +210,7 @@ App_State :: struct {
 	configSettings:         [dynamic]Config_Setting,
 	configSettingCursor:    int,
 	configProviderIndex:    int,
-	configEdit:             Input_Buffer,
+	configEdit:             text_input.Input_Buffer,
 	configEditing:          bool,
 	configEditingSetting:   Config_Setting,
 	configUTF8Pending:      [utf8.UTF_MAX]byte,
@@ -234,7 +235,7 @@ app_init_with_home :: proc(
 	state.agentHost = agent_host_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
-	state.input = input_buffer_init(allocator)
+	state.input = text_input.input_buffer_init(allocator)
 	state.inputPaste = make([dynamic]byte, 0, 0, allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
@@ -265,7 +266,7 @@ app_init_with_home :: proc(
 	state.skills = skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
-	state.configEdit = input_buffer_init(allocator)
+	state.configEdit = text_input.input_buffer_init(allocator)
 	append_history(&state, .System, "Mimir the terminal harness is ready.")
 	return state
 }
@@ -361,7 +362,7 @@ app_destroy :: proc(state: ^App_State) {
 	app_destroy_assistant_stream(state)
 	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
-	input_buffer_destroy(&state.input)
+	text_input.input_buffer_destroy(&state.input)
 	delete(state.inputPaste)
 	for entry in state.inputHistory {
 		delete(entry, state.stream.bufferAllocator)
@@ -437,7 +438,7 @@ app_destroy :: proc(state: ^App_State) {
 	}
 	app_clear_model_entries(state)
 	delete(state.configSettings)
-	input_buffer_destroy(&state.configEdit)
+	text_input.input_buffer_destroy(&state.configEdit)
 	delete(state.models)
 	ai.clear_interfaces()
 }
@@ -638,7 +639,10 @@ app_history_panel :: proc(state: ^App_State) -> console.Region {
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
 	return console.panel_interior(console.Panel{region = layout.historyPanel})
 }
@@ -648,7 +652,10 @@ app_input_panel :: proc(state: ^App_State) -> console.Region {
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
 	return console.panel_interior(console.Panel{region = layout.inputPanel})
 }
@@ -664,12 +671,12 @@ input_grapheme_index_at_column :: proc(text: string, column: int) -> int {
 		if column <= width {
 			return grapheme
 		}
-		width += unicode_grapheme_width_at(text, byteIndex)
+		width += text_input.unicode_grapheme_width_at(text, byteIndex)
 		grapheme += 1
 		if column <= width {
 			return grapheme
 		}
-		next := unicode_next_grapheme_offset(text, byteIndex)
+		next := text_input.unicode_next_grapheme_offset(text, byteIndex)
 		if next <= byteIndex {
 			break
 		}
@@ -684,7 +691,7 @@ app_input_grapheme_at :: proc(state: ^App_State, row, column: int) -> (int, bool
 		return 0, false
 	}
 
-	text := input_buffer_string(&state.input)
+	text := text_input.input_buffer_string(&state.input)
 	width := console.region_width(region)
 	currentRow := region.top_row
 	lineStartGrapheme := 0
@@ -707,7 +714,7 @@ app_input_grapheme_at :: proc(state: ^App_State, row, column: int) -> (int, bool
 					true
 			}
 			currentRow += 1
-			lineStartGrapheme += unicode_grapheme_count(line[start:next])
+			lineStartGrapheme += text_input.unicode_grapheme_count(line[start:next])
 			if next <= start {
 				break
 			}
@@ -821,7 +828,7 @@ app_history_selection_text :: proc(state: ^App_State, allocator := context.alloc
 			break
 		}
 		selectionStart := 0
-		selectionEnd := unicode_text_width(line)
+		selectionEnd := text_input.unicode_text_width(line)
 		if lineNumber == startLine {
 			selectionStart = startColumn - region.left_column
 		}
@@ -835,14 +842,14 @@ app_history_selection_text :: proc(state: ^App_State, allocator := context.alloc
 			selectionEnd = selectionStart
 		}
 		for byteIndex := 0; byteIndex < len(line); {
-			graphemeWidth := unicode_grapheme_width_at(line, byteIndex)
-			graphemeEnd := unicode_text_width(line[:byteIndex]) + graphemeWidth
+			graphemeWidth := text_input.unicode_grapheme_width_at(line, byteIndex)
+			graphemeEnd := text_input.unicode_text_width(line[:byteIndex]) + graphemeWidth
 			graphemeStart := graphemeEnd - graphemeWidth
 			if graphemeEnd > selectionStart && graphemeStart < selectionEnd {
-				next := unicode_next_grapheme_offset(line, byteIndex)
+				next := text_input.unicode_next_grapheme_offset(line, byteIndex)
 				strings.write_string(&builder, line[byteIndex:next])
 			}
-			next := unicode_next_grapheme_offset(line, byteIndex)
+			next := text_input.unicode_next_grapheme_offset(line, byteIndex)
 			if next <= byteIndex {
 				break
 			}
@@ -869,7 +876,10 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 	if input_width < 1 {
 		input_width = 1
 	}
-	input_lines := wrapped_text_line_count(input_buffer_string(&state.input), input_width)
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
 	if event.kind == .Wheel {
 		panel := layout.historyPanel
@@ -914,7 +924,7 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 				line         = line,
 				column       = event.column,
 			}
-			input_buffer_clear_selection(&state.input)
+			text_input.input_buffer_clear_selection(&state.input)
 			state.mouseSelectionPanel = .History
 			return true
 		}
@@ -928,7 +938,7 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 		if !ok {
 			return false
 		}
-		input_buffer_select_range(&state.input, grapheme, grapheme)
+		text_input.input_buffer_select_range(&state.input, grapheme, grapheme)
 		state.historySelection = {}
 		state.mouseSelectionPanel = .Input
 		return true
@@ -960,7 +970,7 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 		if !ok {
 			return false
 		}
-		input_buffer_extend_selection_to(&state.input, grapheme)
+		text_input.input_buffer_extend_selection_to(&state.input, grapheme)
 		return true
 	case .Release:
 		if state.mouseSelectionPanel == .History {
@@ -992,7 +1002,7 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	switch input {
 	case 1:
 		app_reset_input_utf8_pending(state)
-		input_buffer_select_all(&state.input)
+		text_input.input_buffer_select_all(&state.input)
 		return true
 	case 3:
 		app_reset_input_utf8_pending(state)
@@ -1004,14 +1014,16 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 		return true
 	case 5:
 		app_reset_input_utf8_pending(state)
-		input_buffer_move_cursor_end(&state.input)
+		text_input.input_buffer_move_cursor_end(&state.input)
 		return true
 	case 24:
 		app_reset_input_utf8_pending(state)
-		if input_buffer_has_selection(&state.input) {
-			_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
+		if text_input.input_buffer_has_selection(&state.input) {
+			_, _ = console.osc52_copy_to_clipboard(
+				text_input.input_buffer_selection_text(&state.input),
+			)
 			app_reset_input_history_browse(state)
-			input_buffer_delete_selection(&state.input)
+			text_input.input_buffer_delete_selection(&state.input)
 			state.status = "Cut input selection"
 			return true
 		}
@@ -1025,7 +1037,7 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	case 8, 127:
 		app_reset_input_utf8_pending(state)
 		app_reset_input_history_browse(state)
-		return input_buffer_backspace(&state.input)
+		return text_input.input_buffer_backspace(&state.input)
 	case '\r':
 		app_reset_input_utf8_pending(state)
 		app_submit_input(state)
@@ -1033,7 +1045,7 @@ app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	case '\n':
 		app_reset_input_utf8_pending(state)
 		app_reset_input_history_browse(state)
-		input_buffer_push_byte(&state.input, '\n')
+		text_input.input_buffer_push_byte(&state.input, '\n')
 		return true
 	case 0x1b:
 		app_reset_input_utf8_pending(state)
@@ -1287,7 +1299,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 	if input < utf8.RUNE_SELF {
 		app_reset_input_utf8_pending(state)
-		input_buffer_push_byte(&state.input, input)
+		text_input.input_buffer_push_byte(&state.input, input)
 		return true
 	}
 
@@ -1323,7 +1335,10 @@ app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
 		return false
 	}
 
-	input_buffer_push_text(&state.input, string(state.inputUTF8Pending[:expectedLength]))
+	text_input.input_buffer_push_text(
+		&state.input,
+		string(state.inputUTF8Pending[:expectedLength]),
+	)
 	app_reset_input_utf8_pending(state)
 	return true
 }
@@ -1360,18 +1375,18 @@ app_reset_input_paste :: proc(state: ^App_State) {
 
 app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -> bool {
 	if extend {
-		cursor := input_buffer_cursor_position(&state.input)
+		cursor := text_input.input_buffer_cursor_position(&state.input)
 		switch input {
 		case 'C':
-			input_buffer_extend_selection_to(&state.input, cursor + 1)
+			text_input.input_buffer_extend_selection_to(&state.input, cursor + 1)
 		case 'D':
-			input_buffer_extend_selection_to(&state.input, cursor - 1)
+			text_input.input_buffer_extend_selection_to(&state.input, cursor - 1)
 		case 'H':
-			input_buffer_extend_selection_to(&state.input, 0)
+			text_input.input_buffer_extend_selection_to(&state.input, 0)
 		case 'F':
-			input_buffer_extend_selection_to(
+			text_input.input_buffer_extend_selection_to(
 				&state.input,
-				unicode_grapheme_count(input_buffer_string(&state.input)),
+				text_input.unicode_grapheme_count(text_input.input_buffer_string(&state.input)),
 			)
 		case:
 			return false
@@ -1381,22 +1396,24 @@ app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -
 
 	switch input {
 	case 'C':
-		return input_buffer_move_cursor_right(&state.input)
+		return text_input.input_buffer_move_cursor_right(&state.input)
 	case 'D':
-		return input_buffer_move_cursor_left(&state.input)
+		return text_input.input_buffer_move_cursor_left(&state.input)
 	case 'H':
-		input_buffer_move_cursor_start(&state.input)
+		text_input.input_buffer_move_cursor_start(&state.input)
 		return true
 	case 'F':
-		input_buffer_move_cursor_end(&state.input)
+		text_input.input_buffer_move_cursor_end(&state.input)
 		return true
 	}
 	return false
 }
 
 app_copy_active_selection :: proc(state: ^App_State) -> bool {
-	if input_buffer_has_selection(&state.input) {
-		_, _ = console.osc52_copy_to_clipboard(input_buffer_selection_text(&state.input))
+	if text_input.input_buffer_has_selection(&state.input) {
+		_, _ = console.osc52_copy_to_clipboard(
+			text_input.input_buffer_selection_text(&state.input),
+		)
 		state.status = "Copied input selection"
 		return true
 	}
@@ -1424,7 +1441,7 @@ app_finish_input_paste :: proc(state: ^App_State) {
 	terminator_length := len("\x1b[201~")
 	text := string(state.inputPaste[:len(state.inputPaste) - terminator_length])
 	app_reset_input_history_browse(state)
-	input_buffer_push_text(&state.input, text)
+	text_input.input_buffer_push_text(&state.input, text)
 	app_reset_input_paste(state)
 }
 
@@ -1485,12 +1502,12 @@ app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
 			case 6:
 				return app_scroll_history_page(state, -1)
 			case 1, 7:
-				input_buffer_move_cursor_start(&state.input)
+				text_input.input_buffer_move_cursor_start(&state.input)
 				return true
 			case 3:
-				return input_buffer_delete_at_cursor(&state.input)
+				return text_input.input_buffer_delete_at_cursor(&state.input)
 			case 4, 8:
-				input_buffer_move_cursor_end(&state.input)
+				text_input.input_buffer_move_cursor_end(&state.input)
 				return true
 			case:
 				return true
@@ -1639,7 +1656,7 @@ app_input_history_previous :: proc(state: ^App_State) -> bool {
 	}
 
 	if state.inputHistoryCursor < 0 {
-		current := input_buffer_string(&state.input)
+		current := text_input.input_buffer_string(&state.input)
 		if current != "" {
 			state.inputHistoryDraft = strings.clone(current, state.stream.bufferAllocator)
 		}
@@ -1648,8 +1665,8 @@ app_input_history_previous :: proc(state: ^App_State) -> bool {
 		state.inputHistoryCursor -= 1
 	}
 
-	input_buffer_set_text(&state.input, state.inputHistory[state.inputHistoryCursor])
-	input_buffer_move_cursor_end(&state.input)
+	text_input.input_buffer_set_text(&state.input, state.inputHistory[state.inputHistoryCursor])
+	text_input.input_buffer_move_cursor_end(&state.input)
 	return true
 }
 
@@ -1660,18 +1677,21 @@ app_input_history_next :: proc(state: ^App_State) -> bool {
 
 	if state.inputHistoryCursor < len(state.inputHistory) - 1 {
 		state.inputHistoryCursor += 1
-		input_buffer_set_text(&state.input, state.inputHistory[state.inputHistoryCursor])
-		input_buffer_move_cursor_end(&state.input)
+		text_input.input_buffer_set_text(
+			&state.input,
+			state.inputHistory[state.inputHistoryCursor],
+		)
+		text_input.input_buffer_move_cursor_end(&state.input)
 		return true
 	}
 
-	input_buffer_set_text(&state.input, state.inputHistoryDraft)
+	text_input.input_buffer_set_text(&state.input, state.inputHistoryDraft)
 	app_reset_input_history_browse(state)
 	return true
 }
 
 app_submit_input :: proc(state: ^App_State) {
-	text := input_buffer_submit(&state.input, context.allocator)
+	text := text_input.input_buffer_submit(&state.input, context.allocator)
 	defer delete(text, context.allocator)
 	if state.mode == .Setup {
 		app_submit_setup_input(state, text)
@@ -1802,7 +1822,7 @@ app_show_config :: proc(state: ^App_State) {
 	state.configSettingCursor = 0
 	state.configProviderIndex = app_config_active_provider_index(state)
 	state.configEditing = false
-	input_buffer_clear(&state.configEdit)
+	text_input.input_buffer_clear(&state.configEdit)
 	app_rebuild_config_settings(state)
 	state.mode = .Config
 	state.status = "Config: arrows/Tab, Enter, Esc"
@@ -2116,7 +2136,10 @@ app_cycle_approval_method :: proc(state: ^App_State) {
 
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	if setting.id == .Tool_Continuations {
-		input_buffer_set_text(&state.configEdit, fmt.tprintf("%d", state.config.toolContinuations))
+		text_input.input_buffer_set_text(
+			&state.configEdit,
+			fmt.tprintf("%d", state.config.toolContinuations),
+		)
 		state.configEditingSetting = setting
 		state.configEditing = true
 		state.configUTF8PendingLen = 0
@@ -2145,7 +2168,7 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	case:
 		return
 	}
-	input_buffer_set_text(&state.configEdit, value)
+	text_input.input_buffer_set_text(&state.configEdit, value)
 	state.configEditingSetting = setting
 	state.configEditing = true
 	state.configUTF8PendingLen = 0
@@ -2156,15 +2179,15 @@ app_handle_config_edit_input :: proc(state: ^App_State, input: byte) -> bool {
 	switch input {
 	case 1:
 		state.configUTF8PendingLen = 0
-		input_buffer_move_cursor_start(&state.configEdit)
+		text_input.input_buffer_move_cursor_start(&state.configEdit)
 		return true
 	case 5:
 		state.configUTF8PendingLen = 0
-		input_buffer_move_cursor_end(&state.configEdit)
+		text_input.input_buffer_move_cursor_end(&state.configEdit)
 		return true
 	case 8, 127:
 		state.configUTF8PendingLen = 0
-		return input_buffer_backspace(&state.configEdit)
+		return text_input.input_buffer_backspace(&state.configEdit)
 	case '\r':
 		state.configUTF8PendingLen = 0
 		app_commit_config_edit(state)
@@ -2172,7 +2195,7 @@ app_handle_config_edit_input :: proc(state: ^App_State, input: byte) -> bool {
 	case 0x1b:
 		state.configEditing = false
 		state.configUTF8PendingLen = 0
-		input_buffer_clear(&state.configEdit)
+		text_input.input_buffer_clear(&state.configEdit)
 		state.status = "Config edit canceled"
 		return true
 	case:
@@ -2186,7 +2209,7 @@ app_handle_config_edit_input :: proc(state: ^App_State, input: byte) -> bool {
 app_handle_config_text_byte :: proc(state: ^App_State, input: byte) -> bool {
 	if input < utf8.RUNE_SELF {
 		state.configUTF8PendingLen = 0
-		input_buffer_push_byte(&state.configEdit, input)
+		text_input.input_buffer_push_byte(&state.configEdit, input)
 		return true
 	}
 
@@ -2216,16 +2239,19 @@ app_handle_config_text_byte :: proc(state: ^App_State, input: byte) -> bool {
 		state.configUTF8PendingLen = 0
 		return false
 	}
-	input_buffer_push_text(&state.configEdit, string(state.configUTF8Pending[:expectedLength]))
+	text_input.input_buffer_push_text(
+		&state.configEdit,
+		string(state.configUTF8Pending[:expectedLength]),
+	)
 	state.configUTF8PendingLen = 0
 	return true
 }
 
 app_commit_config_edit :: proc(state: ^App_State) {
 	setting := state.configEditingSetting
-	text := input_buffer_string(&state.configEdit)
+	text := text_input.input_buffer_string(&state.configEdit)
 	state.configEditing = false
-	input_buffer_clear(&state.configEdit)
+	text_input.input_buffer_clear(&state.configEdit)
 
 	if setting.id == .Tool_Continuations {
 		continuations, continuationsOK := strconv.parse_int(text)

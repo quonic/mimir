@@ -6,56 +6,7 @@ import "console"
 import "core:os"
 import "core:strings"
 import "core:testing"
-
-@(test)
-test_input_buffer_tracks_multiline_text :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "first\nsecond")
-	assert(input_buffer_line_count(&buffer) == 2, "expected newline to expand input lines")
-	assert(
-		input_buffer_string(&buffer) == "first\nsecond",
-		"expected input buffer to preserve pasted text",
-	)
-
-	assert(input_buffer_backspace(&buffer), "expected backspace to remove trailing byte")
-	assert(input_buffer_string(&buffer) == "first\nsecon", "expected backspace to update text")
-	assert(
-		input_buffer_cursor_position(&buffer) == len(input_buffer_string(&buffer)),
-		"expected cursor to remain at end after trailing backspace",
-	)
-
-	submitted := input_buffer_submit(&buffer, context.temp_allocator)
-	assert(submitted == "first\nsecon", "expected submitted text to match input")
-	assert(input_buffer_string(&buffer) == "", "expected submit to clear input")
-	assert(input_buffer_cursor_position(&buffer) == 0, "expected submit to reset cursor")
-	_ = t
-}
-
-@(test)
-test_input_buffer_replaces_and_deletes_grapheme_selection :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "aébc")
-	input_buffer_extend_selection_to(&buffer, 1)
-	assert(input_buffer_has_selection(&buffer), "expected selection after extending from end")
-	assert(input_buffer_selection_text(&buffer) == "ébc", "expected selected UTF-8 graphemes")
-
-	input_buffer_push_text(&buffer, "X")
-	assert(input_buffer_string(&buffer) == "aX", "expected inserted text to replace selection")
-	assert(!input_buffer_has_selection(&buffer), "expected replacement to clear selection")
-
-	input_buffer_select_all(&buffer)
-	assert(input_buffer_backspace(&buffer), "expected backspace to delete the selection")
-	assert(input_buffer_string(&buffer) == "", "expected selection deletion to clear text")
-	assert(
-		input_buffer_cursor_position(&buffer) == 0,
-		"expected selection deletion to place cursor at start",
-	)
-	_ = t
-}
+import text_input "text_input"
 
 @(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
@@ -254,7 +205,7 @@ test_approval_safety_display_text_truncates_at_grapheme_boundary :: proc(t: ^tes
 	defer delete(response, context.temp_allocator)
 	advice := approval_safety_display_text(response, context.temp_allocator)
 	assert(
-		unicode_grapheme_count(advice) == APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES,
+		text_input.unicode_grapheme_count(advice) == APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES,
 		"expected advice to be limited to the display grapheme count",
 	)
 	assert(strings.has_suffix(advice, "..."), "expected truncated advice to end with an ellipsis")
@@ -865,96 +816,6 @@ test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_input_buffer_inserts_and_backspaces_at_cursor :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "ab")
-	assert(input_buffer_move_cursor_left(&buffer), "expected cursor to move left")
-	input_buffer_push_byte(&buffer, 'X')
-
-	assert(input_buffer_string(&buffer) == "aXb", "expected insertion at cursor")
-	assert(input_buffer_cursor_position(&buffer) == 2, "expected cursor after inserted byte")
-	assert(input_buffer_backspace(&buffer), "expected backspace before cursor")
-	assert(input_buffer_string(&buffer) == "ab", "expected backspace to remove inserted byte")
-	assert(
-		input_buffer_cursor_position(&buffer) == 1,
-		"expected cursor to move left after backspace",
-	)
-	assert(input_buffer_move_cursor_left(&buffer), "expected cursor to move to start")
-	assert(!input_buffer_move_cursor_left(&buffer), "expected left movement to stop at start")
-	assert(!input_buffer_backspace(&buffer), "expected backspace at start to do nothing")
-	assert(input_buffer_move_cursor_right(&buffer), "expected cursor to move right")
-	assert(input_buffer_move_cursor_right(&buffer), "expected cursor to move to end")
-	assert(!input_buffer_move_cursor_right(&buffer), "expected right movement to stop at end")
-	_ = t
-}
-
-@(test)
-test_input_buffer_moves_to_start_and_deletes_at_cursor :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "aéx")
-	input_buffer_move_cursor_start(&buffer)
-	assert(input_buffer_cursor_position(&buffer) == 0, "expected cursor at input start")
-	assert(input_buffer_delete_at_cursor(&buffer), "expected delete to remove first grapheme")
-	assert(
-		input_buffer_string(&buffer) == "éx",
-		"expected delete to preserve multi-byte grapheme",
-	)
-	assert(input_buffer_cursor_position(&buffer) == 0, "expected delete to retain cursor position")
-	assert(input_buffer_delete_at_cursor(&buffer), "expected delete to remove multi-byte grapheme")
-	assert(input_buffer_string(&buffer) == "x", "expected complete multi-byte grapheme removal")
-
-	input_buffer_set_text(&buffer, "éx")
-	input_buffer_move_cursor_start(&buffer)
-	assert(input_buffer_delete_at_cursor(&buffer), "expected delete to remove combining grapheme")
-	assert(
-		input_buffer_string(&buffer) == "x",
-		"expected delete to retain combining grapheme integrity",
-	)
-	input_buffer_move_cursor_end(&buffer)
-	assert(!input_buffer_delete_at_cursor(&buffer), "expected delete at end to do nothing")
-	_ = t
-}
-
-@(test)
-test_input_buffer_handles_multibyte_graphemes :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "café")
-	assert(input_buffer_cursor_position(&buffer) == 4, "expected cursor to count graphemes")
-	assert(input_buffer_move_cursor_left(&buffer), "expected cursor to move left over é")
-	input_buffer_push_text(&buffer, "X")
-
-	assert(input_buffer_string(&buffer) == "cafXé", "expected insertion before full é grapheme")
-	assert(input_buffer_backspace(&buffer), "expected backspace to remove inserted text")
-	assert(input_buffer_string(&buffer) == "café", "expected backspace to preserve UTF-8 text")
-	assert(input_buffer_move_cursor_right(&buffer), "expected cursor to move right over é")
-	assert(input_buffer_backspace(&buffer), "expected backspace to remove full é grapheme")
-	assert(input_buffer_string(&buffer) == "caf", "expected full multi-byte grapheme removal")
-	_ = t
-}
-
-@(test)
-test_input_buffer_handles_combining_graphemes :: proc(t: ^testing.T) {
-	buffer := input_buffer_init(context.temp_allocator)
-	defer input_buffer_destroy(&buffer)
-
-	input_buffer_push_text(&buffer, "é")
-	assert(
-		input_buffer_cursor_position(&buffer) == 1,
-		"expected combining mark to share cursor cell",
-	)
-	assert(input_buffer_backspace(&buffer), "expected backspace to remove combined grapheme")
-	assert(input_buffer_string(&buffer) == "", "expected combining grapheme to be removed at once")
-	assert(input_buffer_cursor_position(&buffer) == 0, "expected cursor to return to start")
-	_ = t
-}
-
-@(test)
 test_app_handle_input_byte_accumulates_utf8_text :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -963,9 +824,12 @@ test_app_handle_input_byte_accumulates_utf8_text :: proc(t: ^testing.T) {
 	assert(!app_handle_input_byte(&state, text[0]), "expected first UTF-8 byte to wait")
 	assert(app_handle_input_byte(&state, text[1]), "expected complete UTF-8 sequence to insert")
 
-	assert(input_buffer_string(&state.input) == "é", "expected multi-byte input to be preserved")
 	assert(
-		input_buffer_cursor_position(&state.input) == 1,
+		text_input.input_buffer_string(&state.input) == "é",
+		"expected multi-byte input to be preserved",
+	)
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 1,
 		"expected cursor to count one grapheme",
 	)
 	_ = t
@@ -1059,7 +923,7 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	append_history(&state, .User, "chat history")
 	state.historyScrollOffset = 1
 
-	input_buffer_push_text(&state.input, "/clear")
+	text_input.input_buffer_push_text(&state.input, "/clear")
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 0, "expected clear command to reset in-memory history")
 	assert(len(state.history) == 0, "expected clear command to reset panel history")
@@ -1075,13 +939,13 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "/config")
+	text_input.input_buffer_push_text(&state.input, "/config")
 	app_submit_input(&state)
 	assert(state.mode == .Config, "expected /config to switch app mode")
 	assert(state.status == "Config: arrows/Tab, Enter, Esc", "expected /config modal status")
 	assert(len(state.inputHistory) == 0, "expected commands to stay out of input history")
 
-	input_buffer_push_text(&state.input, "hello")
+	text_input.input_buffer_push_text(&state.input, "hello")
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 1, "expected chat input to enter input history")
 	assert(state.inputHistory[0] == "hello", "expected chat input history entry")
@@ -1096,7 +960,7 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 		"expected missing model to be reported in history",
 	)
 
-	input_buffer_push_text(&state.input, "/exit")
+	text_input.input_buffer_push_text(&state.input, "/exit")
 	app_submit_input(&state)
 	assert(state.shouldQuit, "expected /exit to request app shutdown")
 	assert(len(state.inputHistory) == 1, "expected exit command to stay out of input history")
@@ -1146,12 +1010,15 @@ test_chat_input_arrow_keys_move_cursor_and_insert :: proc(t: ^testing.T) {
 	assert(app_handle_input_byte(&state, 'D'), "expected left arrow to move cursor")
 	assert(app_handle_input_byte(&state, 'X'), "expected insertion after cursor movement")
 
-	assert(input_buffer_string(&state.input) == "aXb", "expected left arrow insertion")
-	assert(input_buffer_cursor_position(&state.input) == 2, "expected cursor after inserted byte")
+	assert(text_input.input_buffer_string(&state.input) == "aXb", "expected left arrow insertion")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 2,
+		"expected cursor after inserted byte",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'C'), "expected right arrow to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 3, "expected cursor at end")
+	assert(text_input.input_buffer_cursor_position(&state.input) == 3, "expected cursor at end")
 	_ = t
 }
 
@@ -1171,49 +1038,70 @@ test_chat_input_supports_home_end_delete_and_ctrl_navigation :: proc(t: ^testing
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "abcd")
+	text_input.input_buffer_push_text(&state.input, "abcd")
 	assert(app_handle_input_byte(&state, 1), "expected Ctrl+A to select input")
-	assert(input_buffer_has_selection(&state.input), "expected Ctrl+A selection")
-	assert(input_buffer_selection_text(&state.input) == "abcd", "expected Ctrl+A to select all")
+	assert(text_input.input_buffer_has_selection(&state.input), "expected Ctrl+A selection")
+	assert(
+		text_input.input_buffer_selection_text(&state.input) == "abcd",
+		"expected Ctrl+A to select all",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected left arrow escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected left arrow CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'D'), "expected left arrow to collapse selection")
 	assert(
-		input_buffer_cursor_position(&state.input) == 0,
+		text_input.input_buffer_cursor_position(&state.input) == 0,
 		"expected left arrow at selection start",
 	)
 	assert(app_handle_input_byte(&state, 5), "expected Ctrl+E to move to end")
-	assert(input_buffer_cursor_position(&state.input) == 4, "expected Ctrl+E at end")
+	assert(text_input.input_buffer_cursor_position(&state.input) == 4, "expected Ctrl+E at end")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'H'), "expected direct Home to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 0, "expected direct Home at start")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 0,
+		"expected direct Home at start",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(!app_handle_input_byte(&state, '4'), "expected numeric End parameter to wait")
 	assert(app_handle_input_byte(&state, '~'), "expected numeric End to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 4, "expected numeric End at end")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 4,
+		"expected numeric End at end",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(!app_handle_input_byte(&state, '7'), "expected numeric Home parameter to wait")
 	assert(app_handle_input_byte(&state, '~'), "expected numeric Home to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 0, "expected numeric Home at start")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 0,
+		"expected numeric Home at start",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(!app_handle_input_byte(&state, '8'), "expected alternate End parameter to wait")
 	assert(app_handle_input_byte(&state, '~'), "expected alternate End to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 4, "expected alternate End at end")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 4,
+		"expected alternate End at end",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'F'), "expected direct End to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 4, "expected direct End at end")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 4,
+		"expected direct End at end",
+	)
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(!app_handle_input_byte(&state, '1'), "expected alternate Home parameter to wait")
 	assert(app_handle_input_byte(&state, '~'), "expected alternate Home to move cursor")
-	assert(input_buffer_cursor_position(&state.input) == 0, "expected alternate Home at start")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == 0,
+		"expected alternate Home at start",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
@@ -1223,11 +1111,11 @@ test_chat_input_supports_home_end_delete_and_ctrl_navigation :: proc(t: ^testing
 	assert(!app_handle_input_byte(&state, '3'), "expected Delete parameter to wait")
 	assert(app_handle_input_byte(&state, '~'), "expected Delete to remove cursor grapheme")
 	assert(
-		input_buffer_string(&state.input) == "acd",
+		text_input.input_buffer_string(&state.input) == "acd",
 		"expected Delete to remove grapheme at cursor",
 	)
 	assert(
-		input_buffer_cursor_position(&state.input) == 1,
+		text_input.input_buffer_cursor_position(&state.input) == 1,
 		"expected Delete to retain cursor position",
 	)
 	_ = t
@@ -1244,7 +1132,7 @@ test_chat_input_discards_incomplete_numeric_csi_sequence :: proc(t: ^testing.T) 
 	assert(app_flush_pending_input(&state), "expected pending CSI sequence to be discarded")
 	assert(app_handle_input_byte(&state, 'x'), "expected input after discarded CSI to insert")
 	assert(
-		input_buffer_string(&state.input) == "x",
+		text_input.input_buffer_string(&state.input) == "x",
 		"expected discarded CSI bytes to stay out of input",
 	)
 	_ = t
@@ -1259,8 +1147,14 @@ test_chat_input_pastes_multiline_utf8_and_extends_selection :: proc(t: ^testing.
 	for index := 0; index < len(paste); index += 1 {
 		app_handle_input_byte(&state, paste[index])
 	}
-	assert(input_buffer_string(&state.input) == "one\né", "expected bracketed paste text")
-	assert(input_buffer_line_count(&state.input) == 2, "expected pasted newline to remain input")
+	assert(
+		text_input.input_buffer_string(&state.input) == "one\né",
+		"expected bracketed paste text",
+	)
+	assert(
+		text_input.input_buffer_line_count(&state.input) == 2,
+		"expected pasted newline to remain input",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected shift-left escape prefix")
 	assert(!app_handle_input_byte(&state, '['), "expected shift-left CSI prefix")
@@ -1268,7 +1162,10 @@ test_chat_input_pastes_multiline_utf8_and_extends_selection :: proc(t: ^testing.
 	assert(!app_handle_input_byte(&state, ';'), "expected modified CSI separator")
 	assert(!app_handle_input_byte(&state, '2'), "expected shift modifier")
 	assert(app_handle_input_byte(&state, 'D'), "expected shift-left to extend selection")
-	assert(input_buffer_selection_text(&state.input) == "é", "expected selected final grapheme")
+	assert(
+		text_input.input_buffer_selection_text(&state.input) == "é",
+		"expected selected final grapheme",
+	)
 	_ = t
 }
 
@@ -1277,8 +1174,8 @@ test_chat_input_supports_ctrl_and_shift_insert :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "copy")
-	input_buffer_select_all(&state.input)
+	text_input.input_buffer_push_text(&state.input, "copy")
+	text_input.input_buffer_select_all(&state.input)
 	ctrlInsert := "\x1b[2;5~"
 	for index := 0; index < len(ctrlInsert); index += 1 {
 		app_handle_input_byte(&state, ctrlInsert[index])
@@ -1293,7 +1190,10 @@ test_chat_input_supports_ctrl_and_shift_insert :: proc(t: ^testing.T) {
 	for index := 0; index < len(paste); index += 1 {
 		app_handle_input_byte(&state, paste[index])
 	}
-	assert(input_buffer_string(&state.input) == "pasted", "expected Shift+Insert paste payload")
+	assert(
+		text_input.input_buffer_string(&state.input) == "pasted",
+		"expected Shift+Insert paste payload",
+	)
 	_ = t
 }
 
@@ -1355,7 +1255,7 @@ test_input_panel_mouse_drag_selects_graphemes :: proc(t: ^testing.T) {
 		rows    = 12,
 		columns = 20,
 	}
-	input_buffer_push_text(&state.input, "abcdef")
+	text_input.input_buffer_push_text(&state.input, "abcdef")
 
 	assert(
 		app_handle_mouse_sequence(&state, "\x1b[<0;2;10M"),
@@ -1369,7 +1269,10 @@ test_input_panel_mouse_drag_selects_graphemes :: proc(t: ^testing.T) {
 		app_handle_mouse_sequence(&state, "\x1b[<0;4;10m"),
 		"expected input release to finish selection",
 	)
-	assert(input_buffer_selection_text(&state.input) == "abc", "expected dragged input text")
+	assert(
+		text_input.input_buffer_selection_text(&state.input) == "abc",
+		"expected dragged input text",
+	)
 	_ = t
 }
 
@@ -1556,35 +1459,44 @@ test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	input_buffer_push_text(&state.input, "first entry")
+	text_input.input_buffer_push_text(&state.input, "first entry")
 	app_submit_input(&state)
-	input_buffer_push_text(&state.input, "second entry")
+	text_input.input_buffer_push_text(&state.input, "second entry")
 	app_submit_input(&state)
-	input_buffer_push_text(&state.input, "draft")
+	text_input.input_buffer_push_text(&state.input, "draft")
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected up arrow to recall newest history")
-	assert(input_buffer_string(&state.input) == "second entry", "expected newest history entry")
 	assert(
-		input_buffer_cursor_position(&state.input) == len("second entry"),
+		text_input.input_buffer_string(&state.input) == "second entry",
+		"expected newest history entry",
+	)
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == len("second entry"),
 		"expected cursor at end",
 	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'A'), "expected second up arrow to recall older history")
-	assert(input_buffer_string(&state.input) == "first entry", "expected older history entry")
+	assert(
+		text_input.input_buffer_string(&state.input) == "first entry",
+		"expected older history entry",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'B'), "expected down arrow to recall newer history")
-	assert(input_buffer_string(&state.input) == "second entry", "expected newer history entry")
+	assert(
+		text_input.input_buffer_string(&state.input) == "second entry",
+		"expected newer history entry",
+	)
 
 	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
 	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
 	assert(app_handle_input_byte(&state, 'B'), "expected down arrow to restore draft")
-	assert(input_buffer_string(&state.input) == "draft", "expected draft restoration")
+	assert(text_input.input_buffer_string(&state.input) == "draft", "expected draft restoration")
 	_ = t
 }
 
@@ -1749,7 +1661,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
 	assert(state.configEditing, "expected continuation setting edit mode")
-	input_buffer_set_text(&state.configEdit, "2500")
+	text_input.input_buffer_set_text(&state.configEdit, "2500")
 	app_commit_config_edit(&state)
 
 	assert(state.config.toolContinuations == 2500, "expected continuation limit to update")
@@ -1767,7 +1679,7 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 	app_rebuild_config_settings(&state)
 	state.configSettingCursor = 1
 	app_activate_config_setting(&state)
-	input_buffer_set_text(&state.configEdit, "0")
+	text_input.input_buffer_set_text(&state.configEdit, "0")
 	app_commit_config_edit(&state)
 
 	assert(
@@ -1841,7 +1753,7 @@ test_render_app_frame_contains_panels_and_status :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	state.status = "Testing"
-	input_buffer_push_text(&state.input, "hello\nthere")
+	text_input.input_buffer_push_text(&state.input, "hello\nthere")
 
 	sequence := render_app_frame_sequence(&state, 12, 80, context.temp_allocator)
 	assert(
@@ -1878,8 +1790,8 @@ test_render_history_preserves_multiline_assistant_content :: proc(t: ^testing.T)
 test_render_app_frame_draws_input_cursor_cell :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	input_buffer_push_text(&state.input, "ab")
-	input_buffer_move_cursor_left(&state.input)
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
 	state.cursorBlinkOn = true
 
 	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
@@ -1896,7 +1808,7 @@ test_render_app_input_panel_skips_screen_clear :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	state.status = "Testing"
-	input_buffer_push_text(&state.input, "hello")
+	text_input.input_buffer_push_text(&state.input, "hello")
 
 	sequence := render_app_input_panel_sequence(&state, 12, 40, context.temp_allocator)
 
@@ -1916,7 +1828,7 @@ test_render_app_history_panel_skips_screen_clear :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	state.status = "Testing"
-	input_buffer_push_text(&state.input, "hello")
+	text_input.input_buffer_push_text(&state.input, "hello")
 
 	sequence := render_app_history_panel_sequence(&state, 12, 40, context.temp_allocator)
 
@@ -1943,8 +1855,8 @@ test_render_app_history_panel_skips_screen_clear :: proc(t: ^testing.T) {
 test_render_app_input_panel_draws_cursor_cell :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	input_buffer_push_text(&state.input, "ab")
-	input_buffer_move_cursor_left(&state.input)
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
 	state.cursorBlinkOn = true
 
 	sequence := render_app_input_panel_sequence(&state, 12, 40, context.temp_allocator)
@@ -1960,8 +1872,8 @@ test_render_app_input_panel_draws_cursor_cell :: proc(t: ^testing.T) {
 test_render_app_frame_draws_unicode_input_cursor_cell :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	input_buffer_push_text(&state.input, "cé")
-	input_buffer_move_cursor_left(&state.input)
+	text_input.input_buffer_push_text(&state.input, "cé")
+	text_input.input_buffer_move_cursor_left(&state.input)
 	state.cursorBlinkOn = true
 
 	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
@@ -2057,7 +1969,7 @@ test_write_text_lines_preserves_blank_lines :: proc(t: ^testing.T) {
 test_render_app_frame_wraps_and_sizes_input_panel :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	input_buffer_push_text(&state.input, "alpha beta gamma")
+	text_input.input_buffer_push_text(&state.input, "alpha beta gamma")
 
 	sequence := render_app_frame_sequence(&state, 10, 12, context.temp_allocator)
 
@@ -2188,7 +2100,7 @@ test_setup_endpoint_submission_prompts_for_api_key :: proc(t: ^testing.T) {
 	state.mode = .Setup
 	state.setupStep = .Endpoint
 
-	input_buffer_push_text(&state.input, "http://localhost:11434")
+	text_input.input_buffer_push_text(&state.input, "http://localhost:11434")
 	app_submit_input(&state)
 
 	assert(state.mode == .Setup, "expected setup mode to continue")

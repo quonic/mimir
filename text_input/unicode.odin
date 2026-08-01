@@ -1,4 +1,4 @@
-package main
+package text_input
 
 import "core:unicode/utf8"
 

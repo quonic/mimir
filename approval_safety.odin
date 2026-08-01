@@ -6,6 +6,7 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import text_input "text_input"
 
 APPROVAL_SAFETY_SYSTEM_PROMPT :: `You are a tool action safety classifier.
 
@@ -287,10 +288,10 @@ approval_safety_display_text :: proc(
 		text = text[:lineEnd]
 	}
 	text = strings.trim_space(text)
-	if unicode_grapheme_count(text) <= APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES {
+	if text_input.unicode_grapheme_count(text) <= APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES {
 		return strings.clone(text, allocator)
 	}
-	end := unicode_grapheme_to_byte_offset(
+	end := text_input.unicode_grapheme_to_byte_offset(
 		text,
 		APPROVAL_SAFETY_MAX_DISPLAY_GRAPHEMES - len("..."),
 	)
