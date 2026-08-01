@@ -1,4 +1,4 @@
-package main
+package settings
 
 MCP_Server_Config :: struct {
 	name:    string,

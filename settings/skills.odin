@@ -1,4 +1,4 @@
-package main
+package settings
 
 import "core:strings"
 
@@ -53,7 +53,6 @@ skill_name_from_path :: proc(path: string) -> string {
 			start = index + 1
 		}
 	}
-
 	finish := len(path)
 	if finish - start > 3 && path[finish - 3:] == ".md" {
 		finish -= 3

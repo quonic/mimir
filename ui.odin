@@ -1,5 +1,6 @@
 package main
 
+import settings "./settings"
 import "console"
 import "core:fmt"
 import "core:strings"
@@ -743,7 +744,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		strings.write_string(&builder, provider.name)
 	case .Provider_Type:
 		strings.write_string(&builder, "Type: < ")
-		strings.write_string(&builder, provider_type_to_string(provider.type))
+		strings.write_string(&builder, settings.provider_type_to_string(provider.type))
 		strings.write_string(&builder, " >")
 	case .Provider_Endpoint:
 		strings.write_string(&builder, "Endpoint: ")
@@ -760,7 +761,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			&builder,
 			fmt.tprintf(
 				"%d",
-				config_context_window_tokens(&state.config, provider.name, provider.model),
+				settings.config_context_window_tokens(
+					&state.config,
+					provider.name,
+					provider.model,
+				),
 			),
 		)
 	case .Provider_Enabled:
@@ -824,7 +829,7 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 	return ""
 }
 
-approval_method_label :: proc(method: Approval_Method) -> string {
+approval_method_label :: proc(method: settings.Approval_Method) -> string {
 	switch method {
 	case .Always_Ask:
 		return "Always ask"

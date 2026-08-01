@@ -1,17 +1,21 @@
 package main
 
+import settings "./settings"
 import "ai"
 import "core:os"
 import "core:testing"
 
 @(test)
 test_provider_type_round_trip :: proc(t: ^testing.T) {
-	providerType, ok := provider_type_from_string("ollama")
+	providerType, ok := settings.provider_type_from_string("ollama")
 	assert(ok, "expected ollama provider type string to parse")
 	assert(providerType == .Ollama, "expected ollama provider type")
-	assert(provider_type_to_string(providerType) == "ollama", "expected ollama round trip")
+	assert(
+		settings.provider_type_to_string(providerType) == "ollama",
+		"expected ollama round trip",
+	)
 
-	_, invalidOk := provider_type_from_string("wat")
+	_, invalidOk := settings.provider_type_from_string("wat")
 	assert(!invalidOk, "expected unknown provider type to fail")
 	_ = t
 }
@@ -49,8 +53,8 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	]
 }`
 
-	config, err := parse_config_from_json(payload, context.allocator)
-	defer config_destroy(&config)
+	config, err := settings.parse_config_from_json(payload, context.allocator)
+	defer settings.config_destroy(&config)
 
 	assert(err == .None, "expected valid config JSON to parse")
 	assert(config.selectedProvider == "ollama", "expected selected provider")
@@ -64,14 +68,14 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 		"expected missing approval method to default to always ask",
 	)
 	assert(
-		config.toolContinuations == DEFAULT_TOOL_CONTINUATIONS,
+		config.toolContinuations == settings.DEFAULT_TOOL_CONTINUATIONS,
 		"expected missing tool continuation limit to use the default",
 	)
 	assert(len(config.providers) == 1, "expected one provider")
 	assert(config.providers[0].type == ai.Interface_Type.Ollama, "expected Ollama provider")
 	assert(config.providers[0].model == "llama3.2", "expected provider model")
 	assert(
-		config_context_window_tokens(&config, "ollama", "llama3.2") == 131072,
+		settings.config_context_window_tokens(&config, "ollama", "llama3.2") == 131072,
 		"expected model-specific context window",
 	)
 	assert(config.providers[0].enabled, "expected provider to be enabled")
@@ -104,7 +108,7 @@ test_parse_config_rejects_invalid_provider_type :: proc(t: ^testing.T) {
   "skillPaths": []
 }`
 
-	_, err := parse_config_from_json(payload, context.allocator)
+	_, err := settings.parse_config_from_json(payload, context.allocator)
 	assert(err == .Invalid_JSON, "expected invalid provider type to reject config")
 	_ = t
 }
@@ -115,7 +119,7 @@ test_load_config_reports_missing_file :: proc(t: ^testing.T) {
 	assert(tempErr == nil, "expected temp home directory")
 	defer os.remove_all(home)
 
-	_, err := load_config_from_file(home, context.temp_allocator)
+	_, err := settings.load_config_from_file(home, context.temp_allocator)
 	assert(err == .Not_Found, "expected missing config file to be reported")
 	_ = t
 }
@@ -126,7 +130,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(tempErr == nil, "expected temp home directory")
 	defer os.remove_all(home)
 
-	config := default_ollama_config(context.temp_allocator)
+	config := settings.default_ollama_config(context.temp_allocator)
 	config.selectedModel = "llama3.2"
 	config.embeddingProvider = "ollama"
 	config.embeddingModel = "nomic-embed-text"
@@ -136,7 +140,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.toolContinuations = 2500
 	config.providers[0].model = "llama3.2"
 	assert(
-		config_set_context_window_tokens(&config, "ollama", "llama3.2", 131072),
+		settings.config_set_context_window_tokens(&config, "ollama", "llama3.2", 131072),
 		"expected context window setting to save",
 	)
 	defer {
@@ -151,10 +155,10 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 		delete(config.permissionGrants)
 	}
 
-	saveErr := save_config_to_file(home, config)
+	saveErr := settings.save_config_to_file(home, config)
 	assert(saveErr == .None, "expected config save to succeed")
 
-	loaded, loadErr := load_config_from_file(home, context.temp_allocator)
+	loaded, loadErr := settings.load_config_from_file(home, context.temp_allocator)
 	defer {
 		delete(loaded.providers)
 		for &entry in loaded.contextWindows {
@@ -168,7 +172,10 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	}
 
 	assert(loadErr == .None, "expected config load to succeed")
-	assert(loaded.selectedProvider == DEFAULT_CONFIG_PROVIDER, "expected selected provider")
+	assert(
+		loaded.selectedProvider == settings.DEFAULT_CONFIG_PROVIDER,
+		"expected selected provider",
+	)
 	assert(loaded.selectedModel == "llama3.2", "expected selected model round trip")
 	assert(loaded.embeddingProvider == "ollama", "expected embedding provider round trip")
 	assert(loaded.embeddingModel == "nomic-embed-text", "expected embedding model round trip")
@@ -177,10 +184,13 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.approvalMethod == .Approve_Safe, "expected approval method round trip")
 	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
-	assert(loaded.providers[0].endpoint == DEFAULT_CONFIG_ENDPOINT, "expected endpoint round trip")
+	assert(
+		loaded.providers[0].endpoint == settings.DEFAULT_CONFIG_ENDPOINT,
+		"expected endpoint round trip",
+	)
 	assert(loaded.providers[0].model == "llama3.2", "expected provider model round trip")
 	assert(
-		config_context_window_tokens(&loaded, "ollama", "llama3.2") == 131072,
+		settings.config_context_window_tokens(&loaded, "ollama", "llama3.2") == 131072,
 		"expected context window round trip",
 	)
 	_ = t
@@ -195,7 +205,7 @@ test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
   "skillPaths": []
 }`
 
-	_, err := parse_config_from_json(payload, context.temp_allocator)
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected negative tool continuation limit to reject config")
 	_ = t
 }
@@ -209,17 +219,17 @@ test_parse_config_rejects_invalid_approval_method :: proc(t: ^testing.T) {
   "skillPaths": []
 }`
 
-	_, err := parse_config_from_json(payload, context.temp_allocator)
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected invalid approval method to reject config")
 	_ = t
 }
 
 @(test)
 test_approval_method_string_round_trip :: proc(t: ^testing.T) {
-	methods := [4]Approval_Method{.Always_Ask, .Approve_Safe, .Approve_All, .Deny_All}
+	methods := [4]settings.Approval_Method{.Always_Ask, .Approve_Safe, .Approve_All, .Deny_All}
 	for method in methods {
-		value := approval_method_to_string(method)
-		parsed, parsedOK := approval_method_from_string(value)
+		value := settings.approval_method_to_string(method)
+		parsed, parsedOK := settings.approval_method_from_string(value)
 		assert(parsedOK, "expected approval method string to parse")
 		assert(parsed == method, "expected approval method string round trip")
 	}
@@ -228,27 +238,27 @@ test_approval_method_string_round_trip :: proc(t: ^testing.T) {
 
 @(test)
 test_config_update_context_window_tokens_changes_only_new_values :: proc(t: ^testing.T) {
-	config := default_ollama_config(context.temp_allocator)
-	defer config_destroy(&config)
+	config := settings.default_ollama_config(context.temp_allocator)
+	defer settings.config_destroy(&config)
 
 	assert(
-		config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		settings.config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
 		"expected new context window to be added",
 	)
 	assert(
-		!config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
+		!settings.config_update_context_window_tokens(&config, "ollama", "qwen3", 32768),
 		"expected unchanged context window to be a no-op",
 	)
 	assert(
-		config_update_context_window_tokens(&config, "ollama", "qwen3", 65536),
+		settings.config_update_context_window_tokens(&config, "ollama", "qwen3", 65536),
 		"expected changed context window to update",
 	)
 	assert(
-		config_context_window_tokens(&config, "ollama", "qwen3") == 65536,
+		settings.config_context_window_tokens(&config, "ollama", "qwen3") == 65536,
 		"expected updated model-specific context window",
 	)
 	assert(
-		!config_update_context_window_tokens(&config, "ollama", "qwen3", 0),
+		!settings.config_update_context_window_tokens(&config, "ollama", "qwen3", 0),
 		"expected unknown context window to be ignored",
 	)
 	_ = t
@@ -271,7 +281,7 @@ test_parse_config_rejects_permission_grant_outside_project :: proc(t: ^testing.T
 	]
 }`
 
-	_, err := parse_config_from_json(payload, context.temp_allocator)
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected out-of-project directory grant to reject config")
 	_ = t
 }

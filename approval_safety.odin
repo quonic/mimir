@@ -1,5 +1,6 @@
 package main
 
+import settings "./settings"
 import "ai"
 import "core:fmt"
 import "core:mem"
@@ -48,7 +49,7 @@ Approval_Safety_Worker :: struct {
 }
 
 Approval_Safety_Model :: struct {
-	provider: Provider_Config,
+	provider: settings.Provider_Config,
 	model:    string,
 }
 
@@ -105,7 +106,12 @@ app_start_approval_safety :: proc(state: ^App_State) {
 	thread.start(approval.worker)
 }
 
-approval_safety_model_from_config :: proc(config: Mimir_Config) -> (Approval_Safety_Model, bool) {
+approval_safety_model_from_config :: proc(
+	config: settings.Mimir_Config,
+) -> (
+	Approval_Safety_Model,
+	bool,
+) {
 	providerName := config.selectedProvider
 	model := config.selectedModel
 	explicitSafetyModel := config.safetyProvider != "" || config.safetyModel != ""
