@@ -3,6 +3,7 @@ package main
 import agent "./agent"
 import approval_safety "./approval_safety"
 import builtin_tools "./builtin_tools"
+import commands "./commands"
 import input_history "./input_history"
 import settings "./settings"
 import tool_policy "./tool_policy"
@@ -768,49 +769,17 @@ test_app_handle_input_byte_accumulates_utf8_text :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_parse_slash_command :: proc(t: ^testing.T) {
-	chat := parse_slash_command("hello")
-	assert(!chat.isCommand, "expected regular input to stay chat text")
-
-	exit := parse_slash_command("/exit")
-	assert(exit.isCommand, "expected slash input to parse as command")
-	assert(exit.kind == .Exit, "expected /exit to map to Exit command")
-
-	config := parse_slash_command("/config provider ollama")
-	assert(config.kind == .Config, "expected /config to map to Config command")
-	assert(config.args == "provider ollama", "expected command args to be preserved")
-	models := parse_slash_command("/models")
-	assert(models.kind == .Unknown, "expected /models to be unsupported")
-
-	skills := parse_slash_command("/skills")
-	assert(skills.kind == .Unknown, "expected /skills to be unsupported")
-
-	unknown := parse_slash_command("/wat")
-	assert(unknown.kind == .Unknown, "expected unknown slash command to be marked unknown")
-
-	stop := parse_slash_command("/stop")
-	assert(stop.kind == .Stop, "expected /stop to map to Stop command")
-
-	cancel := parse_slash_command("/cancel")
-	assert(cancel.kind == .Stop, "expected /cancel to map to Stop command")
-
-	clear := parse_slash_command("/clear")
-	assert(clear.kind == .Clear, "expected /clear to map to Clear command")
-	_ = t
-}
-
-@(test)
 test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	app_run_command(&state, parse_slash_command("/models"))
+	app_run_command(&state, commands.parse_slash_command("/models"))
 	assert(state.status == "Unknown command", "expected /models to be unsupported")
 
-	app_run_command(&state, parse_slash_command("/skills"))
+	app_run_command(&state, commands.parse_slash_command("/skills"))
 	assert(state.status == "Unknown command", "expected /skills to be unsupported")
 
-	app_run_command(&state, parse_slash_command("/help"))
+	app_run_command(&state, commands.parse_slash_command("/help"))
 	assert(
 		state.history[len(state.history) - 1].content ==
 		"Commands: /exit, /config, /help, /stop, /clear",
@@ -921,7 +890,7 @@ test_stop_command_requests_stream_cancel :: proc(t: ^testing.T) {
 		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
 		"expected active agent to start",
 	)
-	app_run_command(&state, parse_slash_command("/stop"))
+	app_run_command(&state, commands.parse_slash_command("/stop"))
 	assert(state.status == "Canceling assistant stream", "expected /stop to update status")
 	agentState, agentOK := agent.runtime_state(
 		&state.agentHost.runtime,

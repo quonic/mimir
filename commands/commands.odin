@@ -1,4 +1,4 @@
-package main
+package commands
 
 Slash_Command :: enum int {
 	None = 0,
