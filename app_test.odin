@@ -1671,6 +1671,67 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_renders_active_inline_text_focus :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[104mName: \x1b[0m"),
+		"expected active inline field highlight",
+	)
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active inline field cursor cell",
+	)
+	_ = t
+}
+
+@(test)
+test_config_modal_renders_system_prompt_cursor :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+	state.configSettingCursor = 3
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected system prompt setting activation")
+	widgets.text_editor_set_text(&state.configEditor, "first\nsecond")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(contains_string(sequence, "System prompt"), "expected system prompt editor heading")
+	assert(contains_string(sequence, "first"), "expected first prompt line")
+	assert(contains_string(sequence, "second"), "expected second prompt line")
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected system prompt cursor cell",
+	)
+	_ = t
+}
+
+@(test)
+test_inline_editable_viewport_keeps_unicode_cursor_visible :: proc(t: ^testing.T) {
+	assert(
+		inline_editable_viewport_start("abcdef", 6, 3) == 4,
+		"expected viewport to reserve a cell for the cursor at the end",
+	)
+	assert(
+		inline_editable_viewport_start("a\xc3\xa9bc", 4, 3) == 2,
+		"expected viewport to preserve the multi-byte grapheme before the cursor",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_accepts_utf8_text_edit :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
