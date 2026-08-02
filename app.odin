@@ -339,7 +339,9 @@ app_create_default_config_from_ollama :: proc(
 				continue
 			}
 			state.config.selectedModel = strings.clone(model.name, allocator)
+			state.modelNameOwned = true
 			state.config.providers[0].model = strings.clone(model.name, allocator)
+			state.config.providers[0].modelOwned = true
 			break
 		}
 	}
@@ -1846,6 +1848,7 @@ app_complete_setup :: proc(state: ^App_State) {
 			continue
 		}
 		state.config.selectedModel = strings.clone(model.name, context.allocator)
+		state.modelNameOwned = true
 		state.config.providers[0].model = strings.clone(model.name, context.allocator)
 		state.config.providers[0].modelOwned = true
 		break
@@ -2277,7 +2280,8 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 		state.config.providers[setting.providerIndex].nameOwned = true
 		if state.config.selectedProvider == oldName {
-			if state.modelProviderOwned && state.config.selectedProvider != "" {
+			if (state.configStringsOwned || state.modelProviderOwned) &&
+			   state.config.selectedProvider != "" {
 				delete(state.config.selectedProvider, context.allocator)
 			}
 			state.config.selectedProvider = strings.clone(text, context.allocator)
@@ -2328,7 +2332,8 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		)
 		state.config.providers[setting.providerIndex].modelOwned = true
 		if state.config.providers[setting.providerIndex].name == state.config.selectedProvider {
-			if state.modelNameOwned && state.config.selectedModel != "" {
+			if (state.configStringsOwned || state.modelNameOwned) &&
+			   state.config.selectedModel != "" {
 				delete(state.config.selectedModel, context.allocator)
 			}
 			state.config.selectedModel = strings.clone(text, context.allocator)
@@ -2494,10 +2499,11 @@ app_select_config_model :: proc(state: ^App_State, modelIndex: int) {
 		state.status = "Selected model does not support chat tools"
 		return
 	}
-	if state.modelProviderOwned && state.config.selectedProvider != "" {
+	if (state.configStringsOwned || state.modelProviderOwned) &&
+	   state.config.selectedProvider != "" {
 		delete(state.config.selectedProvider, context.allocator)
 	}
-	if state.modelNameOwned && state.config.selectedModel != "" {
+	if (state.configStringsOwned || state.modelNameOwned) && state.config.selectedModel != "" {
 		delete(state.config.selectedModel, context.allocator)
 	}
 	state.config.selectedProvider = strings.clone(entry.providerName, context.allocator)
@@ -2809,9 +2815,11 @@ app_select_first_available_model :: proc(state: ^App_State, allocator := context
 			continue
 		}
 		state.config.selectedModel = strings.clone(model.name, allocator)
+		state.modelNameOwned = true
 		for &provider in state.config.providers {
 			if provider.name == state.config.selectedProvider && provider.model == "" {
 				provider.model = strings.clone(model.name, allocator)
+				provider.modelOwned = true
 				return
 			}
 		}
