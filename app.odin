@@ -822,11 +822,11 @@ history_visual_line :: proc(
 	for index := 0; index < len(state.history); index += 1 {
 		text := history_display_line(state, index, allocator)
 		start := 0
-		for index := 0; index <= len(text); index += 1 {
-			if index != len(text) && text[index] != '\n' && text[index] != '\r' {
+		for byteIndex := 0; byteIndex <= len(text); byteIndex += 1 {
+			if byteIndex != len(text) && text[byteIndex] != '\n' && text[byteIndex] != '\r' {
 				continue
 			}
-			logicalLine := text[start:index]
+			logicalLine := text[start:byteIndex]
 			if len(logicalLine) == 0 {
 				if lineNumber == targetLine {
 					return "", true
@@ -845,7 +845,7 @@ history_visual_line :: proc(
 					wrappedStart = next
 				}
 			}
-			start = index + 1
+			start = byteIndex + 1
 		}
 	}
 	return "", false
