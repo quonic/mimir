@@ -681,7 +681,7 @@ test_app_stream_conversation_uses_app_allocator :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	history := []History_Entry{{role = .User, content = "Read main.odin"}}
 
-	state.stream.conversation = app_build_ai_messages(history, state.stream.bufferAllocator)
+	state.stream.conversation = app_build_ai_messages(history, "", state.stream.bufferAllocator)
 	app_append_tool_result(&state, "call-1", "package main", false)
 
 	assert(len(state.stream.conversation) == 2, "expected retained tool conversation")
@@ -871,12 +871,40 @@ test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 		{role = .Assistant, content = ""},
 	}
 
-	messages := app_build_ai_messages(history, context.temp_allocator)
-	assert(len(messages) == 3, "expected system, user, and non-empty assistant messages")
+	messages := app_build_ai_messages(history, "configured prompt", context.temp_allocator)
+	assert(len(messages) == 4, "expected configured prompt, system, user, and assistant messages")
 	assert(messages[0].role == ai.Message_Role.System, "expected system role to map")
-	assert(messages[1].role == ai.Message_Role.User, "expected user role to map")
-	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant role to map")
-	assert(messages[2].content == "hi", "expected assistant content to be preserved")
+	assert(messages[0].content == "configured prompt", "expected configured prompt first")
+	assert(messages[1].role == ai.Message_Role.System, "expected history system role to map")
+	assert(messages[2].role == ai.Message_Role.User, "expected user role to map")
+	assert(messages[3].role == ai.Message_Role.Assistant, "expected assistant role to map")
+	assert(messages[3].content == "hi", "expected assistant content to be preserved")
+	_ = t
+}
+
+@(test)
+test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
+	defaultPrompt := system_prompt_effective("", .Append, context.temp_allocator)
+	defer delete(defaultPrompt, context.temp_allocator)
+	assert(defaultPrompt == DEFAULT_SYSTEM_PROMPT, "expected default system prompt")
+
+	appendedPrompt := system_prompt_effective("Use tabs.", .Append, context.temp_allocator)
+	defer delete(appendedPrompt, context.temp_allocator)
+	assert(
+		contains_string(appendedPrompt, "Additional user instructions:\nUse tabs."),
+		"expected append mode to retain custom instructions",
+	)
+
+	replacedPrompt := system_prompt_effective(
+		"Only user instructions.",
+		.Replace,
+		context.temp_allocator,
+	)
+	defer delete(replacedPrompt, context.temp_allocator)
+	assert(
+		replacedPrompt == "Only user instructions.",
+		"expected replace mode to use custom prompt",
+	)
 	_ = t
 }
 
@@ -1670,7 +1698,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
 
-	assert(len(state.configSettings) == 2, "expected two advanced settings")
+	assert(len(state.configSettings) == 5, "expected five advanced settings")
 	assert(state.configSettings[1].id == .Tool_Continuations, "expected tool continuation setting")
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
@@ -1724,6 +1752,44 @@ test_config_modal_cycles_approval_method :: proc(t: ^testing.T) {
 	assert(app_activate_config_setting(&state), "expected approval method activation")
 	assert(state.config.approvalMethod == .Approve_Safe, "expected approval method to cycle")
 	assert(state.status == "Approval method saved", "expected approval method save status")
+	_ = t
+}
+
+@(test)
+test_config_modal_edits_and_resets_system_prompt :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(state.configSettings[2].id == .System_Prompt_Mode, "expected prompt mode setting")
+	assert(state.configSettings[3].id == .System_Prompt, "expected prompt setting")
+	assert(state.configSettings[4].id == .Reset_System_Prompt, "expected prompt reset setting")
+	assert(
+		config_setting_line(&state, state.configSettings[3]) == "System prompt: Default",
+		"expected compact default prompt summary",
+	)
+
+	state.configSettingCursor = 2
+	assert(app_activate_config_setting(&state), "expected prompt mode activation")
+	assert(state.config.systemPromptMode == .Replace, "expected prompt mode to cycle")
+
+	state.configSettingCursor = 3
+	assert(app_activate_config_setting(&state), "expected prompt editor activation")
+	assert(state.configEditing, "expected prompt editor to open")
+	assert(app_handle_input_byte(&state, 'a'), "expected prompt text input")
+	assert(app_handle_input_byte(&state, '\r'), "expected prompt newline")
+	assert(app_handle_input_byte(&state, 'b'), "expected prompt second line")
+	assert(app_handle_input_byte(&state, 19), "expected prompt Ctrl-S save")
+	assert(state.config.systemPrompt == "a\nb", "expected multiline prompt to save")
+	assert(state.status == "System prompt saved", "expected prompt save status")
+
+	state.configSettingCursor = 4
+	assert(app_activate_config_setting(&state), "expected reset prompt activation")
+	assert(state.config.systemPrompt == "", "expected reset prompt text")
+	assert(state.config.systemPromptMode == .Append, "expected reset prompt mode")
 	_ = t
 }
 

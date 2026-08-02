@@ -70,6 +70,11 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 		config.toolContinuations == settings.DEFAULT_TOOL_CONTINUATIONS,
 		"expected missing tool continuation limit to use the default",
 	)
+	assert(config.systemPrompt == "", "expected missing system prompt to stay empty")
+	assert(
+		config.systemPromptMode == .Append,
+		"expected missing system prompt mode to default to append",
+	)
 	assert(len(config.providers) == 1, "expected one provider")
 	assert(config.providers[0].type == ai.Interface_Type.Ollama, "expected Ollama provider")
 	assert(config.providers[0].model == "llama3.2", "expected provider model")
@@ -137,6 +142,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.safetyModel = "llama3.2:instruct"
 	config.approvalMethod = .Approve_Safe
 	config.toolContinuations = 2500
+	config.systemPrompt = "Use tabs.\nRun tests."
+	config.systemPromptMode = .Replace
 	config.providers[0].model = "llama3.2"
 	assert(
 		settings.config_set_context_window_tokens(&config, "ollama", "llama3.2", 131072),
@@ -182,6 +189,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.safetyModel == "llama3.2:instruct", "expected safety model round trip")
 	assert(loaded.approvalMethod == .Approve_Safe, "expected approval method round trip")
 	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
+	assert(loaded.systemPrompt == "Use tabs.\nRun tests.", "expected system prompt round trip")
+	assert(loaded.systemPromptMode == .Replace, "expected system prompt mode round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
 	assert(
 		loaded.providers[0].endpoint == settings.DEFAULT_CONFIG_ENDPOINT,
@@ -220,6 +229,32 @@ test_parse_config_rejects_invalid_approval_method :: proc(t: ^testing.T) {
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected invalid approval method to reject config")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_invalid_system_prompt_mode :: proc(t: ^testing.T) {
+	payload := `{
+  "systemPromptMode": "sometimes",
+  "providers": [],
+  "mcpServers": [],
+  "skillPaths": []
+}`
+
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected invalid system prompt mode to reject config")
+	_ = t
+}
+
+@(test)
+test_system_prompt_mode_string_round_trip :: proc(t: ^testing.T) {
+	modes := [2]settings.System_Prompt_Mode{.Append, .Replace}
+	for mode in modes {
+		value := settings.system_prompt_mode_to_string(mode)
+		parsed, parsedOK := settings.system_prompt_mode_from_string(value)
+		assert(parsedOK, "expected system prompt mode string to parse")
+		assert(parsed == mode, "expected system prompt mode string round trip")
+	}
 	_ = t
 }
 

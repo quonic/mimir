@@ -321,7 +321,13 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		return false
 	}
 
-	messages := app_build_ai_messages(state.history[:], context.temp_allocator)
+	systemPrompt := system_prompt_effective(
+		state.config.systemPrompt,
+		state.config.systemPromptMode,
+		context.temp_allocator,
+	)
+	defer delete(systemPrompt, context.temp_allocator)
+	messages := app_build_ai_messages(state.history[:], systemPrompt, context.temp_allocator)
 	defer agent_host_messages_destroy(&messages, context.temp_allocator)
 	if len(messages) == 0 {
 		state.status = "No chat messages to send"

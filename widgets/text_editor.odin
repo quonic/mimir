@@ -65,6 +65,25 @@ text_editor_handle_byte :: proc(editor: ^Text_Editor, input: byte) -> (bool, Tex
 	return false, .None
 }
 
+text_editor_handle_multiline_byte :: proc(
+	editor: ^Text_Editor,
+	input: byte,
+) -> (
+	bool,
+	Text_Editor_Event,
+) {
+	switch input {
+	case 19:
+		editor.utf8PendingLen = 0
+		return true, .Commit
+	case '\r':
+		editor.utf8PendingLen = 0
+		text_input.input_buffer_push_byte(&editor.buffer, '\n')
+		return true, .None
+	}
+	return text_editor_handle_byte(editor, input)
+}
+
 text_editor_handle_text_byte :: proc(editor: ^Text_Editor, input: byte) -> bool {
 	if input < utf8.RUNE_SELF {
 		editor.utf8PendingLen = 0

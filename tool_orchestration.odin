@@ -72,9 +72,16 @@ app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
 
 app_build_ai_messages :: proc(
 	history: []History_Entry,
+	systemPrompt: string,
 	allocator := context.allocator,
 ) -> [dynamic]ai.Message {
-	messages := make([dynamic]ai.Message, 0, len(history), allocator)
+	messages := make([dynamic]ai.Message, 0, len(history) + 1, allocator)
+	if systemPrompt != "" {
+		append(
+			&messages,
+			ai.Message{role = .System, content = strings.clone(systemPrompt, allocator)},
+		)
+	}
 	for entry in history {
 		if entry.content == "" {
 			continue

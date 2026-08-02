@@ -654,6 +654,13 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 	if width <= 0 || region.top_row > region.bottom_row {
 		return
 	}
+	if state.configEditing && state.configEditingSetting.id == .System_Prompt {
+		write_clipped_line(batch, region.top_row, region.left_column, width, "System prompt")
+		promptRegion := region
+		promptRegion.top_row += 2
+		write_text_lines(batch, promptRegion, widgets.text_editor_string(&state.configEditor))
+		return
+	}
 	write_clipped_line(
 		batch,
 		region.top_row,
@@ -731,6 +738,23 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			approval_method_label(state.config.approvalMethod),
 			context.temp_allocator,
 		)
+	}
+	if setting.id == .System_Prompt_Mode {
+		return widgets.setting_row_choice(
+			"System prompt mode",
+			system_prompt_mode_label(state.config.systemPromptMode),
+			context.temp_allocator,
+		)
+	}
+	if setting.id == .System_Prompt {
+		value := "Default"
+		if state.config.systemPrompt != "" {
+			value = "Customized"
+		}
+		return widgets.setting_row_value("System prompt", value, context.temp_allocator)
+	}
+	if setting.id == .Reset_System_Prompt {
+		return widgets.setting_row_button("Reset system prompt", context.temp_allocator)
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
@@ -827,6 +851,12 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Approval method"
 	case .Tool_Continuations:
 		return "Tool continuation limit"
+	case .System_Prompt_Mode:
+		return "System prompt mode"
+	case .System_Prompt:
+		return "System prompt"
+	case .Reset_System_Prompt:
+		return "Reset system prompt"
 	}
 	return ""
 }
@@ -845,6 +875,16 @@ approval_method_label :: proc(method: settings.Approval_Method) -> string {
 	return "Always ask"
 }
 
+system_prompt_mode_label :: proc(mode: settings.System_Prompt_Mode) -> string {
+	switch mode {
+	case .Append:
+		return "Append"
+	case .Replace:
+		return "Replace"
+	}
+	return "Append"
+}
+
 config_masked_value :: proc(value: string) -> string {
 	if value == "" {
 		return "(not set)"
@@ -854,6 +894,9 @@ config_masked_value :: proc(value: string) -> string {
 
 config_modal_footer :: proc(state: ^App_State) -> string {
 	if state.configEditing {
+		if state.configEditingSetting.id == .System_Prompt {
+			return "Enter newline  Ctrl-S save  Esc cancel"
+		}
 		return "Enter save  Esc cancel  Ctrl-A/Ctrl-E move cursor"
 	}
 	return "Arrows move  Tab change pane  Enter select/edit  Esc close"
