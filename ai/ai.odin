@@ -56,7 +56,7 @@ clear_interfaces :: proc() {
 		}
 		delete(iface.models)
 	}
-	delete(Interfaces)
+	delete_dynamic_array(Interfaces)
 	Interfaces = nil
 }
 
@@ -67,7 +67,7 @@ add_interface :: proc(name: string, type: Interface_Type, endpoint: string) {
 			Interfaces = make([dynamic]Interface, 0, 0, context.allocator)
 			interfacesAllocator = context.allocator
 		}
-		append(&Interfaces, Interface{name = name, type = type, endpoint = url})
+		append_elem(&Interfaces, Interface{name = name, type = type, endpoint = url})
 	}
 }
 
@@ -92,10 +92,10 @@ add_interface_with_models :: proc(
 		endpoint = url,
 	}
 	for model in models {
-		append(&entry.models, model_clone(model))
+		append_elem(&entry.models, model_clone(model))
 	}
 
-	append(&Interfaces, entry)
+	append_elem(&Interfaces, entry)
 }
 
 get_interface :: proc(name: string) -> (Interface, bool) {
@@ -154,26 +154,26 @@ model_clone :: proc(model: Model, allocator := context.allocator) -> Model {
 		name = strings.clone(model.name, allocator),
 	}
 	for capability in model.capabilities {
-		append(&clone.capabilities, strings.clone(capability, allocator))
+		append_elem(&clone.capabilities, strings.clone(capability, allocator))
 	}
 	return clone
 }
 
 model_destroy :: proc(model: ^Model, allocator := context.allocator) {
 	if model.name != "" {
-		delete(model.name, allocator)
+		delete_string(model.name, allocator)
 	}
 	for capability in model.capabilities {
 		delete(capability, allocator)
 	}
-	delete(model.capabilities)
+	delete_dynamic_array(model.capabilities)
 }
 
 models_destroy :: proc(models: ^[dynamic]Model, allocator := context.allocator) {
 	for &model in models^ {
 		model_destroy(&model, allocator)
 	}
-	delete(models^)
+	delete_dynamic_array(models^)
 }
 
 model_has_capability :: proc(model: Model, capability: string) -> bool {
