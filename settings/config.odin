@@ -18,6 +18,11 @@ Approval_Method :: enum int {
 	Deny_All,
 }
 
+System_Prompt_Mode :: enum int {
+	Append = 0,
+	Replace,
+}
+
 Config_Error :: enum int {
 	None = 0,
 	Invalid_Home,
@@ -58,6 +63,8 @@ Mimir_Config_Wire :: struct {
 	safetyModel:       string,
 	approvalMethod:    string,
 	toolContinuations: int,
+	systemPrompt:      string,
+	systemPromptMode:  string,
 	providers:         []Provider_Config_Wire,
 	contextWindows:    []Context_Window_Config_Wire,
 	mcpServers:        []MCP_Server_Config,
@@ -93,6 +100,8 @@ Mimir_Config :: struct {
 	safetyModel:         string,
 	approvalMethod:      Approval_Method,
 	toolContinuations:   int,
+	systemPrompt:        string,
+	systemPromptMode:    System_Prompt_Mode,
 	providers:           [dynamic]Provider_Config,
 	contextWindows:      [dynamic]Context_Window_Config,
 	mcpServers:          [dynamic]MCP_Server_Config,
@@ -129,6 +138,26 @@ approval_method_to_string :: proc(method: Approval_Method) -> string {
 	return "alwaysAsk"
 }
 
+system_prompt_mode_from_string :: proc(value: string) -> (System_Prompt_Mode, bool) {
+	switch value {
+	case "", "append":
+		return .Append, true
+	case "replace":
+		return .Replace, true
+	}
+	return .Append, false
+}
+
+system_prompt_mode_to_string :: proc(mode: System_Prompt_Mode) -> string {
+	switch mode {
+	case .Append:
+		return "append"
+	case .Replace:
+		return "replace"
+	}
+	return "append"
+}
+
 config_dir :: proc(home: string, allocator := context.allocator) -> string {
 	if home == "" {
 		return ""
@@ -159,6 +188,7 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.selectedProvider = DEFAULT_CONFIG_PROVIDER
 	config.approvalMethod = .Always_Ask
 	config.toolContinuations = DEFAULT_TOOL_CONTINUATIONS
+	config.systemPromptMode = .Append
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
 	config.mcpServers = make([dynamic]MCP_Server_Config, 0, 0, allocator)
@@ -274,6 +304,9 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	}
 	if config.safetyModel != "" {
 		delete(config.safetyModel, config.allocationAllocator)
+	}
+	if config.systemPrompt != "" {
+		delete(config.systemPrompt, config.allocationAllocator)
 	}
 	for &provider in config.providers {
 		provider_config_destroy(&provider, config.allocationAllocator)
@@ -425,6 +458,15 @@ parse_config_from_json :: proc(
 		return Mimir_Config{}, .Invalid_JSON
 	}
 	config.approvalMethod = approvalMethod
+	systemPromptMode, systemPromptModeOK := system_prompt_mode_from_string(wire.systemPromptMode)
+	if !systemPromptModeOK {
+		config_destroy(&config)
+		return Mimir_Config{}, .Invalid_JSON
+	}
+	if wire.systemPrompt != "" {
+		config.systemPrompt = strings.clone(wire.systemPrompt, allocator)
+	}
+	config.systemPromptMode = systemPromptMode
 	if wire.toolContinuations < 0 {
 		config_destroy(&config)
 		return Mimir_Config{}, .Invalid_JSON
@@ -577,6 +619,12 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"toolContinuations\": ")
 	write_decimal(&builder, config.toolContinuations)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"systemPrompt\": ")
+	write_json_string(&builder, config.systemPrompt)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"systemPromptMode\": ")
+	write_json_string(&builder, system_prompt_mode_to_string(config.systemPromptMode))
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"providers\": [")
 	for provider, index in config.providers {

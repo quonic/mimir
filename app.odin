@@ -144,6 +144,9 @@ Config_Setting_ID :: enum int {
 	Safety_Model,
 	Approval_Method,
 	Tool_Continuations,
+	System_Prompt_Mode,
+	System_Prompt,
+	Reset_System_Prompt,
 }
 
 Config_Setting :: struct {
@@ -534,7 +537,11 @@ run_app :: proc() {
 		if !input_ready && time.tick_since(lastCursorBlink) >= APP_CURSOR_BLINK_INTERVAL {
 			state.cursorBlinkOn = !state.cursorBlinkOn
 			lastCursorBlink = time.tick_now()
-			inputDirty = true
+			if state.mode == .Config && state.configEditing {
+				frameDirty = true
+			} else if state.mode == .Chat || state.mode == .Setup {
+				inputDirty = true
+			}
 		}
 		if app_refresh_terminal_size(&state) {
 			frameDirty = true
@@ -2004,6 +2011,12 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 	case .Advanced:
 		append(&state.configSettings, Config_Setting{id = .Approval_Method, kind = .Single_Select})
 		append(&state.configSettings, Config_Setting{id = .Tool_Continuations, kind = .Text})
+		append(
+			&state.configSettings,
+			Config_Setting{id = .System_Prompt_Mode, kind = .Single_Select},
+		)
+		append(&state.configSettings, Config_Setting{id = .System_Prompt, kind = .Text})
+		append(&state.configSettings, Config_Setting{id = .Reset_System_Prompt, kind = .Button})
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
@@ -2128,7 +2141,8 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 	     .Provider_API_Key,
 	     .Provider_Model,
 	     .Provider_Context_Window,
-	     .Tool_Continuations:
+	     .Tool_Continuations,
+	     .System_Prompt:
 		app_begin_config_edit(state, setting)
 	case .Refresh_Models:
 		app_refresh_config_models(state, setting.providerIndex)
@@ -2144,6 +2158,10 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 		app_select_config_safety_model(state, setting.modelIndex)
 	case .Approval_Method:
 		app_cycle_approval_method(state)
+	case .System_Prompt_Mode:
+		app_cycle_system_prompt_mode(state)
+	case .Reset_System_Prompt:
+		app_reset_system_prompt(state)
 	}
 	return true
 }
@@ -2195,7 +2213,33 @@ app_cycle_approval_method :: proc(state: ^App_State) {
 	app_apply_config_change(state, "Approval method saved")
 }
 
+app_cycle_system_prompt_mode :: proc(state: ^App_State) {
+	switch state.config.systemPromptMode {
+	case .Append:
+		state.config.systemPromptMode = .Replace
+	case .Replace:
+		state.config.systemPromptMode = .Append
+	}
+	app_apply_config_change(state, "System prompt mode saved")
+}
+
+app_reset_system_prompt :: proc(state: ^App_State) {
+	if state.config.systemPrompt != "" {
+		delete(state.config.systemPrompt, state.config.allocationAllocator)
+	}
+	state.config.systemPrompt = ""
+	state.config.systemPromptMode = .Append
+	app_apply_config_change(state, "System prompt reset")
+}
+
 app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
+	if setting.id == .System_Prompt {
+		widgets.text_editor_set_text(&state.configEditor, state.config.systemPrompt)
+		state.configEditingSetting = setting
+		state.configEditing = true
+		state.status = "Editing system prompt: Ctrl-S saves, Esc cancels"
+		return
+	}
 	if setting.id == .Tool_Continuations {
 		widgets.text_editor_set_text(
 			&state.configEditor,
@@ -2235,7 +2279,19 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 }
 
 app_handle_config_edit_input :: proc(state: ^App_State, input: byte) -> bool {
+	if state.configEditingSetting.id == .System_Prompt {
+		handled, event := widgets.text_editor_handle_multiline_byte(&state.configEditor, input)
+		return app_handle_config_edit_event(state, handled, event)
+	}
 	handled, event := widgets.text_editor_handle_byte(&state.configEditor, input)
+	return app_handle_config_edit_event(state, handled, event)
+}
+
+app_handle_config_edit_event :: proc(
+	state: ^App_State,
+	handled: bool,
+	event: widgets.Text_Editor_Event,
+) -> bool {
 	switch event {
 	case .None:
 	case .Commit:
@@ -2262,6 +2318,17 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 		state.config.toolContinuations = continuations
 		app_apply_config_change(state, "Tool continuation limit saved")
+		return
+	}
+	if setting.id == .System_Prompt {
+		if state.config.systemPrompt != "" {
+			delete(state.config.systemPrompt, state.config.allocationAllocator)
+		}
+		state.config.systemPrompt = ""
+		if text != "" {
+			state.config.systemPrompt = strings.clone(text, state.config.allocationAllocator)
+		}
+		app_apply_config_change(state, "System prompt saved")
 		return
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {

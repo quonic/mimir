@@ -56,6 +56,8 @@ The initial configuration shape is:
   "safetyModel": "",
   "approvalMethod": "alwaysAsk",
   "toolContinuations": 1000,
+  "systemPrompt": "",
+  "systemPromptMode": "append",
   "contextWindows": [
     {
       "providerName": "ollama",
@@ -110,6 +112,22 @@ permission grants.
 `toolContinuations` sets the maximum number of consecutive model and tool
 continuation cycles for one request. It must be a positive integer and defaults
 to `1000`. Change it through `/config` in `Advanced`, or edit the JSON file.
+
+`systemPrompt` adds instructions for the chat model. Mimir always has an
+original default coding-agent prompt. `systemPromptMode` controls how custom
+text is used:
+
+- `append` (the default) sends Mimir's default prompt followed by the custom
+  prompt. Use this to add project, style, or workflow instructions while
+  retaining Mimir's normal coding-agent behavior.
+- `replace` sends only `systemPrompt`. An empty value intentionally sends no
+  configured system instruction.
+
+Set both values in `/config` under `Advanced`. The system-prompt editor accepts
+multiple lines. Press Enter for a new line, Ctrl-S to save, or Esc to discard
+the edit. **Reset system prompt** clears the custom prompt and restores
+`append` mode. Configurations created before these fields existed behave as an
+empty custom prompt in `append` mode.
 
 `contextWindows` can store a manual context limit for a provider and model. The
 value must not be negative. A value of `0` means the limit is unknown. For

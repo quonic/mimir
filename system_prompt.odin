@@ -1,0 +1,28 @@
+package main
+
+import "core:strings"
+import "settings"
+
+DEFAULT_SYSTEM_PROMPT :: `You are Mimir, a repository-aware coding agent.
+
+Work directly on the user's requested task. Inspect the relevant code before making changes. Use available tools deliberately, preserve user changes, and request approval when required. Keep changes focused, validate them with the most relevant available checks, and report the result concisely.`
+
+system_prompt_effective :: proc(
+	customPrompt: string,
+	mode: settings.System_Prompt_Mode,
+	allocator := context.allocator,
+) -> string {
+	switch mode {
+	case .Replace:
+		return strings.clone(customPrompt, allocator)
+	case .Append:
+		if customPrompt == "" {
+			return strings.clone(DEFAULT_SYSTEM_PROMPT, allocator)
+		}
+		return strings.concatenate(
+			{DEFAULT_SYSTEM_PROMPT, "\n\nAdditional user instructions:\n", customPrompt},
+			allocator,
+		)
+	}
+	return strings.clone(DEFAULT_SYSTEM_PROMPT, allocator)
+}

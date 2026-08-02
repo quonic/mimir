@@ -681,7 +681,7 @@ test_app_stream_conversation_uses_app_allocator :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	history := []History_Entry{{role = .User, content = "Read main.odin"}}
 
-	state.stream.conversation = app_build_ai_messages(history, state.stream.bufferAllocator)
+	state.stream.conversation = app_build_ai_messages(history, "", state.stream.bufferAllocator)
 	app_append_tool_result(&state, "call-1", "package main", false)
 
 	assert(len(state.stream.conversation) == 2, "expected retained tool conversation")
@@ -871,12 +871,61 @@ test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 		{role = .Assistant, content = ""},
 	}
 
-	messages := app_build_ai_messages(history, context.temp_allocator)
-	assert(len(messages) == 3, "expected system, user, and non-empty assistant messages")
+	messages := app_build_ai_messages(history, "configured prompt", context.temp_allocator)
+	assert(len(messages) == 4, "expected configured prompt, system, user, and assistant messages")
 	assert(messages[0].role == ai.Message_Role.System, "expected system role to map")
-	assert(messages[1].role == ai.Message_Role.User, "expected user role to map")
-	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant role to map")
+	assert(messages[0].content == "configured prompt", "expected configured prompt first")
+	assert(messages[1].role == ai.Message_Role.System, "expected history system role to map")
+	assert(messages[2].role == ai.Message_Role.User, "expected user role to map")
+	assert(messages[3].role == ai.Message_Role.Assistant, "expected assistant role to map")
+	assert(messages[3].content == "hi", "expected assistant content to be preserved")
+	_ = t
+}
+
+@(test)
+test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t: ^testing.T) {
+	history := []History_Entry {
+		{role = .System, content = "system"},
+		{role = .User, content = "hello"},
+		{role = .Assistant, content = "hi"},
+		{role = .Tool, content = "tool output"},
+		{role = .Assistant, content = ""},
+	}
+
+	messages := app_build_ai_messages(history, "", context.temp_allocator)
+	assert(len(messages) == 3, "expected only mapped non-empty history messages")
+	assert(messages[0].role == ai.Message_Role.System, "expected history system message first")
+	assert(messages[0].content == "system", "expected history system content to be preserved")
+	assert(messages[1].role == ai.Message_Role.User, "expected user message second")
+	assert(messages[1].content == "hello", "expected user content to be preserved")
+	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant message third")
 	assert(messages[2].content == "hi", "expected assistant content to be preserved")
+	_ = t
+}
+
+@(test)
+test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
+	defaultPrompt := system_prompt_effective("", .Append, context.temp_allocator)
+	defer delete(defaultPrompt, context.temp_allocator)
+	assert(defaultPrompt == DEFAULT_SYSTEM_PROMPT, "expected default system prompt")
+
+	appendedPrompt := system_prompt_effective("Use tabs.", .Append, context.temp_allocator)
+	defer delete(appendedPrompt, context.temp_allocator)
+	assert(
+		contains_string(appendedPrompt, "Additional user instructions:\nUse tabs."),
+		"expected append mode to retain custom instructions",
+	)
+
+	replacedPrompt := system_prompt_effective(
+		"Only user instructions.",
+		.Replace,
+		context.temp_allocator,
+	)
+	defer delete(replacedPrompt, context.temp_allocator)
+	assert(
+		replacedPrompt == "Only user instructions.",
+		"expected replace mode to use custom prompt",
+	)
 	_ = t
 }
 
@@ -1643,6 +1692,90 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_renders_active_inline_text_focus :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[104mName: \x1b[0m"),
+		"expected active inline field highlight",
+	)
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active inline field cursor cell",
+	)
+	_ = t
+}
+
+@(test)
+test_config_modal_keeps_active_field_focus_when_cursor_hidden :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	state.cursorBlinkOn = false
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[104mName: \x1b[0m"),
+		"expected active inline field highlight to remain visible",
+	)
+	assert(
+		!contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active inline cursor cell to be hidden",
+	)
+	_ = t
+}
+
+@(test)
+test_config_modal_renders_system_prompt_cursor :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+	state.configSettingCursor = 3
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected system prompt setting activation")
+	widgets.text_editor_set_text(&state.configEditor, "first\nsecond")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(contains_string(sequence, "System prompt"), "expected system prompt editor heading")
+	assert(contains_string(sequence, "first"), "expected first prompt line")
+	assert(contains_string(sequence, "second"), "expected second prompt line")
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected system prompt cursor cell",
+	)
+	_ = t
+}
+
+@(test)
+test_inline_editable_viewport_keeps_unicode_cursor_visible :: proc(t: ^testing.T) {
+	assert(
+		inline_editable_viewport_start("abcdef", 6, 3) == 4,
+		"expected viewport to reserve a cell for the cursor at the end",
+	)
+	assert(
+		inline_editable_viewport_start("a\xc3\xa9bc", 4, 3) == 2,
+		"expected viewport to preserve the multi-byte grapheme before the cursor",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_accepts_utf8_text_edit :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1670,7 +1803,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
 
-	assert(len(state.configSettings) == 2, "expected two advanced settings")
+	assert(len(state.configSettings) == 5, "expected five advanced settings")
 	assert(state.configSettings[1].id == .Tool_Continuations, "expected tool continuation setting")
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
@@ -1724,6 +1857,49 @@ test_config_modal_cycles_approval_method :: proc(t: ^testing.T) {
 	assert(app_activate_config_setting(&state), "expected approval method activation")
 	assert(state.config.approvalMethod == .Approve_Safe, "expected approval method to cycle")
 	assert(state.status == "Approval method saved", "expected approval method save status")
+	_ = t
+}
+
+@(test)
+test_config_modal_edits_and_resets_system_prompt :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(state.configSettings[2].id == .System_Prompt_Mode, "expected prompt mode setting")
+	assert(state.configSettings[3].id == .System_Prompt, "expected prompt setting")
+	assert(state.configSettings[4].id == .Reset_System_Prompt, "expected prompt reset setting")
+	assert(
+		config_setting_line(&state, state.configSettings[3]) == "System prompt: Default",
+		"expected compact default prompt summary",
+	)
+
+	state.configSettingCursor = 2
+	assert(app_activate_config_setting(&state), "expected prompt mode activation")
+	assert(state.config.systemPromptMode == .Replace, "expected prompt mode to cycle")
+
+	state.configSettingCursor = 3
+	assert(app_activate_config_setting(&state), "expected prompt editor activation")
+	assert(state.configEditing, "expected prompt editor to open")
+	assert(app_handle_input_byte(&state, 'a'), "expected prompt text input")
+	assert(app_handle_input_byte(&state, '\r'), "expected prompt newline")
+	assert(app_handle_input_byte(&state, 'b'), "expected prompt second line")
+	assert(app_handle_input_byte(&state, widgets.CTRL_S), "expected prompt Ctrl-S save")
+	assert(state.config.systemPrompt == "a\nb", "expected multiline prompt to save")
+	assert(state.status == "System prompt saved", "expected prompt save status")
+
+	state.configSettingCursor = 4
+	assert(app_activate_config_setting(&state), "expected reset prompt activation")
+	assert(state.config.systemPrompt == "", "expected reset prompt text")
+	assert(state.config.systemPromptMode == .Append, "expected reset prompt mode")
+
+	state.configSettingCursor = 3
+	assert(app_activate_config_setting(&state), "expected empty prompt editor activation")
+	assert(app_handle_input_byte(&state, widgets.CTRL_S), "expected empty prompt save")
+	assert(state.config.systemPrompt == "", "expected empty prompt after save")
 	_ = t
 }
 
@@ -1813,6 +1989,49 @@ test_render_app_frame_draws_input_cursor_cell :: proc(t: ^testing.T) {
 	assert(
 		contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
 		"expected cursor cell to render with bright cyan background",
+	)
+	_ = t
+}
+
+@(test)
+test_render_app_frame_draws_setup_input_cursor_cell :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.mode = .Setup
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
+	state.cursorBlinkOn = true
+
+	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
+		"expected setup input cursor to render with bright cyan background",
+	)
+	_ = t
+}
+
+@(test)
+test_render_app_frame_hides_input_cursor_while_config_editing :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected provider name editing to activate")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		!contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
+		"expected inactive chat input cursor to be hidden",
+	)
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active configuration editor cursor to remain visible",
 	)
 	_ = t
 }

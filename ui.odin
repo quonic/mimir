@@ -654,6 +654,14 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 	if width <= 0 || region.top_row > region.bottom_row {
 		return
 	}
+	if state.configEditing && state.configEditingSetting.id == .System_Prompt {
+		console.batch_move_to(batch, region.top_row, region.left_column)
+		write_config_active_text(batch, "System prompt")
+		promptRegion := region
+		promptRegion.top_row += 2
+		render_text_editor(batch, promptRegion, &state.configEditor, state.cursorBlinkOn)
+		return
+	}
 	write_clipped_line(
 		batch,
 		region.top_row,
@@ -662,27 +670,164 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 		config_category_label(state.configCategory),
 	)
 	row := region.top_row + 2
-	settingLabels := make([dynamic]string, 0, len(state.configSettings), context.temp_allocator)
-	for setting in state.configSettings {
-		append(&settingLabels, config_setting_line(state, setting))
+	for setting, index in state.configSettings {
+		if row > region.bottom_row {
+			break
+		}
+		if config_setting_is_editing(state, setting) {
+			render_config_editing_setting(batch, row, region, state, setting, index)
+		} else {
+			prefix := "  "
+			if state.configFocus == .Settings && index == state.configSettingCursor {
+				prefix = "> "
+			}
+			write_clipped_line(
+				batch,
+				row,
+				region.left_column,
+				width,
+				config_prefixed_line(prefix, config_setting_line(state, setting)),
+			)
+		}
+		row += 1
 	}
-	listRegion := region
-	listRegion.top_row = row
-	widgets.list_render(
-		batch,
-		listRegion,
-		settingLabels[:],
-		widgets.List_Render_Options {
-			cursorIndex = state.configSettingCursor,
-			focused = state.configFocus == .Settings,
-		},
+}
+
+config_setting_is_editing :: proc(state: ^App_State, setting: Config_Setting) -> bool {
+	return(
+		state.configEditing &&
+		setting.id == state.configEditingSetting.id &&
+		setting.providerIndex == state.configEditingSetting.providerIndex \
 	)
 }
 
+render_config_editing_setting :: proc(
+	batch: ^console.Batch,
+	row: int,
+	region: console.Region,
+	state: ^App_State,
+	setting: Config_Setting,
+	index: int,
+) {
+	width := console.region_width(region)
+	if width <= 0 {
+		return
+	}
+
+	prefix := "  "
+	if state.configFocus == .Settings && index == state.configSettingCursor {
+		prefix = "> "
+	}
+	label := strings.concatenate({config_setting_label(setting.id), ": "}, context.temp_allocator)
+	console.batch_move_to(batch, row, region.left_column)
+	console.batch_write_text(batch, prefix)
+	labelWidth := text_display_width(prefix) + text_display_width(label)
+	if labelWidth >= width {
+		write_clipped_line(
+			batch,
+			row,
+			region.left_column,
+			width,
+			config_prefixed_line(prefix, label),
+		)
+		return
+	}
+	write_config_active_text(batch, label)
+	render_inline_editable_value(
+		batch,
+		width - labelWidth,
+		&state.configEditor.buffer,
+		state.cursorBlinkOn,
+	)
+}
+
+config_active_field_style :: proc() -> console.Style {
+	return console.Style {
+		foreground = .Black,
+		background = .Bright_Blue,
+		use_foreground = true,
+		use_background = true,
+	}
+}
+
+write_config_active_text :: proc(batch: ^console.Batch, text: string) {
+	console.batch_write_styled_text(batch, config_active_field_style(), text)
+}
+
+render_inline_editable_value :: proc(
+	batch: ^console.Batch,
+	width: int,
+	buffer: ^text_input.Input_Buffer,
+	cursorVisible: bool,
+) {
+	if width <= 0 {
+		return
+	}
+
+	text := text_input.input_buffer_string(buffer)
+	cursorPosition := text_input.input_buffer_cursor_position(buffer)
+	selectionStart := text_input.input_buffer_selection_start(buffer)
+	selectionEnd := text_input.input_buffer_selection_end(buffer)
+	graphemeCount := text_input.unicode_grapheme_count(text)
+	startGrapheme := inline_editable_viewport_start(text, cursorPosition, width)
+	index := text_input.unicode_grapheme_to_byte_offset(text, startGrapheme)
+	grapheme := startGrapheme
+	remaining := width
+
+	for index < len(text) && remaining > 0 {
+		next := text_input.unicode_next_grapheme_offset(text, index)
+		graphemeWidth := text_input.unicode_grapheme_width_at(text, index)
+		if next <= index || graphemeWidth > remaining {
+			break
+		}
+		cell := text[index:next]
+		if cursorVisible && grapheme == cursorPosition {
+			render_input_cursor_cell(batch, cell)
+		} else if grapheme >= selectionStart && grapheme < selectionEnd {
+			render_input_selection_cell(batch, cell)
+		} else {
+			write_config_active_text(batch, cell)
+		}
+		remaining -= graphemeWidth
+		index = next
+		grapheme += 1
+	}
+
+	if cursorVisible && cursorPosition == graphemeCount && remaining > 0 {
+		render_input_cursor_cell(batch, " ")
+	}
+}
+
+inline_editable_viewport_start :: proc(text: string, cursorPosition, width: int) -> int {
+	graphemeCount := text_input.unicode_grapheme_count(text)
+	cursor := cursorPosition
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > graphemeCount {
+		cursor = graphemeCount
+	}
+
+	used := 1
+	if cursor < graphemeCount {
+		cursorOffset := text_input.unicode_grapheme_to_byte_offset(text, cursor)
+		used = text_input.unicode_grapheme_width_at(text, cursorOffset)
+	}
+	start := cursor
+	for start > 0 {
+		previousOffset := text_input.unicode_grapheme_to_byte_offset(text, start - 1)
+		previousWidth := text_input.unicode_grapheme_width_at(text, previousOffset)
+		if used + previousWidth > width {
+			break
+		}
+		used += previousWidth
+		start -= 1
+	}
+	return start
+}
+
 config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> string {
-	if state.configEditing &&
-	   setting.id == state.configEditingSetting.id &&
-	   setting.providerIndex == state.configEditingSetting.providerIndex {
+	if config_setting_is_editing(state, setting) {
 		return widgets.setting_row_value(
 			config_setting_label(setting.id),
 			widgets.text_editor_string(&state.configEditor),
@@ -731,6 +876,23 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			approval_method_label(state.config.approvalMethod),
 			context.temp_allocator,
 		)
+	}
+	if setting.id == .System_Prompt_Mode {
+		return widgets.setting_row_choice(
+			"System prompt mode",
+			system_prompt_mode_label(state.config.systemPromptMode),
+			context.temp_allocator,
+		)
+	}
+	if setting.id == .System_Prompt {
+		value := "Default"
+		if state.config.systemPrompt != "" {
+			value = "Customized"
+		}
+		return widgets.setting_row_value("System prompt", value, context.temp_allocator)
+	}
+	if setting.id == .Reset_System_Prompt {
+		return widgets.setting_row_button("Reset system prompt", context.temp_allocator)
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
@@ -827,6 +989,12 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Approval method"
 	case .Tool_Continuations:
 		return "Tool continuation limit"
+	case .System_Prompt_Mode:
+		return "System prompt mode"
+	case .System_Prompt:
+		return "System prompt"
+	case .Reset_System_Prompt:
+		return "Reset system prompt"
 	}
 	return ""
 }
@@ -845,6 +1013,16 @@ approval_method_label :: proc(method: settings.Approval_Method) -> string {
 	return "Always ask"
 }
 
+system_prompt_mode_label :: proc(mode: settings.System_Prompt_Mode) -> string {
+	switch mode {
+	case .Append:
+		return "Append"
+	case .Replace:
+		return "Replace"
+	}
+	return "Append"
+}
+
 config_masked_value :: proc(value: string) -> string {
 	if value == "" {
 		return "(not set)"
@@ -854,26 +1032,50 @@ config_masked_value :: proc(value: string) -> string {
 
 config_modal_footer :: proc(state: ^App_State) -> string {
 	if state.configEditing {
+		if state.configEditingSetting.id == .System_Prompt {
+			return "Enter newline  Ctrl-S save  Esc cancel"
+		}
 		return "Enter save  Esc cancel  Ctrl-A/Ctrl-E move cursor"
 	}
 	return "Arrows move  Tab change pane  Enter select/edit  Esc close"
 }
 
 render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
-	text := text_input.input_buffer_string(&state.input)
-	selectionStart := text_input.input_buffer_selection_start(&state.input)
-	selectionEnd := text_input.input_buffer_selection_end(&state.input)
-	if !state.cursorBlinkOn {
-		render_input_with_cursor(batch, region, text, -1, selectionStart, selectionEnd)
-		return
+	render_editable_input_buffer(
+		batch,
+		region,
+		&state.input,
+		(state.mode == .Chat || state.mode == .Setup) && state.cursorBlinkOn,
+	)
+}
+
+render_text_editor :: proc(
+	batch: ^console.Batch,
+	region: console.Region,
+	editor: ^widgets.Text_Editor,
+	cursorVisible: bool,
+) {
+	render_editable_input_buffer(batch, region, &editor.buffer, cursorVisible)
+}
+
+render_editable_input_buffer :: proc(
+	batch: ^console.Batch,
+	region: console.Region,
+	buffer: ^text_input.Input_Buffer,
+	cursorVisible: bool,
+) {
+	text := text_input.input_buffer_string(buffer)
+	cursorPosition := -1
+	if cursorVisible {
+		cursorPosition = text_input.input_buffer_cursor_position(buffer)
 	}
 	render_input_with_cursor(
 		batch,
 		region,
 		text,
-		text_input.input_buffer_cursor_position(&state.input),
-		selectionStart,
-		selectionEnd,
+		cursorPosition,
+		text_input.input_buffer_selection_start(buffer),
+		text_input.input_buffer_selection_end(buffer),
 	)
 }
 
