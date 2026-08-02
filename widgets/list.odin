@@ -63,8 +63,11 @@ list_write_clipped_line :: proc(batch: ^console.Batch, row, column, width: int, 
 	remaining := width
 	for finish < len(text) && remaining > 0 {
 		next := text_input.unicode_next_grapheme_offset(text, finish)
-		graphemeWidth := text_input.unicode_grapheme_width_at(text, finish)
-		if next <= finish || graphemeWidth > remaining {
+		if next <= finish {
+			break
+		}
+		graphemeWidth := text_input.unicode_text_width(text[finish:next])
+		if graphemeWidth > remaining {
 			break
 		}
 		remaining -= graphemeWidth
