@@ -537,7 +537,11 @@ run_app :: proc() {
 		if !input_ready && time.tick_since(lastCursorBlink) >= APP_CURSOR_BLINK_INTERVAL {
 			state.cursorBlinkOn = !state.cursorBlinkOn
 			lastCursorBlink = time.tick_now()
-			inputDirty = true
+			if state.mode == .Config && state.configEditing {
+				frameDirty = true
+			} else if state.mode == .Chat || state.mode == .Setup {
+				inputDirty = true
+			}
 		}
 		if app_refresh_terminal_size(&state) {
 			frameDirty = true

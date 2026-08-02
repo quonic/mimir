@@ -656,7 +656,7 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 	}
 	if state.configEditing && state.configEditingSetting.id == .System_Prompt {
 		console.batch_move_to(batch, region.top_row, region.left_column)
-		console.batch_write_styled_text(batch, config_active_field_style(), "System prompt")
+		write_config_active_text(batch, "System prompt")
 		promptRegion := region
 		promptRegion.top_row += 2
 		render_text_editor(batch, promptRegion, &state.configEditor, state.cursorBlinkOn)
@@ -732,7 +732,7 @@ render_config_editing_setting :: proc(
 		)
 		return
 	}
-	console.batch_write_styled_text(batch, config_active_field_style(), label)
+	write_config_active_text(batch, label)
 	render_inline_editable_value(
 		batch,
 		width - labelWidth,
@@ -748,6 +748,10 @@ config_active_field_style :: proc() -> console.Style {
 		use_foreground = true,
 		use_background = true,
 	}
+}
+
+write_config_active_text :: proc(batch: ^console.Batch, text: string) {
+	console.batch_write_styled_text(batch, config_active_field_style(), text)
 }
 
 render_inline_editable_value :: proc(
@@ -782,7 +786,7 @@ render_inline_editable_value :: proc(
 		} else if grapheme >= selectionStart && grapheme < selectionEnd {
 			render_input_selection_cell(batch, cell)
 		} else {
-			console.batch_write_styled_text(batch, config_active_field_style(), cell)
+			write_config_active_text(batch, cell)
 		}
 		remaining -= graphemeWidth
 		index = next
@@ -1037,7 +1041,12 @@ config_modal_footer :: proc(state: ^App_State) -> string {
 }
 
 render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
-	render_editable_input_buffer(batch, region, &state.input, state.cursorBlinkOn)
+	render_editable_input_buffer(
+		batch,
+		region,
+		&state.input,
+		(state.mode == .Chat || state.mode == .Setup) && state.cursorBlinkOn,
+	)
 }
 
 render_text_editor :: proc(

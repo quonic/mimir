@@ -1694,6 +1694,29 @@ test_config_modal_renders_active_inline_text_focus :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_keeps_active_field_focus_when_cursor_hidden :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	state.cursorBlinkOn = false
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[104mName: \x1b[0m"),
+		"expected active inline field highlight to remain visible",
+	)
+	assert(
+		!contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active inline cursor cell to be hidden",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_renders_system_prompt_cursor :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1940,6 +1963,49 @@ test_render_app_frame_draws_input_cursor_cell :: proc(t: ^testing.T) {
 	assert(
 		contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
 		"expected cursor cell to render with bright cyan background",
+	)
+	_ = t
+}
+
+@(test)
+test_render_app_frame_draws_setup_input_cursor_cell :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.mode = .Setup
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
+	state.cursorBlinkOn = true
+
+	sequence := render_app_frame_sequence(&state, 12, 40, context.temp_allocator)
+
+	assert(
+		contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
+		"expected setup input cursor to render with bright cyan background",
+	)
+	_ = t
+}
+
+@(test)
+test_render_app_frame_hides_input_cursor_while_config_editing :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	text_input.input_buffer_push_text(&state.input, "ab")
+	text_input.input_buffer_move_cursor_left(&state.input)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+	state.cursorBlinkOn = true
+
+	assert(app_activate_config_setting(&state), "expected provider name editing to activate")
+	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
+
+	assert(
+		!contains_string(sequence, "a\x1b[0m\x1b[30m\x1b[106mb\x1b[0m"),
+		"expected inactive chat input cursor to be hidden",
+	)
+	assert(
+		contains_string(sequence, "\x1b[0m\x1b[30m\x1b[106m \x1b[0m"),
+		"expected active configuration editor cursor to remain visible",
 	)
 	_ = t
 }
