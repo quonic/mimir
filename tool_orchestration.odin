@@ -1,11 +1,9 @@
 #+vet explicit-allocators
 package main
 
-import agent "./agent"
-import builtin_tools "./builtin_tools"
-import settings "./settings"
-import tool_policy "./tool_policy"
+import "agent"
 import "ai"
+import "builtin_tools"
 import "code_index"
 import "core:encoding/json"
 import "core:fmt"
@@ -13,6 +11,7 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "tool_policy"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5

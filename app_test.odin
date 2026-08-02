@@ -1,19 +1,18 @@
 package main
 
-import agent "./agent"
-import approval_safety "./approval_safety"
-import builtin_tools "./builtin_tools"
-import commands "./commands"
-import input_history "./input_history"
-import settings "./settings"
-import tool_policy "./tool_policy"
+import "agent"
 import "ai"
-import "code_index"
+import "approval_safety"
+import "commands"
 import "console"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import text_input "text_input"
+import "input_history"
+import "settings"
+import "text_input"
+import "tool_policy"
+import "widgets"
 
 @(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
@@ -1504,6 +1503,38 @@ test_safety_model_selection_accepts_chat_capability :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_formats_selected_model_options :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append(
+		&state.models,
+		Model_Select_Entry {
+			providerName = strings.clone("ollama", context.allocator),
+			model = strings.clone("chat", context.allocator),
+			supportsChat = true,
+		},
+	)
+	setting := Config_Setting {
+		id         = .Chat_Model,
+		kind       = .Single_Select,
+		modelIndex = 0,
+	}
+	state.config.selectedProvider = "ollama"
+	state.config.selectedModel = "chat"
+
+	assert(
+		config_setting_line(&state, setting) == "* ollama / chat",
+		"expected selected model option marker",
+	)
+	state.config.selectedModel = "other"
+	assert(
+		config_setting_line(&state, setting) == "  ollama / chat",
+		"expected unselected model option marker",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1520,6 +1551,53 @@ test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 	assert(contains_string(sequence, "Providers"), "expected providers category")
 	assert(contains_string(sequence, "API key: ********"), "expected masked API key")
 	assert(!contains_string(sequence, "secret-key"), "expected raw API key to stay hidden")
+	_ = t
+}
+
+@(test)
+test_config_modal_formats_provider_control_rows :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	state.config.providers[0].apiKey = "secret-key"
+	app_show_config(&state)
+
+	assert(
+		config_setting_line(&state, state.configSettings[0]) == "Provider: < ollama >",
+		"expected provider choice row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[3]) == "Endpoint: http://localhost:11434",
+		"expected provider value row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[4]) == "API key: ********",
+		"expected masked provider API key row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[7]) == "[x] Enabled",
+		"expected enabled checkbox row",
+	)
+	assert(
+		config_setting_line(&state, state.configSettings[8]) == "[ Refresh models ]",
+		"expected refresh button row",
+	)
+	_ = t
+}
+
+@(test)
+test_config_modal_settings_cursor_wraps :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+
+	app_move_config_cursor(&state, -1)
+	assert(
+		state.configSettingCursor == len(state.configSettings) - 1,
+		"expected settings cursor to wrap to final row",
+	)
+	app_move_config_cursor(&state, 1)
+	assert(state.configSettingCursor == 0, "expected settings cursor to wrap to first row")
 	_ = t
 }
 
@@ -1565,6 +1643,25 @@ test_config_modal_commits_provider_text_edit :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_modal_accepts_utf8_text_edit :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configFocus = .Settings
+	state.configSettingCursor = 1
+
+	assert(app_activate_config_setting(&state), "expected name text setting activation")
+	assert(!app_handle_input_byte(&state, 0xc3), "expected UTF-8 prefix to wait")
+	assert(app_handle_input_byte(&state, 0xa9), "expected UTF-8 sequence completion")
+	assert(app_handle_input_byte(&state, '\r'), "expected name text commit")
+	assert(
+		state.config.providers[0].name == "ollama\xc3\xa9",
+		"expected committed UTF-8 provider name",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
@@ -1578,7 +1675,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
 	assert(state.configEditing, "expected continuation setting edit mode")
-	text_input.input_buffer_set_text(&state.configEdit, "2500")
+	widgets.text_editor_set_text(&state.configEditor, "2500")
 	app_commit_config_edit(&state)
 
 	assert(state.config.toolContinuations == 2500, "expected continuation limit to update")
@@ -1596,7 +1693,7 @@ test_config_modal_rejects_invalid_tool_continuation_limit :: proc(t: ^testing.T)
 	app_rebuild_config_settings(&state)
 	state.configSettingCursor = 1
 	app_activate_config_setting(&state)
-	text_input.input_buffer_set_text(&state.configEdit, "0")
+	widgets.text_editor_set_text(&state.configEditor, "0")
 	app_commit_config_edit(&state)
 
 	assert(

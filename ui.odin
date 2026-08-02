@@ -1,11 +1,12 @@
 package main
 
-import settings "./settings"
-import tool_policy "./tool_policy"
 import "console"
 import "core:fmt"
 import "core:strings"
-import text_input "text_input"
+import "settings"
+import "text_input"
+import "tool_policy"
+import "widgets"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
 MIN_INPUT_PANEL_HEIGHT :: 3
@@ -607,27 +608,29 @@ render_config_categories :: proc(
 		return
 	}
 	write_clipped_line(batch, region.top_row, region.left_column, width, "Categories")
+	categoryLabels := make(
+		[dynamic]string,
+		0,
+		int(Config_Category.Advanced) + 1,
+		context.temp_allocator,
+	)
 	for categoryIndex := 0; categoryIndex <= int(Config_Category.Advanced); categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
-		row := region.top_row + 2 + categoryIndex
-		if row > region.bottom_row {
-			break
-		}
-		cursor := "  "
-		if category == state.configCategory {
-			cursor = "* "
-			if state.configFocus == .Categories {
-				cursor = "> "
-			}
-		}
-		write_clipped_line(
-			batch,
-			row,
-			region.left_column,
-			width,
-			config_prefixed_line(cursor, config_category_label(category)),
-		)
+		append(&categoryLabels, config_category_label(category))
 	}
+	listRegion := region
+	listRegion.top_row += 2
+	widgets.list_render(
+		batch,
+		listRegion,
+		categoryLabels[:],
+		widgets.List_Render_Options {
+			cursorIndex = int(state.configCategory),
+			selectedIndex = int(state.configCategory),
+			focused = state.configFocus == .Categories,
+			showSelectedMarker = true,
+		},
+	)
 }
 
 config_category_label :: proc(category: Config_Category) -> string {
@@ -659,35 +662,32 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 		config_category_label(state.configCategory),
 	)
 	row := region.top_row + 2
-	for setting, index in state.configSettings {
-		if row > region.bottom_row {
-			break
-		}
-		cursor := "  "
-		if state.configFocus == .Settings && index == state.configSettingCursor {
-			cursor = "> "
-		}
-		write_clipped_line(
-			batch,
-			row,
-			region.left_column,
-			width,
-			config_prefixed_line(cursor, config_setting_line(state, setting)),
-		)
-		row += 1
+	settingLabels := make([dynamic]string, 0, len(state.configSettings), context.temp_allocator)
+	for setting in state.configSettings {
+		append(&settingLabels, config_setting_line(state, setting))
 	}
+	listRegion := region
+	listRegion.top_row = row
+	widgets.list_render(
+		batch,
+		listRegion,
+		settingLabels[:],
+		widgets.List_Render_Options {
+			cursorIndex = state.configSettingCursor,
+			focused = state.configFocus == .Settings,
+		},
+	)
 }
 
 config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> string {
-	builder: strings.Builder
-	strings.builder_init(&builder, context.temp_allocator)
 	if state.configEditing &&
 	   setting.id == state.configEditingSetting.id &&
 	   setting.providerIndex == state.configEditingSetting.providerIndex {
-		strings.write_string(&builder, config_setting_label(setting.id))
-		strings.write_string(&builder, ": ")
-		strings.write_string(&builder, text_input.input_buffer_string(&state.configEdit))
-		return strings.to_string(builder)
+		return widgets.setting_row_value(
+			config_setting_label(setting.id),
+			widgets.text_editor_string(&state.configEditor),
+			context.temp_allocator,
+		)
 	}
 
 	if (setting.id == .Chat_Model ||
@@ -696,39 +696,41 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	   setting.modelIndex >= 0 &&
 	   setting.modelIndex < len(state.models) {
 		entry := state.models[setting.modelIndex]
-		active := " "
+		selected := false
 		if setting.id == .Chat_Model &&
 		   entry.providerName == state.config.selectedProvider &&
 		   entry.model == state.config.selectedModel {
-			active = "*"
+			selected = true
 		}
 		if setting.id == .Embedding_Model &&
 		   entry.providerName == state.config.embeddingProvider &&
 		   entry.model == state.config.embeddingModel {
-			active = "*"
+			selected = true
 		}
 		if setting.id == .Safety_Model &&
 		   entry.providerName == state.config.safetyProvider &&
 		   entry.model == state.config.safetyModel {
-			active = "*"
+			selected = true
 		}
-		strings.write_string(&builder, active)
-		strings.write_string(&builder, " ")
-		strings.write_string(&builder, entry.providerName)
-		strings.write_string(&builder, " / ")
-		strings.write_string(&builder, entry.model)
-		return strings.to_string(builder)
+		label := strings.concatenate(
+			{entry.providerName, " / ", entry.model},
+			context.temp_allocator,
+		)
+		return widgets.setting_row_option(label, selected, context.temp_allocator)
 	}
 	if setting.id == .Tool_Continuations {
-		strings.write_string(&builder, "Tool continuation limit: ")
-		strings.write_string(&builder, fmt.tprintf("%d", state.config.toolContinuations))
-		return strings.to_string(builder)
+		return widgets.setting_row_value(
+			"Tool continuation limit",
+			fmt.tprintf("%d", state.config.toolContinuations),
+			context.temp_allocator,
+		)
 	}
 	if setting.id == .Approval_Method {
-		strings.write_string(&builder, "Approval method: < ")
-		strings.write_string(&builder, approval_method_label(state.config.approvalMethod))
-		strings.write_string(&builder, " >")
-		return strings.to_string(builder)
+		return widgets.setting_row_choice(
+			"Approval method",
+			approval_method_label(state.config.approvalMethod),
+			context.temp_allocator,
+		)
 	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
@@ -737,29 +739,32 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	provider := state.config.providers[setting.providerIndex]
 	#partial switch setting.id {
 	case .Provider:
-		strings.write_string(&builder, "Provider: < ")
-		strings.write_string(&builder, provider.name)
-		strings.write_string(&builder, " >")
+		return widgets.setting_row_choice("Provider", provider.name, context.temp_allocator)
 	case .Provider_Name:
-		strings.write_string(&builder, "Name: ")
-		strings.write_string(&builder, provider.name)
+		return widgets.setting_row_value("Name", provider.name, context.temp_allocator)
 	case .Provider_Type:
-		strings.write_string(&builder, "Type: < ")
-		strings.write_string(&builder, settings.provider_type_to_string(provider.type))
-		strings.write_string(&builder, " >")
+		return widgets.setting_row_choice(
+			"Type",
+			settings.provider_type_to_string(provider.type),
+			context.temp_allocator,
+		)
 	case .Provider_Endpoint:
-		strings.write_string(&builder, "Endpoint: ")
-		strings.write_string(&builder, provider.endpoint)
+		return widgets.setting_row_value("Endpoint", provider.endpoint, context.temp_allocator)
 	case .Provider_API_Key:
-		strings.write_string(&builder, "API key: ")
-		strings.write_string(&builder, config_masked_value(provider.apiKey))
+		return widgets.setting_row_value(
+			"API key",
+			config_masked_value(provider.apiKey),
+			context.temp_allocator,
+		)
 	case .Provider_Model:
-		strings.write_string(&builder, "Configured model: ")
-		strings.write_string(&builder, provider.model)
+		return widgets.setting_row_value(
+			"Configured model",
+			provider.model,
+			context.temp_allocator,
+		)
 	case .Provider_Context_Window:
-		strings.write_string(&builder, "Context window tokens: ")
-		strings.write_string(
-			&builder,
+		return widgets.setting_row_value(
+			"Context window tokens",
 			fmt.tprintf(
 				"%d",
 				settings.config_context_window_tokens(
@@ -768,20 +773,16 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 					provider.model,
 				),
 			),
+			context.temp_allocator,
 		)
 	case .Provider_Enabled:
-		if provider.enabled {
-			return "[x] Enabled"
-		}
-		return "[ ] Enabled"
+		return widgets.setting_row_checkbox("Enabled", provider.enabled, context.temp_allocator)
 	case .Refresh_Models, .Add_Provider, .Remove_Provider:
-		strings.write_string(&builder, "[ ")
-		strings.write_string(&builder, config_setting_label(setting.id))
-		strings.write_string(&builder, " ]")
+		return widgets.setting_row_button(config_setting_label(setting.id), context.temp_allocator)
 	case:
 		return config_setting_label(setting.id)
 	}
-	return strings.to_string(builder)
+	return config_setting_label(setting.id)
 }
 
 config_prefixed_line :: proc(prefix, text: string, allocator := context.temp_allocator) -> string {
