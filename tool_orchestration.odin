@@ -184,7 +184,6 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	execution.worker = nil
 	output := execution.result
 	outputOwned := execution.resultOwned
-	toolCallID := execution.call.callID
 	agentID := execution.agentID
 	agentRequestID := execution.agentRequestID
 	isError := app_tool_output_is_error(output)

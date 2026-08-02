@@ -2,7 +2,6 @@ package main
 
 import "agent"
 import "ai"
-import "core:mem"
 import "core:strings"
 import "settings"
 import "tool_policy"
