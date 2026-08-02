@@ -3,6 +3,8 @@ package widgets
 import text_input "../text_input"
 import "core:unicode/utf8"
 
+CTRL_S :: byte(19)
+
 Text_Editor_Event :: enum int {
 	None = 0,
 	Commit,
@@ -73,10 +75,10 @@ text_editor_handle_multiline_byte :: proc(
 	Text_Editor_Event,
 ) {
 	switch input {
-	case 19:
+	case CTRL_S:
 		editor.utf8PendingLen = 0
 		return true, .Commit
-	case '\r':
+	case '\r', '\n':
 		editor.utf8PendingLen = 0
 		text_input.input_buffer_push_byte(&editor.buffer, '\n')
 		return true, .None

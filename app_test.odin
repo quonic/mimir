@@ -883,6 +883,27 @@ test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t: ^testing.T) {
+	history := []History_Entry {
+		{role = .System, content = "system"},
+		{role = .User, content = "hello"},
+		{role = .Assistant, content = "hi"},
+		{role = .Tool, content = "tool output"},
+		{role = .Assistant, content = ""},
+	}
+
+	messages := app_build_ai_messages(history, "", context.temp_allocator)
+	assert(len(messages) == 3, "expected only mapped non-empty history messages")
+	assert(messages[0].role == ai.Message_Role.System, "expected history system message first")
+	assert(messages[0].content == "system", "expected history system content to be preserved")
+	assert(messages[1].role == ai.Message_Role.User, "expected user message second")
+	assert(messages[1].content == "hello", "expected user content to be preserved")
+	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant message third")
+	assert(messages[2].content == "hi", "expected assistant content to be preserved")
+	_ = t
+}
+
+@(test)
 test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
 	defaultPrompt := system_prompt_effective("", .Append, context.temp_allocator)
 	defer delete(defaultPrompt, context.temp_allocator)
@@ -1866,7 +1887,7 @@ test_config_modal_edits_and_resets_system_prompt :: proc(t: ^testing.T) {
 	assert(app_handle_input_byte(&state, 'a'), "expected prompt text input")
 	assert(app_handle_input_byte(&state, '\r'), "expected prompt newline")
 	assert(app_handle_input_byte(&state, 'b'), "expected prompt second line")
-	assert(app_handle_input_byte(&state, 19), "expected prompt Ctrl-S save")
+	assert(app_handle_input_byte(&state, widgets.CTRL_S), "expected prompt Ctrl-S save")
 	assert(state.config.systemPrompt == "a\nb", "expected multiline prompt to save")
 	assert(state.status == "System prompt saved", "expected prompt save status")
 
@@ -1874,6 +1895,11 @@ test_config_modal_edits_and_resets_system_prompt :: proc(t: ^testing.T) {
 	assert(app_activate_config_setting(&state), "expected reset prompt activation")
 	assert(state.config.systemPrompt == "", "expected reset prompt text")
 	assert(state.config.systemPromptMode == .Append, "expected reset prompt mode")
+
+	state.configSettingCursor = 3
+	assert(app_activate_config_setting(&state), "expected empty prompt editor activation")
+	assert(app_handle_input_byte(&state, widgets.CTRL_S), "expected empty prompt save")
+	assert(state.config.systemPrompt == "", "expected empty prompt after save")
 	_ = t
 }
 

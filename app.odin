@@ -2324,7 +2324,10 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		if state.config.systemPrompt != "" {
 			delete(state.config.systemPrompt, state.config.allocationAllocator)
 		}
-		state.config.systemPrompt = strings.clone(text, state.config.allocationAllocator)
+		state.config.systemPrompt = ""
+		if text != "" {
+			state.config.systemPrompt = strings.clone(text, state.config.allocationAllocator)
+		}
 		app_apply_config_change(state, "System prompt saved")
 		return
 	}

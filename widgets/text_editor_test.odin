@@ -44,7 +44,10 @@ test_text_editor_multiline_inserts_newlines_and_commits_with_ctrl_s :: proc(t: ^
 	handled, event = text_editor_handle_multiline_byte(&editor, 'b')
 	assert(handled && event == .None, "expected multiline editor second line")
 	assert(text_editor_string(&editor) == "a\nb", "expected inserted newline")
-	handled, event = text_editor_handle_multiline_byte(&editor, 19)
+	handled, event = text_editor_handle_multiline_byte(&editor, '\n')
+	assert(handled && event == .None, "expected LF Enter to insert a newline")
+	assert(text_editor_string(&editor) == "a\nb\n", "expected LF inserted newline")
+	handled, event = text_editor_handle_multiline_byte(&editor, CTRL_S)
 	assert(handled && event == .Commit, "expected Ctrl-S to commit multiline input")
 	_ = t
 }

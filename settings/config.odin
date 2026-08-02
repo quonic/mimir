@@ -463,7 +463,9 @@ parse_config_from_json :: proc(
 		config_destroy(&config)
 		return Mimir_Config{}, .Invalid_JSON
 	}
-	config.systemPrompt = strings.clone(wire.systemPrompt, allocator)
+	if wire.systemPrompt != "" {
+		config.systemPrompt = strings.clone(wire.systemPrompt, allocator)
+	}
 	config.systemPromptMode = systemPromptMode
 	if wire.toolContinuations < 0 {
 		config_destroy(&config)
