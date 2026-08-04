@@ -373,7 +373,11 @@ app_register_config_interfaces :: proc(
 			continue
 		}
 		if probeOllama && provider.type == .Ollama {
-			models, err := ai.probe_ollama_endpoint(provider.endpoint, allocator)
+			models, err := ai.probe_ollama_endpoint_with_api_key(
+				provider.endpoint,
+				provider.apiKey,
+				allocator,
+			)
 			if err == .None {
 				result.modelCount += len(models)
 				ai.add_interface_with_models(
@@ -1833,7 +1837,11 @@ app_submit_setup_input :: proc(state: ^App_State, text: string) {
 }
 
 app_complete_setup :: proc(state: ^App_State) {
-	models, probeErr := ai.probe_ollama_endpoint(state.setupEndpoint, context.allocator)
+	models, probeErr := ai.probe_ollama_endpoint_with_api_key(
+		state.setupEndpoint,
+		state.setupAPIKey,
+		context.allocator,
+	)
 	if probeErr != .None {
 		state.setupStep = .Endpoint
 		state.status = "Setup: Ollama unavailable; enter endpoint to retry"
@@ -2493,7 +2501,11 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		state.status = "Only Ollama providers support refresh"
 		return
 	}
-	models, err := ai.probe_ollama_endpoint(provider.endpoint, context.allocator)
+	models, err := ai.probe_ollama_endpoint_with_api_key(
+		provider.endpoint,
+		provider.apiKey,
+		context.allocator,
+	)
 	if err != .None {
 		state.status = "Provider model refresh failed"
 		return
@@ -2803,7 +2815,11 @@ app_rebuild_model_entries :: proc(state: ^App_State, allocator := context.alloca
 		}
 
 		if !added && provider.type == .Ollama {
-			models, err := ai.probe_ollama_endpoint(provider.endpoint, allocator)
+			models, err := ai.probe_ollama_endpoint_with_api_key(
+				provider.endpoint,
+				provider.apiKey,
+				allocator,
+			)
 			if err == .None {
 				for model in models {
 					app_append_model_entry(state, provider, model, allocator)

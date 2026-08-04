@@ -413,10 +413,7 @@ get_ollama_model_context_window :: proc(client: Client, model: string) -> (int, 
 
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
+	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(
 		target,

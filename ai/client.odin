@@ -200,10 +200,7 @@ send_ollama_chat_completion :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
+	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
 	if errKind != .None {
@@ -236,10 +233,7 @@ send_ollama_embeddings :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
+	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
 	if errKind != .None {
@@ -269,10 +263,7 @@ send_ollama_chat_completion_stream :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
+	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 	toolState: Ollama_Stream_Tool_State
 	streamCallbackState := callbackState
 	streamCallbackState.parserData = rawptr(&toolState)
@@ -313,10 +304,7 @@ list_ollama_models :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
-	if client.apiKey != "" {
-		authorization := strings.concatenate({"Bearer ", client.apiKey}, context.temp_allocator)
-		append(&extraHeaders, [2]string{"authorization", authorization})
-	}
+	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_get(target, extraHeaders[:])
 	if errKind != .None {
@@ -348,6 +336,16 @@ compose_endpoint_target :: proc(endpoint: http.URL, pathSuffix: string) -> (stri
 	case:
 		return strings.concatenate({endpoint.raw, pathSuffix}, context.temp_allocator), true
 	}
+}
+
+append_api_key_auth_headers :: proc(extraHeaders: ^[dynamic][2]string, apiKey: string) {
+	if apiKey == "" {
+		return
+	}
+
+	authorization := strings.concatenate({"Bearer ", apiKey}, context.temp_allocator)
+	append(extraHeaders, [2]string{"Authorization", authorization})
+	append(extraHeaders, [2]string{"X-API-Key", apiKey})
 }
 
 do_json_post :: proc(

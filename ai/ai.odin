@@ -138,13 +138,27 @@ probe_ollama_endpoint :: proc(
 	[dynamic]Model,
 	AI_Error,
 ) {
+	return probe_ollama_endpoint_with_api_key(endpoint, "", allocator)
+}
+
+probe_ollama_endpoint_with_api_key :: proc(
+	endpoint: string,
+	apiKey: string,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Model,
+	AI_Error,
+) {
 	url := http.url_parse(endpoint)
 	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
 		return [dynamic]Model{}, .Invalid_Request
 	}
 
 	return list_ollama_models(
-		Client{iface = Interface{name = "ollama", type = .Ollama, endpoint = url}},
+		Client {
+			iface = Interface{name = "ollama", type = .Ollama, endpoint = url},
+			apiKey = apiKey,
+		},
 		allocator,
 	)
 }
