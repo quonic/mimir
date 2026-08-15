@@ -872,13 +872,12 @@ test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 	}
 
 	messages := app_build_ai_messages(history, "configured prompt", context.temp_allocator)
-	assert(len(messages) == 4, "expected configured prompt, system, user, and assistant messages")
+	assert(len(messages) == 3, "expected configured prompt, user, and assistant messages")
 	assert(messages[0].role == ai.Message_Role.System, "expected system role to map")
 	assert(messages[0].content == "configured prompt", "expected configured prompt first")
-	assert(messages[1].role == ai.Message_Role.System, "expected history system role to map")
-	assert(messages[2].role == ai.Message_Role.User, "expected user role to map")
-	assert(messages[3].role == ai.Message_Role.Assistant, "expected assistant role to map")
-	assert(messages[3].content == "hi", "expected assistant content to be preserved")
+	assert(messages[1].role == ai.Message_Role.User, "expected user role to map")
+	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant role to map")
+	assert(messages[2].content == "hi", "expected assistant content to be preserved")
 	_ = t
 }
 
@@ -893,13 +892,11 @@ test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t
 	}
 
 	messages := app_build_ai_messages(history, "", context.temp_allocator)
-	assert(len(messages) == 3, "expected only mapped non-empty history messages")
-	assert(messages[0].role == ai.Message_Role.System, "expected history system message first")
-	assert(messages[0].content == "system", "expected history system content to be preserved")
-	assert(messages[1].role == ai.Message_Role.User, "expected user message second")
-	assert(messages[1].content == "hello", "expected user content to be preserved")
-	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant message third")
-	assert(messages[2].content == "hi", "expected assistant content to be preserved")
+	assert(len(messages) == 2, "expected only non-system mapped history messages")
+	assert(messages[0].role == ai.Message_Role.User, "expected user message first")
+	assert(messages[0].content == "hello", "expected user content to be preserved")
+	assert(messages[1].role == ai.Message_Role.Assistant, "expected assistant message second")
+	assert(messages[1].content == "hi", "expected assistant content to be preserved")
 	_ = t
 }
 

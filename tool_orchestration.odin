@@ -86,6 +86,9 @@ app_build_ai_messages :: proc(
 		if entry.content == "" {
 			continue
 		}
+		if entry.role == .System {
+			continue
+		}
 
 		role, ok := app_ai_role_from_history_role(entry.role)
 		if !ok {
