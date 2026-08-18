@@ -43,31 +43,31 @@ Client :: struct {
 	apiKey: string,
 }
 
-Interfaces: [dynamic]Interface
+interfaces: [dynamic]Interface
 interfacesAllocator: mem.Allocator
 
 clear_interfaces :: proc() {
-	if Interfaces == nil {
+	if interfaces == nil || len(interfaces) == 0 {
 		return
 	}
-	for iface in Interfaces {
+	for iface in interfaces {
 		for &model in iface.models {
 			model_destroy(&model, interfacesAllocator)
 		}
 		delete(iface.models)
 	}
-	delete_dynamic_array(Interfaces)
-	Interfaces = nil
+	delete_dynamic_array(interfaces)
+	interfaces = nil
 }
 
 add_interface :: proc(name: string, type: Interface_Type, endpoint: string) {
 	url := http.url_parse(endpoint)
 	if url.host != "" {
-		if Interfaces == nil {
-			Interfaces = make([dynamic]Interface, 0, 0, context.allocator)
+		if interfaces == nil {
+			interfaces = make([dynamic]Interface, 0, 0, context.allocator)
 			interfacesAllocator = context.allocator
 		}
-		append_elem(&Interfaces, Interface{name = name, type = type, endpoint = url})
+		append_elem(&interfaces, Interface{name = name, type = type, endpoint = url})
 	}
 }
 
@@ -81,8 +81,8 @@ add_interface_with_models :: proc(
 	if url.host == "" {
 		return
 	}
-	if Interfaces == nil {
-		Interfaces = make([dynamic]Interface, 0, 0, context.allocator)
+	if interfaces == nil {
+		interfaces = make([dynamic]Interface, 0, 0, context.allocator)
 		interfacesAllocator = context.allocator
 	}
 
@@ -95,11 +95,11 @@ add_interface_with_models :: proc(
 		append_elem(&entry.models, model_clone(model))
 	}
 
-	append_elem(&Interfaces, entry)
+	append_elem(&interfaces, entry)
 }
 
 get_interface :: proc(name: string) -> (Interface, bool) {
-	for iface in Interfaces {
+	for iface in interfaces {
 		if iface.name == name {
 			return iface, true
 		}
