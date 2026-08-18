@@ -6,6 +6,7 @@ package ai
 import http "../http"
 import "core:mem"
 import "core:strings"
+import "core:sync"
 
 Interface :: struct {
 	name:     string,
@@ -45,8 +46,14 @@ Client :: struct {
 
 interfaces: [dynamic]Interface
 interfacesAllocator: mem.Allocator
+// odin's test runner executes tests in parallel; guard the shared registry so
+// concurrent add/clear calls from different tests don't race on the same array.
+interfacesMutex: sync.Mutex
 
 clear_interfaces :: proc() {
+	sync.mutex_lock(&interfacesMutex)
+	defer sync.mutex_unlock(&interfacesMutex)
+
 	if interfaces == nil || len(interfaces) == 0 {
 		return
 	}
@@ -63,6 +70,9 @@ clear_interfaces :: proc() {
 add_interface :: proc(name: string, type: Interface_Type, endpoint: string) {
 	url := http.url_parse(endpoint)
 	if url.host != "" {
+		sync.mutex_lock(&interfacesMutex)
+		defer sync.mutex_unlock(&interfacesMutex)
+
 		if interfaces == nil {
 			interfaces = make([dynamic]Interface, 0, 0, context.allocator)
 			interfacesAllocator = context.allocator
@@ -81,10 +91,6 @@ add_interface_with_models :: proc(
 	if url.host == "" {
 		return
 	}
-	if interfaces == nil {
-		interfaces = make([dynamic]Interface, 0, 0, context.allocator)
-		interfacesAllocator = context.allocator
-	}
 
 	entry := Interface {
 		name     = name,
@@ -95,10 +101,21 @@ add_interface_with_models :: proc(
 		append_elem(&entry.models, model_clone(model))
 	}
 
+	sync.mutex_lock(&interfacesMutex)
+	defer sync.mutex_unlock(&interfacesMutex)
+
+	if interfaces == nil {
+		interfaces = make([dynamic]Interface, 0, 0, context.allocator)
+		interfacesAllocator = context.allocator
+	}
+
 	append_elem(&interfaces, entry)
 }
 
 get_interface :: proc(name: string) -> (Interface, bool) {
+	sync.mutex_lock(&interfacesMutex)
+	defer sync.mutex_unlock(&interfacesMutex)
+
 	for iface in interfaces {
 		if iface.name == name {
 			return iface, true
