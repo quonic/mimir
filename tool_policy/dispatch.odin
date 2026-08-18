@@ -41,6 +41,8 @@ Tool_Call :: struct {
 	mcpServer:        string,
 	query:            string,
 	maxResults:       int,
+	argumentsJSON:    string,
+	uri:              string,
 }
 
 tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
@@ -59,6 +61,8 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		mcpServer        = strings.clone(call.mcpServer, allocator),
 		query            = strings.clone(call.query, allocator),
 		maxResults       = call.maxResults,
+		argumentsJSON    = strings.clone(call.argumentsJSON, allocator),
+		uri              = strings.clone(call.uri, allocator),
 	}
 	return clone
 }
@@ -76,6 +80,8 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.workingDirectory, allocator)
 	delete(call.mcpServer, allocator)
 	delete(call.query, allocator)
+	delete(call.argumentsJSON, allocator)
+	delete(call.uri, allocator)
 }
 
 tool_dispatcher_init :: proc(
@@ -137,6 +143,11 @@ tool_dispatch_build_action :: proc(
 ) {
 	action := Permission_Action {
 		projectRoot = dispatcher.projectRoot,
+	}
+	if call.mcpServer != "" {
+		action.effect = .Remote
+		action.mcpServer = call.mcpServer
+		return action, true
 	}
 	switch call.id {
 	case "read_file", "get_file_info":
@@ -208,12 +219,6 @@ tool_dispatch_build_action :: proc(
 		}
 		action.workingDirectory = resolvedDirectory
 		action.workingDirectoryOwned = true
-	case "mcp":
-		if call.mcpServer == "" {
-			return Permission_Action{}, false
-		}
-		action.effect = .Remote
-		action.mcpServer = call.mcpServer
 	case:
 		return Permission_Action{}, false
 	}

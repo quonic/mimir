@@ -14,6 +14,7 @@ TOOL_RUN_COMMAND :: "run_command"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
+TOOL_READ_MCP_RESOURCE :: "read_mcp_resource"
 
 // ============================================================
 // Filesystem Operations
@@ -214,7 +215,7 @@ run_command :: proc(command: string, working_directory: string = "", timeout: in
 builtin_ai_tool_definitions :: proc(
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
-	definitions := make([dynamic]ai.Tool_Definition, 0, 8, allocator)
+	definitions := make([dynamic]ai.Tool_Definition, 0, 9, allocator)
 	append(
 		&definitions,
 		ai.Tool_Definition {
@@ -261,6 +262,14 @@ builtin_ai_tool_definitions :: proc(
 			name = TOOL_GET_FILE_INFO,
 			description = "Get metadata for a file in the active project",
 			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = TOOL_READ_MCP_RESOURCE,
+			description = "Read a resource exposed by a configured MCP server",
+			parametersJSON = `{"type":"object","properties":{"mcp_server":{"type":"string"},"uri":{"type":"string"}},"required":["mcp_server","uri"]}`,
 		},
 	)
 	// Note: search_code and find_code are included here for API compatibility with AI providers,

@@ -92,6 +92,20 @@ the approval dialog. Select a chat provider and model in `Safety Model` to use
 a separate safety model. If both values are empty, Mimir uses the chat provider
 and model. An incomplete or invalid safety selection disables safety advice.
 
+`mcpServers` configures MCP (Model Context Protocol) servers. Each entry has:
+
+- `name`: identifies the server. Tool, resource, and prompt names from this
+  server are exposed to the model as `{name}.{toolName}`.
+- `command` and `args`: spawns the server as a subprocess and speaks
+  newline-delimited JSON-RPC over its stdin/stdout.
+- `url`: connects to the server over Streamable HTTP instead. Set either
+  `command` or `url`, not both.
+- `enabled`: set to `false` to keep the entry in the config without
+  connecting to it.
+
+See [tools-mcp-skills.md](tools-mcp-skills.md) for the supported protocol
+revision, transports, and approval model.
+
 `approvalMethod` controls actions that require approval after Mimir checks the
 normal permission grants. It defaults to `alwaysAsk` when omitted. Set it in
 `/config` under `Advanced`, or use one of these JSON values:

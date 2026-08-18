@@ -359,7 +359,7 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		state.status = "Agent runtime could not prepare its conversation"
 		return false
 	}
-	tools := app_tool_definitions_for_provider(provider.type, context.temp_allocator)
+	tools := app_tool_definitions_for_provider(state, provider.type, context.temp_allocator)
 	defer delete(tools)
 	streamErr := agent.runtime_start_stream(
 		&state.agentHost.runtime,

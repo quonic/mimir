@@ -218,9 +218,11 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 
 @(test)
 test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
-	ollamaTools := app_tool_definitions_for_provider(.Ollama, context.allocator)
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 8, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 9, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }
@@ -781,7 +783,7 @@ test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testin
 	app_run_command(&state, commands.parse_slash_command("/help"))
 	assert(
 		state.history[len(state.history) - 1].content ==
-		"Commands: /exit, /config, /help, /stop, /clear",
+		"Commands: /exit, /config, /help, /stop, /clear, /prompts",
 		"expected help to list only supported commands",
 	)
 	_ = t
