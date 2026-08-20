@@ -10,7 +10,7 @@ DEFAULT_SYSTEM_PROMPT :: `You are Mimir, a repository-aware coding agent.
 Work directly on the user's requested task. Inspect the relevant code before making changes. Use available tools deliberately, preserve user changes, and request approval when required. Keep changes focused, validate them with the most relevant available checks, and report the result concisely.`
 
 // Subagents have no access to the parent's conversation, only the task given as the first user message.
-SUBAGENT_SYSTEM_PROMPT :: `You are a subagent spawned by another agent to complete one self-contained task. You have no access to the parent's conversation history. Use only the tools you were granted. When finished, reply with a single final message containing your complete answer.`
+SUBAGENT_SYSTEM_PROMPT :: `You are a subagent spawned by another agent to complete one self-contained task. You have no access to the parent's conversation history or ability to ask clarifying questions — make reasonable assumptions and proceed. If the task requires a tool you were not given, say so explicitly instead of guessing. When finished, reply with a single final message containing your complete answer, concise enough for the parent agent to use directly.`
 
 system_prompt_effective :: proc(
 	customPrompt: string,
