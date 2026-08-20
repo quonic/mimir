@@ -535,10 +535,20 @@ run_app :: proc() {
 				state.shouldQuit = true
 				break
 			}
+			prevMode := state.mode
+			prevInputLines := app_input_line_count(&state)
 			frameDirty = app_handle_input_byte(&state, buffer[0])
 			if state.historyRenderOnly {
 				historyDirty = true
 				state.historyRenderOnly = false
+				frameDirty = false
+			} else if frameDirty &&
+			   state.mode == prevMode &&
+			   (state.mode == .Chat || state.mode == .Setup) &&
+			   app_input_line_count(&state) == prevInputLines {
+				// Typing rarely changes the panel layout; a full-screen clear on every
+				// keystroke causes visible border flicker under some Wayland compositors.
+				inputDirty = true
 				frameDirty = false
 			}
 		} else if app_flush_pending_input(&state) {
@@ -716,6 +726,16 @@ app_input_panel :: proc(state: ^App_State) -> console.Region {
 	)
 	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
 	return console.panel_interior(console.Panel{region = layout.inputPanel})
+}
+
+// Number of wrapped input lines at the current terminal width; used to detect whether an
+// edit would change the panel layout (and therefore requires a full-frame redraw).
+app_input_line_count :: proc(state: ^App_State) -> int {
+	input_width := state.terminal.columns - 2
+	if input_width < 1 {
+		input_width = 1
+	}
+	return wrapped_text_line_count(text_input.input_buffer_string(&state.input), input_width)
 }
 
 input_grapheme_index_at_column :: proc(text: string, column: int) -> int {
