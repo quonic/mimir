@@ -1,6 +1,7 @@
 package agent
 
 import ai "../ai"
+import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:sync"
@@ -130,14 +131,14 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 		if instance.streamConfig.continuationPending {
 			// Ensure we don't repeatedly retry/emit failures if the continuation can't be started.
 			instance.streamConfig.continuationPending = false
-			if runtime_start_configured_stream(runtime, index) != .None {
+			if startErr := runtime_start_configured_stream(runtime, index); startErr != .None {
 				instance.state = .Failed
 				runtime_emit_event(
 					runtime,
 					index,
 					Agent_Event {
 						type = .Failed,
-						content = "Assistant continuation failed.",
+						content = fmt.tprintf("Assistant continuation failed: %v", startErr),
 						isError = true,
 					},
 				)
@@ -190,7 +191,11 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 		runtime_emit_event(
 			runtime,
 			index,
-			Agent_Event{type = .Failed, content = "Assistant stream failed.", isError = true},
+			Agent_Event {
+				type = .Failed,
+				content = fmt.tprintf("Assistant stream failed: %v", err),
+				isError = true,
+			},
 		)
 		return true, .None
 	}
