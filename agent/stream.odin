@@ -153,6 +153,7 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 			// Ensure we don't repeatedly retry/emit failures if the continuation can't be started.
 			instance.streamConfig.continuationPending = false
 			if startErr := runtime_start_configured_stream(runtime, index); startErr != .None {
+				reason := runtime_stream_start_diagnostic(instance)
 				instance.state = .Failed
 				runtime_emit_event(
 					runtime,
@@ -162,7 +163,7 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 						content = fmt.tprintf(
 							"Assistant continuation failed: %v (%s)",
 							startErr,
-							runtime_stream_start_diagnostic(instance),
+							reason,
 						),
 						isError = true,
 					},

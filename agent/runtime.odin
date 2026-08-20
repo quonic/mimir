@@ -411,13 +411,17 @@ runtime_finish_tool_at_index :: proc(
 	instance.pendingToolSet = false
 	clear(&instance.partialBuffer)
 	instance.state = .Streaming
-	instance.streamConfig.continuationPending = instance.streamConfig.configured
 	runtime_emit_event(
 		runtime,
 		index,
 		Agent_Event{type = .Tool_Resolved, content = output, isError = isError},
 	)
 	if len(instance.queuedTools) > 0 {
+		// Another tool from this batch is still queued; defer the stream continuation
+		// until the whole batch resolves so we don't race runtime_poll_stream against
+		// the Awaiting_Tool_Resolution state that runtime_request_next_tool sets below.
 		_ = runtime_request_next_tool(runtime, index)
+	} else {
+		instance.streamConfig.continuationPending = instance.streamConfig.configured
 	}
 }
