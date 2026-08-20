@@ -511,10 +511,8 @@ app_start_subagent :: proc(
 		return app_fail_subagent_tool(state, parentID, "Could not prepare subagent conversation.")
 	}
 
-	client, model, _, temperature, maxTokens, streamOK := agent.runtime_stream_configuration_view(
-		&state.agentHost.runtime,
-		parentID,
-	)
+	client, model, _, temperature, tokenBudget, streamOK :=
+		agent.runtime_stream_configuration_view(&state.agentHost.runtime, parentID)
 	if !streamOK {
 		return app_fail_subagent_tool(state, parentID, "Parent stream configuration unavailable.")
 	}
@@ -525,7 +523,7 @@ app_start_subagent :: proc(
 		   model,
 		   childTools[:],
 		   temperature,
-		   maxTokens,
+		   tokenBudget,
 	   ) !=
 	   .None {
 		return app_fail_subagent_tool(state, parentID, "Could not start subagent stream.")
@@ -616,6 +614,11 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	}
 	tools := app_tool_definitions_for_provider(state, provider.type, context.temp_allocator)
 	defer delete(tools)
+	tokenBudget := agent.Token_Budget {
+		contextWindowTokens = state.agentHost.contextWindowTokens,
+		floorTokens         = agent.MIN_OUTPUT_TOKENS_FLOOR,
+		fallbackTokens      = agent.DEFAULT_MAX_TOKENS_FALLBACK,
+	}
 	streamErr := agent.runtime_start_stream(
 		&state.agentHost.runtime,
 		activeID,
@@ -623,7 +626,7 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		model,
 		tools[:],
 		0.2,
-		4096,
+		tokenBudget,
 	)
 	if streamErr != .None {
 		_ = agent.runtime_cancel(&state.agentHost.runtime, activeID)

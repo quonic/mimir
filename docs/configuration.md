@@ -164,6 +164,11 @@ models** finds these values for all listed Ollama models and saves changed
 positive values. Missing or unsupported metadata keeps an existing limit and
 does not stop chat.
 
+Mimir also uses this value to size each response: it requests up to the
+context window minus the current conversation's estimated size, so replies
+get room to complete without pushing the request past the model's limit. A
+value of `0` falls back to a fixed request size instead.
+
 ## Permission Grants
 
 Built-in file operations are confined to Mimir's active project directory.

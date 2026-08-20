@@ -1,6 +1,7 @@
 package agent
 
 import ai "../ai"
+import "core:strings"
 import "core:testing"
 
 @(test)
@@ -246,6 +247,76 @@ test_stream_request_clone_owns_messages_and_tool_definitions :: proc(t: ^testing
 	assert(request.tools[0].name == "read_file", "expected cloned tool name")
 	assert(request.temperature == 0.2, "expected cloned temperature")
 	assert(request.maxTokens == 4096, "expected cloned max tokens")
+	_ = t
+}
+
+@(test)
+test_resolve_max_tokens_falls_back_when_context_window_unknown :: proc(t: ^testing.T) {
+	instance := Agent_Instance{}
+	budget := Token_Budget {
+		contextWindowTokens = 0,
+		floorTokens         = MIN_OUTPUT_TOKENS_FLOOR,
+		fallbackTokens      = DEFAULT_MAX_TOKENS_FALLBACK,
+	}
+	assert(
+		runtime_resolve_max_tokens(&instance, budget) == DEFAULT_MAX_TOKENS_FALLBACK,
+		"expected fallback when context window is unknown",
+	)
+	_ = t
+}
+
+@(test)
+test_resolve_max_tokens_prefers_reported_usage_over_heuristic :: proc(t: ^testing.T) {
+	instance := Agent_Instance{}
+	instance.lastUsage = ai.Chat_Usage {
+		inputTokens    = 1000,
+		hasInputTokens = true,
+	}
+	budget := Token_Budget {
+		contextWindowTokens = 4096,
+		floorTokens         = 256,
+		fallbackTokens      = 4096,
+	}
+	assert(
+		runtime_resolve_max_tokens(&instance, budget) == 3096,
+		"expected context window minus reported input tokens",
+	)
+	_ = t
+}
+
+@(test)
+test_resolve_max_tokens_floors_when_usage_leaves_little_room :: proc(t: ^testing.T) {
+	instance := Agent_Instance{}
+	instance.lastUsage = ai.Chat_Usage {
+		inputTokens    = 4000,
+		hasInputTokens = true,
+	}
+	budget := Token_Budget {
+		contextWindowTokens = 4096,
+		floorTokens         = 256,
+		fallbackTokens      = 4096,
+	}
+	assert(
+		runtime_resolve_max_tokens(&instance, budget) == 256,
+		"expected floor to override a nearly-exhausted window",
+	)
+	_ = t
+}
+
+@(test)
+test_resolve_max_tokens_estimates_from_conversation_without_reported_usage :: proc(t: ^testing.T) {
+	instance := Agent_Instance {
+		conversation = make([dynamic]ai.Message, context.temp_allocator),
+	}
+	longContent, _ := strings.repeat("a", 400, context.temp_allocator)
+	append(&instance.conversation, ai.Message{role = .User, content = longContent})
+	budget := Token_Budget {
+		contextWindowTokens = 4096,
+		floorTokens         = 256,
+		fallbackTokens      = 4096,
+	}
+	resolved := runtime_resolve_max_tokens(&instance, budget)
+	assert(resolved < 4096 && resolved > 3800, "expected heuristic estimate to reserve some room")
 	_ = t
 }
 

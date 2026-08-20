@@ -32,7 +32,7 @@ runtime_start_stream :: proc(
 	model: string,
 	tools: []ai.Tool_Definition,
 	temperature: f32,
-	maxTokens: int,
+	tokenBudget: Token_Budget,
 ) -> Agent_Error {
 	index, ok := runtime_find_index(runtime, id)
 	if !ok {
@@ -51,7 +51,7 @@ runtime_start_stream :: proc(
 		model,
 		tools,
 		temperature,
-		maxTokens,
+		tokenBudget,
 		runtime.allocator,
 	)
 	return runtime_start_configured_stream(runtime, index)
@@ -79,7 +79,7 @@ runtime_start_configured_stream :: proc(runtime: ^Runtime, index: int) -> Agent_
 		instance.conversation[:],
 		configuration.tools[:],
 		configuration.temperature,
-		configuration.maxTokens,
+		runtime_resolve_max_tokens(instance, configuration.tokenBudget),
 		runtime.allocator,
 	)
 	stream.workerData = worker
@@ -117,7 +117,7 @@ runtime_stream_configuration_clone :: proc(
 	model: string,
 	tools: []ai.Tool_Definition,
 	temperature: f32,
-	maxTokens: int,
+	tokenBudget: Token_Budget,
 	allocator := context.allocator,
 ) -> Stream_Configuration {
 	configuration := Stream_Configuration {
@@ -125,7 +125,7 @@ runtime_stream_configuration_clone :: proc(
 		model       = strings.clone(model, allocator),
 		tools       = make([dynamic]ai.Tool_Definition, 0, len(tools), allocator),
 		temperature = temperature,
-		maxTokens   = maxTokens,
+		tokenBudget = tokenBudget,
 		configured  = true,
 	}
 	for tool in tools {
@@ -139,6 +139,43 @@ runtime_stream_configuration_clone :: proc(
 		)
 	}
 	return configuration
+}
+
+// Rough chars-per-token heuristic used only before any real usage has been reported.
+runtime_estimate_prompt_tokens :: proc(instance: ^Agent_Instance) -> int {
+	chars := 0
+	for message in instance.conversation {
+		chars += len(message.content)
+		for toolCall in message.toolCalls {
+			chars += len(toolCall.name) + len(toolCall.arguments)
+		}
+		for toolResult in message.toolResults {
+			chars += len(toolResult.content)
+		}
+	}
+	for tool in instance.streamConfig.tools {
+		chars += len(tool.name) + len(tool.description) + len(tool.parametersJSON)
+	}
+	return (chars + 3) / 4
+}
+
+// Sizes the response's maxTokens from the remaining context window, refining the estimate
+// with real usage once the provider has reported it.
+runtime_resolve_max_tokens :: proc(instance: ^Agent_Instance, budget: Token_Budget) -> int {
+	if budget.contextWindowTokens <= 0 {
+		return budget.fallbackTokens
+	}
+	estimated: int
+	if instance.lastUsage.hasInputTokens {
+		estimated = instance.lastUsage.inputTokens
+	} else {
+		estimated = runtime_estimate_prompt_tokens(instance)
+	}
+	available := budget.contextWindowTokens - estimated
+	if available < budget.floorTokens {
+		available = budget.floorTokens
+	}
+	return available
 }
 
 runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Error) {
@@ -399,6 +436,7 @@ runtime_receive_stream_delta :: proc(
 		)
 	}
 	if delta.usage.hasInputTokens || delta.usage.hasOutputTokens {
+		instance.lastUsage = delta.usage
 		runtime_emit_event(runtime, index, Agent_Event{type = .Usage_Updated, usage = delta.usage})
 	}
 	if delta.hasToolCall {

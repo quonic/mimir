@@ -19,14 +19,26 @@ Agent_Instance :: struct {
 	pendingTool:    Tool_Request,
 	pendingToolSet: bool,
 	thinking:       bool,
+	// Most recent provider-reported usage; seeds the next maxTokens estimate.
+	lastUsage:      ai.Chat_Usage,
 }
+
+// Sizes the response's maxTokens from the model's context window rather than a fixed value.
+Token_Budget :: struct {
+	contextWindowTokens: int,
+	floorTokens:         int,
+	fallbackTokens:      int,
+}
+
+DEFAULT_MAX_TOKENS_FALLBACK :: 4096
+MIN_OUTPUT_TOKENS_FLOOR :: 256
 
 Stream_Configuration :: struct {
 	client:              ai.Client,
 	model:               string,
 	tools:               [dynamic]ai.Tool_Definition,
 	temperature:         f32,
-	maxTokens:           int,
+	tokenBudget:         Token_Budget,
 	configured:          bool,
 	continuationPending: bool,
 }
@@ -176,19 +188,19 @@ runtime_stream_configuration_view :: proc(
 	model: string,
 	tools: []ai.Tool_Definition,
 	temperature: f32,
-	maxTokens: int,
+	tokenBudget: Token_Budget,
 	ok: bool,
 ) {
 	index, found := runtime_find_index(runtime, id)
 	if !found || !runtime.instances[index].streamConfig.configured {
-		return {}, "", nil, 0, 0, false
+		return {}, "", nil, 0, {}, false
 	}
 	configuration := &runtime.instances[index].streamConfig
 	return configuration.client,
 		configuration.model,
 		configuration.tools[:],
 		configuration.temperature,
-		configuration.maxTokens,
+		configuration.tokenBudget,
 		true
 }
 
