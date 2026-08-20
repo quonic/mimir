@@ -133,7 +133,12 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 			dirty = app_finish_subagent(state, activeID, childState) || dirty
 		}
 	}
-	spinnerDirty := app_update_agent_host_spinner(&state.agentHost)
+	shouldSpin :=
+		app_agent_host_stream_active(state) &&
+		state.agentHost.historyIndex >= 0 &&
+		state.agentHost.historyIndex < len(state.history) &&
+		state.history[state.agentHost.historyIndex].content == ""
+	spinnerDirty := app_update_agent_host_spinner(&state.agentHost, shouldSpin)
 	if spinnerDirty &&
 	   state.agentHost.historyIndex >= 0 &&
 	   state.agentHost.historyIndex < len(state.history) {
@@ -194,8 +199,8 @@ app_finish_subagent :: proc(
 	return true
 }
 
-app_update_agent_host_spinner :: proc(host: ^Agent_Host) -> bool {
-	if !host.thinking {
+app_update_agent_host_spinner :: proc(host: ^Agent_Host, shouldSpin: bool) -> bool {
+	if !shouldSpin {
 		if !host.spinnerVisible {
 			return false
 		}
@@ -625,6 +630,9 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		state.status = "Agent runtime could not start its stream"
 		return false
 	}
+	// Placeholder entry gives the spinner somewhere to render while the provider is processing.
+	append_history(state, .Assistant, "")
+	state.agentHost.historyIndex = len(state.history) - 1
 	state.status = "Streaming assistant response"
 	return true
 }

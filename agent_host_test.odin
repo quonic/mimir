@@ -116,6 +116,31 @@ test_agent_host_projects_thinking_spinner_before_text :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_agent_host_shows_spinner_while_provider_is_processing :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	// Mirrors the placeholder app_start_agent_host_stream appends before any delta arrives.
+	append_history(&state, .Assistant, "")
+	state.agentHost.historyIndex = len(state.history) - 1
+
+	assert(app_poll_agent_host(&state), "expected spinner to appear before any delta arrives")
+	assert(
+		!state.agentHost.thinking,
+		"expected spinner to show while processing without a thinking delta",
+	)
+	assert(state.agentHost.spinnerVisible, "expected spinner to be visible while processing")
+	assert(
+		app_agent_host_spinner_frame(&state) == SPINNER_FRAMES[0],
+		"expected first spinner frame while processing",
+	)
+	_ = t
+}
+
+@(test)
 test_agent_host_denies_invalid_tool_requests_and_resumes_agent :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
