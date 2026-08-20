@@ -35,6 +35,7 @@ Agent_Start_Options :: struct {
 	projectRoot:                string,
 	maxToolContinuations:       int,
 	maxRetainedToolOutputBytes: int,
+	subagentDepthRemaining:     int,
 }
 
 agent_id_is_none :: proc(id: Agent_ID) -> bool {
@@ -54,6 +55,7 @@ agent_start_options_clone :: proc(
 		projectRoot = strings.clone(options.projectRoot, allocator),
 		maxToolContinuations = options.maxToolContinuations,
 		maxRetainedToolOutputBytes = options.maxRetainedToolOutputBytes,
+		subagentDepthRemaining = options.subagentDepthRemaining,
 	}
 }
 

@@ -45,6 +45,9 @@ AI_Tool_Call_Arguments :: struct {
 	query:             string,
 	max_results:       int,
 	uri:               string,
+	task:              string,
+	tools:             []string,
+	depth:             int,
 }
 
 // Handles `/prompts` (list all discoverable MCP prompts) and
@@ -372,6 +375,8 @@ app_tool_call_from_ai :: proc(
 		query            = strings.clone(arguments.query, allocator),
 		maxResults       = arguments.max_results,
 		uri              = strings.clone(arguments.uri, allocator),
+		task             = strings.clone(arguments.task, allocator),
+		subagentDepth    = arguments.depth,
 	}
 	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
@@ -383,6 +388,18 @@ app_tool_call_from_ai :: proc(
 		} else if call.maxResults > SEARCH_CODE_MAX_RESULTS {
 			call.maxResults = SEARCH_CODE_MAX_RESULTS
 		}
+	}
+	if call.id == "create_subagent" {
+		if call.task == "" || len(arguments.tools) == 0 {
+			tool_policy.tool_call_destroy(&call, allocator)
+			return tool_policy.Tool_Call{}, false
+		}
+		toolsJSON, marshalErr := json.marshal(arguments.tools, allocator = allocator)
+		if marshalErr != nil {
+			tool_policy.tool_call_destroy(&call, allocator)
+			return tool_policy.Tool_Call{}, false
+		}
+		call.subagentToolsJSON = string(toolsJSON)
 	}
 	return call, true
 }
@@ -539,6 +556,8 @@ app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, b
 	case .Assistant:
 		return .Assistant, true
 	case .Tool:
+		return .User, false
+	case .Subagent:
 		return .User, false
 	}
 	return .User, false

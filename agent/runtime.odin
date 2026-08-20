@@ -150,6 +150,48 @@ runtime_state :: proc(runtime: ^Runtime, id: Agent_ID) -> (Agent_State, bool) {
 	return runtime.instances[index].state, true
 }
 
+// Only valid once the instance has reached a terminal state.
+runtime_final_result :: proc(runtime: ^Runtime, id: Agent_ID) -> (string, bool) {
+	index, ok := runtime_find_index(runtime, id)
+	if !ok || !agent_state_is_terminal(runtime.instances[index].state) {
+		return "", false
+	}
+	return runtime.instances[index].finalResult, true
+}
+
+runtime_subagent_depth_remaining :: proc(runtime: ^Runtime, id: Agent_ID) -> (int, bool) {
+	index, ok := runtime_find_index(runtime, id)
+	if !ok {
+		return 0, false
+	}
+	return runtime.instances[index].options.subagentDepthRemaining, true
+}
+
+// Borrowed view of the instance's active stream configuration; caller must not free the results.
+runtime_stream_configuration_view :: proc(
+	runtime: ^Runtime,
+	id: Agent_ID,
+) -> (
+	client: ai.Client,
+	model: string,
+	tools: []ai.Tool_Definition,
+	temperature: f32,
+	maxTokens: int,
+	ok: bool,
+) {
+	index, found := runtime_find_index(runtime, id)
+	if !found || !runtime.instances[index].streamConfig.configured {
+		return {}, "", nil, 0, 0, false
+	}
+	configuration := &runtime.instances[index].streamConfig
+	return configuration.client,
+		configuration.model,
+		configuration.tools[:],
+		configuration.temperature,
+		configuration.maxTokens,
+		true
+}
+
 runtime_begin :: proc(runtime: ^Runtime, id: Agent_ID) -> Agent_Error {
 	index, ok := runtime_find_index(runtime, id)
 	if !ok {

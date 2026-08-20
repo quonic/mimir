@@ -2,6 +2,8 @@ package main
 
 import "agent"
 import "ai"
+import "core:encoding/json"
+import "core:fmt"
 import "core:strings"
 import "settings"
 import "tool_policy"
@@ -20,13 +22,34 @@ Agent_Host :: struct {
 	spinnerLastFrame:    time.Tick,
 	usage:               ai.Chat_Usage,
 	contextWindowTokens: int,
+	// Suspended parent frames while a create_subagent tool call is awaiting its child's result.
+	agentStack:          [dynamic]Agent_Stack_Frame,
+	subagentSpawnCount:  int,
+	maxSubagents:        int,
+}
+
+Agent_Stack_Frame :: struct {
+	agentID:      agent.Agent_ID,
+	historyIndex: int,
+	requestID:    string,
+	task:         string,
 }
 
 agent_host_init :: proc(allocator := context.allocator) -> Agent_Host {
-	return Agent_Host{runtime = agent.runtime_init(allocator), historyIndex = -1}
+	return Agent_Host {
+		runtime = agent.runtime_init(allocator),
+		historyIndex = -1,
+		agentStack = make([dynamic]Agent_Stack_Frame, 0, 0, allocator),
+		maxSubagents = settings.DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+	}
 }
 
 agent_host_destroy :: proc(host: ^Agent_Host) {
+	for &frame in host.agentStack {
+		delete(frame.requestID, host.runtime.allocator)
+		delete(frame.task, host.runtime.allocator)
+	}
+	delete(host.agentStack)
 	agent.runtime_destroy(&host.runtime)
 	host^ = {}
 }
@@ -104,6 +127,12 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 		dirty = app_apply_agent_event(state, event) || dirty
 		agent.agent_event_destroy(&event, state.agentHost.runtime.allocator)
 	}
+	if len(state.agentHost.agentStack) > 0 {
+		if childState, childStateOK := agent.runtime_state(&state.agentHost.runtime, activeID);
+		   childStateOK && agent.agent_state_is_terminal(childState) {
+			dirty = app_finish_subagent(state, activeID, childState) || dirty
+		}
+	}
 	spinnerDirty := app_update_agent_host_spinner(&state.agentHost)
 	if spinnerDirty &&
 	   state.agentHost.historyIndex >= 0 &&
@@ -115,6 +144,54 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 	}
 	dirty = spinnerDirty || dirty
 	return dirty
+}
+
+// Resolves the parent's pending create_subagent tool call with the finished child's result.
+app_finish_subagent :: proc(
+	state: ^App_State,
+	childID: agent.Agent_ID,
+	childState: agent.Agent_State,
+) -> bool {
+	stackLen := len(state.agentHost.agentStack)
+	if stackLen == 0 {
+		return false
+	}
+	frame := state.agentHost.agentStack[stackLen - 1]
+	ordered_remove(&state.agentHost.agentStack, stackLen - 1)
+
+	// Discard the automatic Child_Completed notification; we resolve the tool call directly instead.
+	if pendingEvent, hasPending := agent.runtime_next_event(
+		&state.agentHost.runtime,
+		frame.agentID,
+	); hasPending {
+		agent.agent_event_destroy(&pendingEvent, state.agentHost.runtime.allocator)
+	}
+
+	result, _ := agent.runtime_final_result(&state.agentHost.runtime, childID)
+	isError := childState != .Completed
+	if isError && result == "" {
+		result = "Subagent did not complete."
+	}
+	if isError {
+		append_history(
+			state,
+			.Subagent,
+			fmt.tprintf("Subagent failed (%s): %s", frame.task, result),
+		)
+	} else {
+		append_history(
+			state,
+			.Subagent,
+			fmt.tprintf("Subagent completed (%s): %s", frame.task, result),
+		)
+	}
+	_ = agent.runtime_finish_tool(&state.agentHost.runtime, frame.agentID, result, isError)
+	delete(frame.requestID, state.agentHost.runtime.allocator)
+	delete(frame.task, state.agentHost.runtime.allocator)
+	state.agentHost.activeAgentID = frame.agentID
+	state.agentHost.historyIndex = frame.historyIndex
+	state.status = "Subagent finished"
+	return true
 }
 
 app_update_agent_host_spinner :: proc(host: ^Agent_Host) -> bool {
@@ -150,10 +227,15 @@ app_agent_host_spinner_frame :: proc(state: ^App_State) -> string {
 	return frames[host.spinnerFrameIndex]
 }
 app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bool {
+	inSubagent := len(state.agentHost.agentStack) > 0
 	switch event.type {
 	case .Text_Delta:
+		role := History_Role.Assistant
+		if inSubagent {
+			role = .Subagent
+		}
 		if state.agentHost.historyIndex < 0 || state.agentHost.historyIndex >= len(state.history) {
-			append_history(state, .Assistant, event.content)
+			append_history(state, role, event.content)
 			state.agentHost.historyIndex = len(state.history) - 1
 		} else {
 			entry := &state.history[state.agentHost.historyIndex]
@@ -170,7 +252,11 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 		if state.agentHost.thinking {
 			if state.agentHost.historyIndex < 0 ||
 			   state.agentHost.historyIndex >= len(state.history) {
-				append_history(state, .Assistant, "")
+				role := History_Role.Assistant
+				if inSubagent {
+					role = .Subagent
+				}
+				append_history(state, role, "")
 				state.agentHost.historyIndex = len(state.history) - 1
 			}
 			state.status = "Assistant thinking"
@@ -266,6 +352,20 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		return true
 	}
 	historyIndex := app_append_tool_history(state, call, "running")
+	if call.id == "create_subagent" {
+		if !app_start_subagent(state, call, historyIndex, event.agentID, event.requestID) {
+			app_update_tool_history(state, historyIndex, call, "failed")
+			_ = agent.runtime_resolve_tool(
+				&state.agentHost.runtime,
+				event.agentID,
+				event.requestID,
+				.Denied,
+				"Subagent could not start.",
+			)
+			state.status = "Subagent could not start"
+		}
+		return true
+	}
 	if !app_start_agent_tool_execution(state, call, historyIndex, event.agentID, event.requestID) {
 		app_update_tool_history(state, historyIndex, call, "failed")
 		_ = agent.runtime_resolve_tool(
@@ -293,6 +393,154 @@ app_show_agent_approval :: proc(
 	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
 	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
 	_ = app_apply_approval_method(state)
+	return true
+}
+
+// Resolves the parent's tool call with an error and marks it handled.
+app_fail_subagent_tool :: proc(
+	state: ^App_State,
+	parentID: agent.Agent_ID,
+	message: string,
+) -> bool {
+	_ = agent.runtime_finish_tool(&state.agentHost.runtime, parentID, message, true)
+	return true
+}
+
+// Spawns a child agent for a create_subagent tool call and retargets the active agent to it.
+// Returns false only if the call could not be resolved at all (caller then finishes it as failed).
+app_start_subagent :: proc(
+	state: ^App_State,
+	call: tool_policy.Tool_Call,
+	historyIndex: int,
+	parentID: agent.Agent_ID,
+	requestID: string,
+) -> bool {
+	if agent.agent_id_is_none(parentID) || requestID == "" {
+		return false
+	}
+	if agent.runtime_resolve_tool(&state.agentHost.runtime, parentID, requestID, .Allowed, "") !=
+	   .None {
+		return false
+	}
+
+	if state.agentHost.subagentSpawnCount >= state.agentHost.maxSubagents {
+		return app_fail_subagent_tool(state, parentID, "Subagent limit reached for this session.")
+	}
+	depthRemaining, depthOK := agent.runtime_subagent_depth_remaining(
+		&state.agentHost.runtime,
+		parentID,
+	)
+	if !depthOK || depthRemaining <= 0 {
+		return app_fail_subagent_tool(state, parentID, "Maximum subagent depth reached.")
+	}
+	if call.task == "" || call.subagentToolsJSON == "" {
+		return app_fail_subagent_tool(state, parentID, "A task and tool list are required.")
+	}
+
+	requestedNames: []string
+	_ = json.unmarshal_string(
+		call.subagentToolsJSON,
+		&requestedNames,
+		allocator = context.temp_allocator,
+	)
+
+	provider, providerOK := app_find_provider(state.config, state.config.selectedProvider)
+	if !providerOK {
+		return app_fail_subagent_tool(state, parentID, "No provider available for subagent.")
+	}
+	available := app_tool_definitions_for_provider(state, provider.type, context.temp_allocator)
+	defer delete(available)
+
+	maxChildDepth := depthRemaining - 1
+	if maxChildDepth < 0 {
+		maxChildDepth = 0
+	}
+	childDepth := maxChildDepth
+	if call.subagentDepth > 0 && call.subagentDepth < maxChildDepth {
+		childDepth = call.subagentDepth
+	}
+
+	childTools := make([dynamic]ai.Tool_Definition, 0, len(requestedNames), context.temp_allocator)
+	for name in requestedNames {
+		if name == "create_subagent" && childDepth <= 0 {
+			continue
+		}
+		for definition in available {
+			if definition.name == name {
+				append(&childTools, definition)
+				break
+			}
+		}
+	}
+	if len(childTools) == 0 {
+		return app_fail_subagent_tool(
+			state,
+			parentID,
+			"No valid tools were specified for the subagent.",
+		)
+	}
+
+	childOptions := agent.Agent_Start_Options {
+		parentID                   = parentID,
+		projectRoot                = state.workingDirectory,
+		maxToolContinuations       = state.config.toolContinuations,
+		maxRetainedToolOutputBytes = MAX_RETAINED_TOOL_OUTPUT_BYTES,
+		subagentDepthRemaining     = childDepth,
+	}
+	childID, spawnErr := agent.runtime_spawn_child(
+		&state.agentHost.runtime,
+		parentID,
+		childOptions,
+	)
+	if spawnErr != .None {
+		return app_fail_subagent_tool(state, parentID, "Could not spawn subagent.")
+	}
+	if agent.runtime_begin(&state.agentHost.runtime, childID) != .None {
+		return app_fail_subagent_tool(state, parentID, "Could not start subagent.")
+	}
+	messages := []ai.Message {
+		{role = .System, content = SUBAGENT_SYSTEM_PROMPT},
+		{role = .User, content = call.task},
+	}
+	if agent.runtime_set_conversation(&state.agentHost.runtime, childID, messages) != .None {
+		return app_fail_subagent_tool(state, parentID, "Could not prepare subagent conversation.")
+	}
+
+	client, model, _, temperature, maxTokens, streamOK := agent.runtime_stream_configuration_view(
+		&state.agentHost.runtime,
+		parentID,
+	)
+	if !streamOK {
+		return app_fail_subagent_tool(state, parentID, "Parent stream configuration unavailable.")
+	}
+	if agent.runtime_start_stream(
+		   &state.agentHost.runtime,
+		   childID,
+		   client,
+		   model,
+		   childTools[:],
+		   temperature,
+		   maxTokens,
+	   ) !=
+	   .None {
+		return app_fail_subagent_tool(state, parentID, "Could not start subagent stream.")
+	}
+
+	append(
+		&state.agentHost.agentStack,
+		Agent_Stack_Frame {
+			agentID = parentID,
+			historyIndex = state.agentHost.historyIndex,
+			requestID = strings.clone(requestID, state.agentHost.runtime.allocator),
+			task = strings.clone(call.task, state.agentHost.runtime.allocator),
+		},
+	)
+	state.agentHost.subagentSpawnCount += 1
+	state.agentHost.activeAgentID = childID
+	state.agentHost.historyIndex = -1
+	app_update_tool_history(state, historyIndex, call, "delegated")
+	append_history(state, .Subagent, fmt.tprintf("Subagent started: %s", call.task))
+	state.status = "Subagent running"
 	return true
 }
 
@@ -337,7 +585,9 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		projectRoot                = state.workingDirectory,
 		maxToolContinuations       = state.config.toolContinuations,
 		maxRetainedToolOutputBytes = MAX_RETAINED_TOOL_OUTPUT_BYTES,
+		subagentDepthRemaining     = state.config.maxSubagentDepth,
 	}
+	state.agentHost.maxSubagents = state.config.maxSubagentsPerSession
 	startErr := agent_host_start_active(&state.agentHost, options)
 	if startErr != .None {
 		state.status = "Agent runtime is already active"

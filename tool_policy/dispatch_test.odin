@@ -135,3 +135,38 @@ test_tool_dispatcher_denies_unknown_tool :: proc(t: ^testing.T) {
 	assert(decision == .Denied, "expected unknown tool to be denied")
 	_ = t
 }
+
+@(test)
+test_tool_dispatcher_requires_approval_for_create_subagent :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	result := tool_dispatch_prepare(
+		&dispatcher,
+		Tool_Call{id = "create_subagent", task = "Summarize the README"},
+	)
+	defer tool_dispatch_result_destroy(&result, context.allocator)
+	assert(result.decision == .Approval_Required, "expected create_subagent to require approval")
+	assert(result.actionOK, "expected create_subagent to resolve to a valid action")
+	assert(
+		result.action.effect == .Execute,
+		"expected create_subagent to reuse the Execute effect",
+	)
+	assert(
+		result.action.command == "Summarize the README",
+		"expected the task text to be surfaced for the approval prompt",
+	)
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_denies_create_subagent_without_task :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	decision := tool_dispatch_decide(&dispatcher, Tool_Call{id = "create_subagent"})
+	assert(decision == .Denied, "expected create_subagent without a task to be denied")
+	_ = t
+}

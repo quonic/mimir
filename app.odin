@@ -71,6 +71,7 @@ History_Role :: enum int {
 	User,
 	Assistant,
 	Tool,
+	Subagent,
 }
 
 Mouse_Selection_Panel :: enum int {
@@ -652,6 +653,8 @@ app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) ->
 		target = call.query
 	case "mcp":
 		target = call.mcpServer
+	case "create_subagent":
+		target = call.task
 	}
 	if target == "" {
 		return fmt.tprintf("%s (%s)", call.id, status)

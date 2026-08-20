@@ -10,6 +10,8 @@ import "core:strings"
 DEFAULT_CONFIG_ENDPOINT :: "http://localhost:11434"
 DEFAULT_CONFIG_PROVIDER :: "ollama"
 DEFAULT_TOOL_CONTINUATIONS :: 1000
+DEFAULT_MAX_SUBAGENT_DEPTH :: 2
+DEFAULT_MAX_SUBAGENTS_PER_SESSION :: 10
 
 Approval_Method :: enum int {
 	Always_Ask = 0,
@@ -55,21 +57,23 @@ Permission_Grant_Wire :: struct {
 }
 
 Mimir_Config_Wire :: struct {
-	selectedProvider:  string,
-	selectedModel:     string,
-	embeddingProvider: string,
-	embeddingModel:    string,
-	safetyProvider:    string,
-	safetyModel:       string,
-	approvalMethod:    string,
-	toolContinuations: int,
-	systemPrompt:      string,
-	systemPromptMode:  string,
-	providers:         []Provider_Config_Wire,
-	contextWindows:    []Context_Window_Config_Wire,
-	mcpServers:        []MCP_Server_Config,
-	skillPaths:        []string,
-	permissionGrants:  []Permission_Grant_Wire,
+	selectedProvider:       string,
+	selectedModel:          string,
+	embeddingProvider:      string,
+	embeddingModel:         string,
+	safetyProvider:         string,
+	safetyModel:            string,
+	approvalMethod:         string,
+	toolContinuations:      int,
+	maxSubagentDepth:       int,
+	maxSubagentsPerSession: int,
+	systemPrompt:           string,
+	systemPromptMode:       string,
+	providers:              []Provider_Config_Wire,
+	contextWindows:         []Context_Window_Config_Wire,
+	mcpServers:             []MCP_Server_Config,
+	skillPaths:             []string,
+	permissionGrants:       []Permission_Grant_Wire,
 }
 
 Provider_Config :: struct {
@@ -92,22 +96,24 @@ Context_Window_Config :: struct {
 }
 
 Mimir_Config :: struct {
-	selectedProvider:    string,
-	selectedModel:       string,
-	embeddingProvider:   string,
-	embeddingModel:      string,
-	safetyProvider:      string,
-	safetyModel:         string,
-	approvalMethod:      Approval_Method,
-	toolContinuations:   int,
-	systemPrompt:        string,
-	systemPromptMode:    System_Prompt_Mode,
-	providers:           [dynamic]Provider_Config,
-	contextWindows:      [dynamic]Context_Window_Config,
-	mcpServers:          [dynamic]MCP_Server_Config,
-	skillPaths:          [dynamic]string,
-	permissionGrants:    [dynamic]tool_policy.Permission_Grant,
-	allocationAllocator: mem.Allocator,
+	selectedProvider:       string,
+	selectedModel:          string,
+	embeddingProvider:      string,
+	embeddingModel:         string,
+	safetyProvider:         string,
+	safetyModel:            string,
+	approvalMethod:         Approval_Method,
+	toolContinuations:      int,
+	maxSubagentDepth:       int,
+	maxSubagentsPerSession: int,
+	systemPrompt:           string,
+	systemPromptMode:       System_Prompt_Mode,
+	providers:              [dynamic]Provider_Config,
+	contextWindows:         [dynamic]Context_Window_Config,
+	mcpServers:             [dynamic]MCP_Server_Config,
+	skillPaths:             [dynamic]string,
+	permissionGrants:       [dynamic]tool_policy.Permission_Grant,
+	allocationAllocator:    mem.Allocator,
 }
 
 approval_method_from_string :: proc(value: string) -> (Approval_Method, bool) {
@@ -188,6 +194,8 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.selectedProvider = DEFAULT_CONFIG_PROVIDER
 	config.approvalMethod = .Always_Ask
 	config.toolContinuations = DEFAULT_TOOL_CONTINUATIONS
+	config.maxSubagentDepth = DEFAULT_MAX_SUBAGENT_DEPTH
+	config.maxSubagentsPerSession = DEFAULT_MAX_SUBAGENTS_PER_SESSION
 	config.systemPromptMode = .Append
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
@@ -475,6 +483,18 @@ parse_config_from_json :: proc(
 	if config.toolContinuations == 0 {
 		config.toolContinuations = DEFAULT_TOOL_CONTINUATIONS
 	}
+	if wire.maxSubagentDepth < 0 || wire.maxSubagentsPerSession < 0 {
+		config_destroy(&config)
+		return Mimir_Config{}, .Invalid_JSON
+	}
+	config.maxSubagentDepth = wire.maxSubagentDepth
+	if config.maxSubagentDepth == 0 {
+		config.maxSubagentDepth = DEFAULT_MAX_SUBAGENT_DEPTH
+	}
+	config.maxSubagentsPerSession = wire.maxSubagentsPerSession
+	if config.maxSubagentsPerSession == 0 {
+		config.maxSubagentsPerSession = DEFAULT_MAX_SUBAGENTS_PER_SESSION
+	}
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
 	config.contextWindows = make(
 		[dynamic]Context_Window_Config,
@@ -619,6 +639,12 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"toolContinuations\": ")
 	write_decimal(&builder, config.toolContinuations)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"maxSubagentDepth\": ")
+	write_decimal(&builder, config.maxSubagentDepth)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"maxSubagentsPerSession\": ")
+	write_decimal(&builder, config.maxSubagentsPerSession)
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"systemPrompt\": ")
 	write_json_string(&builder, config.systemPrompt)

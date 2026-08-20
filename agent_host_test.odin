@@ -2,6 +2,7 @@ package main
 
 import "agent"
 import "ai"
+import "core:strings"
 import "core:testing"
 import "tool_policy"
 
@@ -522,5 +523,82 @@ test_agent_continuation_text_starts_after_tool_history :: proc(t: ^testing.T) {
 		state.history[len(state.history) - 3].content == "I will check the repository.",
 		"expected pre-tool text to remain unchanged",
 	)
+	_ = t
+}
+
+@(test)
+test_agent_host_resolves_parent_tool_call_when_subagent_completes :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	parentID := state.agentHost.activeAgentID
+
+	// Drive the parent into Executing_Tool, mirroring a resolved create_subagent call.
+	request := agent.Tool_Request {
+		id        = "call-1",
+		name      = "create_subagent",
+		arguments = `{}`,
+	}
+	assert(
+		agent.runtime_request_tool(&state.agentHost.runtime, parentID, request) == .None,
+		"expected tool request to register",
+	)
+	requestedEvent, requestedOK := agent.runtime_next_event(&state.agentHost.runtime, parentID)
+	assert(requestedOK, "expected tool requested event")
+	agent.agent_event_destroy(&requestedEvent, state.agentHost.runtime.allocator)
+	assert(
+		agent.runtime_resolve_tool(&state.agentHost.runtime, parentID, "call-1", .Allowed, "") ==
+		.None,
+		"expected tool resolution to allow execution",
+	)
+	resolvedEvent, resolvedOK := agent.runtime_next_event(&state.agentHost.runtime, parentID)
+	assert(resolvedOK, "expected tool resolved event")
+	agent.agent_event_destroy(&resolvedEvent, state.agentHost.runtime.allocator)
+
+	childID, spawnErr := agent.runtime_spawn_child(
+		&state.agentHost.runtime,
+		parentID,
+		agent.Agent_Start_Options{subagentDepthRemaining = 1},
+	)
+	assert(spawnErr == .None, "expected child to spawn")
+	assert(
+		agent.runtime_begin(&state.agentHost.runtime, childID) == .None,
+		"expected child to begin",
+	)
+
+	append(
+		&state.agentHost.agentStack,
+		Agent_Stack_Frame {
+			agentID = parentID,
+			historyIndex = -1,
+			requestID = strings.clone("call-1", state.agentHost.runtime.allocator),
+			task = strings.clone("delegate", state.agentHost.runtime.allocator),
+		},
+	)
+	state.agentHost.activeAgentID = childID
+
+	assert(
+		agent.runtime_complete(&state.agentHost.runtime, childID, "child answer") == .None,
+		"expected child to complete",
+	)
+
+	assert(app_poll_agent_host(&state), "expected poll to report a dirty update")
+	assert(len(state.agentHost.agentStack) == 0, "expected subagent stack frame to pop")
+	assert(state.agentHost.activeAgentID == parentID, "expected active agent restored to parent")
+	parentState, parentStateOK := agent.runtime_state(&state.agentHost.runtime, parentID)
+	assert(parentStateOK && parentState == .Streaming, "expected parent to resume streaming")
+
+	found := false
+	for entry in state.history {
+		if entry.role == .Subagent &&
+		   entry.content == "Subagent completed (delegate): child answer" {
+			found = true
+		}
+	}
+	assert(found, "expected subagent completion to appear in history")
 	_ = t
 }

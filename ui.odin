@@ -1337,6 +1337,8 @@ history_role_label :: proc(role: History_Role) -> string {
 		return ""
 	case .Tool:
 		return "tool"
+	case .Subagent:
+		return "subagent"
 	}
 	return "system"
 }

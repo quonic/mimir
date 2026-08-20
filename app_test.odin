@@ -222,7 +222,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 9, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 10, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }

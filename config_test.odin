@@ -70,6 +70,14 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 		config.toolContinuations == settings.DEFAULT_TOOL_CONTINUATIONS,
 		"expected missing tool continuation limit to use the default",
 	)
+	assert(
+		config.maxSubagentDepth == settings.DEFAULT_MAX_SUBAGENT_DEPTH,
+		"expected missing max subagent depth to use the default",
+	)
+	assert(
+		config.maxSubagentsPerSession == settings.DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+		"expected missing max subagents per session to use the default",
+	)
 	assert(config.systemPrompt == "", "expected missing system prompt to stay empty")
 	assert(
 		config.systemPromptMode == .Append,
@@ -142,6 +150,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.safetyModel = "llama3.2:instruct"
 	config.approvalMethod = .Approve_Safe
 	config.toolContinuations = 2500
+	config.maxSubagentDepth = 3
+	config.maxSubagentsPerSession = 5
 	config.systemPrompt = "Use tabs.\nRun tests."
 	config.systemPromptMode = .Replace
 	config.providers[0].model = "llama3.2"
@@ -189,6 +199,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.safetyModel == "llama3.2:instruct", "expected safety model round trip")
 	assert(loaded.approvalMethod == .Approve_Safe, "expected approval method round trip")
 	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
+	assert(loaded.maxSubagentDepth == 3, "expected max subagent depth round trip")
+	assert(loaded.maxSubagentsPerSession == 5, "expected max subagents per session round trip")
 	assert(loaded.systemPrompt == "Use tabs.\nRun tests.", "expected system prompt round trip")
 	assert(loaded.systemPromptMode == .Replace, "expected system prompt mode round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
@@ -215,6 +227,34 @@ test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected negative tool continuation limit to reject config")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_negative_max_subagent_depth :: proc(t: ^testing.T) {
+	payload := `{
+  "maxSubagentDepth": -1,
+  "providers": [],
+  "mcpServers": [],
+  "skillPaths": []
+}`
+
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected negative max subagent depth to reject config")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_negative_max_subagents_per_session :: proc(t: ^testing.T) {
+	payload := `{
+  "maxSubagentsPerSession": -1,
+  "providers": [],
+  "mcpServers": [],
+  "skillPaths": []
+}`
+
+	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
+	assert(err == .Invalid_JSON, "expected negative max subagents per session to reject config")
 	_ = t
 }
 

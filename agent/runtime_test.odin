@@ -267,3 +267,31 @@ test_runtime_seeds_active_agent_before_its_worker_starts :: proc(t: ^testing.T) 
 	)
 	_ = t
 }
+
+@(test)
+test_runtime_reports_subagent_depth_and_final_result :: proc(t: ^testing.T) {
+	runtime := runtime_init(context.temp_allocator)
+	defer runtime_destroy(&runtime)
+	agentID, startErr := runtime_start_background(
+		&runtime,
+		Agent_Start_Options{subagentDepthRemaining = 2},
+	)
+	assert(startErr == .None, "expected agent to start")
+
+	depth, depthOK := runtime_subagent_depth_remaining(&runtime, agentID)
+	assert(depthOK, "expected depth lookup to succeed")
+	assert(depth == 2, "expected configured subagent depth to round trip")
+
+	_, resultOK := runtime_final_result(&runtime, agentID)
+	assert(!resultOK, "expected no final result before completion")
+
+	assert(runtime_complete(&runtime, agentID, "done") == .None, "expected completion")
+	completedEvent, completedOK := runtime_next_event(&runtime, agentID)
+	assert(completedOK, "expected completed event")
+	agent_event_destroy(&completedEvent, context.temp_allocator)
+
+	result, resultOK2 := runtime_final_result(&runtime, agentID)
+	assert(resultOK2, "expected final result after completion")
+	assert(result == "done", "expected final result content")
+	_ = t
+}

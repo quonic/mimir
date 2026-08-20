@@ -27,42 +27,48 @@ tool_dispatch_result_destroy :: proc(
 }
 
 Tool_Call :: struct {
-	callID:           string,
-	id:               string,
-	filePath:         string,
-	directoryPath:    string,
-	startLine:        string,
-	endLine:          string,
-	content:          string,
-	overwrite:        string,
-	command:          string,
-	workingDirectory: string,
-	timeout:          int,
-	mcpServer:        string,
-	query:            string,
-	maxResults:       int,
-	argumentsJSON:    string,
-	uri:              string,
+	callID:            string,
+	id:                string,
+	filePath:          string,
+	directoryPath:     string,
+	startLine:         string,
+	endLine:           string,
+	content:           string,
+	overwrite:         string,
+	command:           string,
+	workingDirectory:  string,
+	timeout:           int,
+	mcpServer:         string,
+	query:             string,
+	maxResults:        int,
+	argumentsJSON:     string,
+	uri:               string,
+	task:              string,
+	subagentToolsJSON: string,
+	subagentDepth:     int,
 }
 
 tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
 	clone := Tool_Call {
-		callID           = strings.clone(call.callID, allocator),
-		id               = strings.clone(call.id, allocator),
-		filePath         = strings.clone(call.filePath, allocator),
-		directoryPath    = strings.clone(call.directoryPath, allocator),
-		startLine        = strings.clone(call.startLine, allocator),
-		endLine          = strings.clone(call.endLine, allocator),
-		content          = strings.clone(call.content, allocator),
-		overwrite        = strings.clone(call.overwrite, allocator),
-		command          = strings.clone(call.command, allocator),
-		workingDirectory = strings.clone(call.workingDirectory, allocator),
-		timeout          = call.timeout,
-		mcpServer        = strings.clone(call.mcpServer, allocator),
-		query            = strings.clone(call.query, allocator),
-		maxResults       = call.maxResults,
-		argumentsJSON    = strings.clone(call.argumentsJSON, allocator),
-		uri              = strings.clone(call.uri, allocator),
+		callID            = strings.clone(call.callID, allocator),
+		id                = strings.clone(call.id, allocator),
+		filePath          = strings.clone(call.filePath, allocator),
+		directoryPath     = strings.clone(call.directoryPath, allocator),
+		startLine         = strings.clone(call.startLine, allocator),
+		endLine           = strings.clone(call.endLine, allocator),
+		content           = strings.clone(call.content, allocator),
+		overwrite         = strings.clone(call.overwrite, allocator),
+		command           = strings.clone(call.command, allocator),
+		workingDirectory  = strings.clone(call.workingDirectory, allocator),
+		timeout           = call.timeout,
+		mcpServer         = strings.clone(call.mcpServer, allocator),
+		query             = strings.clone(call.query, allocator),
+		maxResults        = call.maxResults,
+		argumentsJSON     = strings.clone(call.argumentsJSON, allocator),
+		uri               = strings.clone(call.uri, allocator),
+		task              = strings.clone(call.task, allocator),
+		subagentToolsJSON = strings.clone(call.subagentToolsJSON, allocator),
+		subagentDepth     = call.subagentDepth,
 	}
 	return clone
 }
@@ -82,6 +88,8 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.query, allocator)
 	delete(call.argumentsJSON, allocator)
 	delete(call.uri, allocator)
+	delete(call.task, allocator)
+	delete(call.subagentToolsJSON, allocator)
 }
 
 tool_dispatcher_init :: proc(
@@ -219,6 +227,13 @@ tool_dispatch_build_action :: proc(
 		}
 		action.workingDirectory = resolvedDirectory
 		action.workingDirectoryOwned = true
+	case "create_subagent":
+		if call.task == "" {
+			return Permission_Action{}, false
+		}
+		action.effect = .Execute
+		action.command = call.task
+		action.workingDirectory = dispatcher.projectRoot
 	case:
 		return Permission_Action{}, false
 	}
