@@ -17,6 +17,30 @@ system_prompt_effective :: proc(
 	mode: settings.System_Prompt_Mode,
 	allocator := context.allocator,
 ) -> string {
+	switch mode {
+	case .Replace:
+		return strings.concatenate({customPrompt, system_prompt_date(allocator)}, allocator)
+	case .Append:
+		if customPrompt == "" {
+			return strings.concatenate(
+				{DEFAULT_SYSTEM_PROMPT, system_prompt_date(allocator)},
+				allocator,
+			)
+		}
+		return strings.concatenate(
+			{
+				DEFAULT_SYSTEM_PROMPT,
+				"\n\nAdditional user instructions:\n",
+				customPrompt,
+				system_prompt_date(allocator),
+			},
+			allocator,
+		)
+	}
+	return strings.concatenate({DEFAULT_SYSTEM_PROMPT, system_prompt_date(allocator)}, allocator)
+}
+
+system_prompt_date :: proc(allocator := context.allocator) -> string {
 	year, month, day := time.date(time.now())
 	date_line := fmt.aprintf(
 		"\n\nCurrent date: %4d-%02d-%02d",
@@ -26,23 +50,5 @@ system_prompt_effective :: proc(
 		allocator = allocator,
 	)
 	defer delete(date_line, allocator)
-
-	switch mode {
-	case .Replace:
-		return strings.concatenate({customPrompt, date_line}, allocator)
-	case .Append:
-		if customPrompt == "" {
-			return strings.concatenate({DEFAULT_SYSTEM_PROMPT, date_line}, allocator)
-		}
-		return strings.concatenate(
-			{
-				DEFAULT_SYSTEM_PROMPT,
-				"\n\nAdditional user instructions:\n",
-				customPrompt,
-				date_line,
-			},
-			allocator,
-		)
-	}
-	return strings.concatenate({DEFAULT_SYSTEM_PROMPT, date_line}, allocator)
+	return date_line
 }
