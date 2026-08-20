@@ -329,7 +329,8 @@ client_read_resource :: proc(
 		if index > 0 {
 			strings.write_byte(&builder, '\n')
 		}
-		if text, hasText := object["text"].(json.String); hasText {
+		hasText: bool
+		if text, hasText = object["text"].(json.String); hasText {
 			strings.write_string(&builder, string(text))
 		} else {
 			strings.write_string(&builder, "[binary resource content omitted]")
