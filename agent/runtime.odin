@@ -30,7 +30,7 @@ Token_Budget :: struct {
 	fallbackTokens:      int,
 }
 
-DEFAULT_MAX_TOKENS_FALLBACK :: 4096
+DEFAULT_MAX_TOKENS_FALLBACK :: 1024 * 64 // Fallback to 64k tokens
 MIN_OUTPUT_TOKENS_FLOOR :: 256
 
 Stream_Configuration :: struct {
