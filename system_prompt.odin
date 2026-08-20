@@ -1,6 +1,8 @@
 package main
 
+import "core:fmt"
 import "core:strings"
+import "core:time"
 import "settings"
 
 DEFAULT_SYSTEM_PROMPT :: `You are Mimir, a repository-aware coding agent.
@@ -15,17 +17,32 @@ system_prompt_effective :: proc(
 	mode: settings.System_Prompt_Mode,
 	allocator := context.allocator,
 ) -> string {
+	year, month, day := time.date(time.now())
+	date_line := fmt.aprintf(
+		"\n\nCurrent date: %4d-%02d-%02d",
+		year,
+		int(month),
+		day,
+		allocator = allocator,
+	)
+	defer delete(date_line, allocator)
+
 	switch mode {
 	case .Replace:
-		return strings.clone(customPrompt, allocator)
+		return strings.concatenate({customPrompt, date_line}, allocator)
 	case .Append:
 		if customPrompt == "" {
-			return strings.clone(DEFAULT_SYSTEM_PROMPT, allocator)
+			return strings.concatenate({DEFAULT_SYSTEM_PROMPT, date_line}, allocator)
 		}
 		return strings.concatenate(
-			{DEFAULT_SYSTEM_PROMPT, "\n\nAdditional user instructions:\n", customPrompt},
+			{
+				DEFAULT_SYSTEM_PROMPT,
+				"\n\nAdditional user instructions:\n",
+				customPrompt,
+				date_line,
+			},
 			allocator,
 		)
 	}
-	return strings.clone(DEFAULT_SYSTEM_PROMPT, allocator)
+	return strings.concatenate({DEFAULT_SYSTEM_PROMPT, date_line}, allocator)
 }
