@@ -2,8 +2,14 @@ package main
 
 import "core:debug/trace"
 import "core:fmt"
+import "core:os"
 
 main :: proc() {
+	if headless_json_flag_present(os.args) {
+		run_headless_jsonl()
+		return
+	}
+
 	when ODIN_DEBUG {
 		track: trace.Tracking_Allocator
 		trace.tracking_allocator_init(&track, context.allocator)
