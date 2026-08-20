@@ -91,6 +91,27 @@ runtime_start_configured_stream :: proc(runtime: ^Runtime, index: int) -> Agent_
 	return .None
 }
 
+// Explains which precondition of runtime_start_configured_stream failed, for diagnostics.
+runtime_stream_start_diagnostic :: proc(instance: ^Agent_Instance) -> string {
+	configuration := &instance.streamConfig
+	if instance.state != .Streaming {
+		return fmt.tprintf("state=%v, want Streaming", instance.state)
+	}
+	if instance.stream != nil {
+		return "stream already active"
+	}
+	if !configuration.configured {
+		return "stream configuration not set"
+	}
+	if configuration.model == "" {
+		return "model is empty"
+	}
+	if len(instance.conversation) == 0 {
+		return "conversation is empty"
+	}
+	return "unknown"
+}
+
 runtime_stream_configuration_clone :: proc(
 	client: ai.Client,
 	model: string,
@@ -138,7 +159,11 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 					index,
 					Agent_Event {
 						type = .Failed,
-						content = fmt.tprintf("Assistant continuation failed: %v", startErr),
+						content = fmt.tprintf(
+							"Assistant continuation failed: %v (%s)",
+							startErr,
+							runtime_stream_start_diagnostic(instance),
+						),
 						isError = true,
 					},
 				)
