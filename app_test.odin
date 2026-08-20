@@ -906,7 +906,14 @@ test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t
 test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
 	defaultPrompt := system_prompt_effective("", .Append, context.temp_allocator)
 	defer delete(defaultPrompt, context.temp_allocator)
-	assert(defaultPrompt == DEFAULT_SYSTEM_PROMPT, "expected default system prompt")
+	assert(
+		defaultPrompt ==
+		strings.concatenate(
+			{DEFAULT_SYSTEM_PROMPT, system_prompt_date(context.temp_allocator)},
+			context.temp_allocator,
+		),
+		"expected default system prompt",
+	)
 
 	appendedPrompt := system_prompt_effective("Use tabs.", .Append, context.temp_allocator)
 	defer delete(appendedPrompt, context.temp_allocator)
@@ -922,7 +929,11 @@ test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) 
 	)
 	defer delete(replacedPrompt, context.temp_allocator)
 	assert(
-		replacedPrompt == "Only user instructions.",
+		replacedPrompt ==
+		strings.concatenate(
+			{"Only user instructions.", system_prompt_date(context.temp_allocator)},
+			context.temp_allocator,
+		),
 		"expected replace mode to use custom prompt",
 	)
 	_ = t
