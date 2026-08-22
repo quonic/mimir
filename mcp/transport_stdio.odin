@@ -1,6 +1,7 @@
 package mcp
 
 import "core:c"
+import "core:encoding/json"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -13,12 +14,30 @@ MCP_IO_TIMEOUT_MS :: 30_000
 // newline-delimited JSON-RPC messages over its stdin/stdout, per
 // https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio.
 Stdio_Transport :: struct {
-	process:    os.Process,
-	stdinWrite: ^os.File,
-	stdoutRead: ^os.File,
-	pending:    [dynamic]byte,
-	alive:      bool,
-	allocator:  mem.Allocator,
+	process:       os.Process,
+	stdinWrite:    ^os.File,
+	stdoutRead:    ^os.File,
+	pending:       [dynamic]byte,
+	responses:     [dynamic]Stdio_Response,
+	notifications: [dynamic]string,
+	alive:         bool,
+	allocator:     mem.Allocator,
+}
+
+Stdio_Response :: struct {
+	id:  int,
+	raw: string,
+}
+
+stdio_transport_clear_messages :: proc(t: ^Stdio_Transport) {
+	for response in t.responses {
+		delete(response.raw, t.allocator)
+	}
+	delete(t.responses)
+	for notification in t.notifications {
+		delete(notification, t.allocator)
+	}
+	delete(t.notifications)
 }
 
 stdio_transport_start :: proc(
@@ -69,10 +88,58 @@ stdio_transport_start :: proc(
 			stdinWrite = stdinWrite,
 			stdoutRead = stdoutRead,
 			pending = make([dynamic]byte, 0, 4096, allocator),
+			responses = make([dynamic]Stdio_Response, 0, 8, allocator),
+			notifications = make([dynamic]string, 0, 8, allocator),
 			alive = true,
 			allocator = allocator,
 		},
 		true
+}
+
+// Routes one complete JSON-RPC message into the response or notification queue.
+// The queued raw text is owned by the transport and survives caller cleanup.
+stdio_transport_route_message :: proc(t: ^Stdio_Transport, raw: string) -> bool {
+	value, err := json.parse_string(raw, parse_integers = true, allocator = context.temp_allocator)
+	if err != .None {
+		return false
+	}
+	defer json.destroy_value(value, context.temp_allocator)
+	object, objectOK := value.(json.Object)
+	if !objectOK {
+		return false
+	}
+	if id, hasID := object["id"].(json.Integer); hasID {
+		append(&t.responses, Stdio_Response{id = int(id), raw = strings.clone(raw, t.allocator)})
+		return true
+	}
+	if _, hasMethod := object["method"].(json.String); hasMethod {
+		append(&t.notifications, strings.clone(raw, t.allocator))
+		return true
+	}
+	return false
+}
+
+stdio_transport_take_response :: proc(t: ^Stdio_Transport, id: int) -> (string, bool) {
+	for response, index in t.responses {
+		if response.id != id {
+			continue
+		}
+		raw := response.raw
+		t.responses[index].raw = ""
+		ordered_remove(&t.responses, index)
+		return raw, true
+	}
+	return "", false
+}
+
+stdio_transport_take_notification :: proc(t: ^Stdio_Transport) -> (string, bool) {
+	if len(t.notifications) == 0 {
+		return "", false
+	}
+	raw := t.notifications[0]
+	t.notifications[0] = ""
+	ordered_remove(&t.notifications, 0)
+	return raw, true
 }
 
 // Writes one JSON-RPC message line (request or notification) to the server's stdin.
@@ -157,5 +224,6 @@ stdio_transport_close :: proc(t: ^Stdio_Transport) {
 		os.close(t.stdoutRead)
 	}
 	delete(t.pending)
+	stdio_transport_clear_messages(t)
 	t^ = {}
 }
