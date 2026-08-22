@@ -3,6 +3,26 @@ package mcp
 import "core:testing"
 
 @(test)
+test_sse_extract_events_preserves_order_and_notifications :: proc(t: ^testing.T) {
+	body :=
+		": keep-alive\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\"}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\n" +
+		"data: \"method\":\"notifications/tools/list_changed\"}\n\n"
+	events := sse_extract_events(body, context.allocator)
+	defer sse_events_destroy(events, context.allocator)
+	assert(len(events) == 2, "expected two SSE data events")
+	assert(
+		events[0] == `{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged"}`,
+		"expected acknowledgment as the first event",
+	)
+	assert(
+		events[1] == "{\"jsonrpc\":\"2.0\",\n\"method\":\"notifications/tools/list_changed\"}",
+		"expected multiline event as the second event",
+	)
+}
+
+@(test)
 test_sse_extract_final_response_skips_progress_notifications :: proc(t: ^testing.T) {
 	body :=
 		"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n" +

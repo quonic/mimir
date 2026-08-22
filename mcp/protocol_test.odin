@@ -139,6 +139,16 @@ test_parse_subscription_event_rejects_missing_metadata :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_parse_subscription_completion_preserves_request_id :: proc(t: ^testing.T) {
+	event, ok := parse_subscription_event(
+		`{"jsonrpc":"2.0","id":11,"result":{"resultType":"complete"}}`,
+		context.allocator,
+	)
+	assert(ok && event.kind == .Completed, "expected graceful completion event")
+	assert(event.subscriptionID == 11, "expected completion request ID")
+}
+
+@(test)
 test_build_legacy_initialize_and_initialized :: proc(t: ^testing.T) {
 	request := build_legacy_initialize(6, context.allocator)
 	defer json.destroy_value(request, context.allocator)
@@ -190,6 +200,7 @@ test_encode_message_round_trips_through_parse_response :: proc(t: ^testing.T) {
 	parsed, parseOK := parse_response(encoded, context.allocator)
 	assert(parseOK, "expected parse_response to succeed")
 	defer rpc_response_destroy(&parsed, context.allocator)
+	assert(parsed.id == 1, "expected response ID to round-trip")
 	assert(!parsed.isError, "expected a successful result response")
 	assert(result_type(parsed.result) == "complete", "expected resultType complete")
 }

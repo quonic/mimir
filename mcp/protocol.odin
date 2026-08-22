@@ -73,6 +73,7 @@ RPC_Error :: struct {
 // A decoded JSON-RPC response. `raw` owns all values reachable from `result`/`error`
 // and must be freed with `rpc_response_destroy`.
 RPC_Response :: struct {
+	id:      int,
 	isError: bool,
 	error:   RPC_Error,
 	result:  json.Object,
@@ -364,6 +365,9 @@ parse_response :: proc(raw: string, allocator := context.allocator) -> (RPC_Resp
 
 	response: RPC_Response
 	response.raw = value
+	if id, hasID := obj["id"].(json.Integer); hasID {
+		response.id = int(id)
+	}
 
 	if errorValue, hasError := obj["error"]; hasError {
 		errorObject, errorOK := errorValue.(json.Object)
@@ -415,10 +419,15 @@ parse_subscription_event :: proc(
 	if !objectOK {
 		return Subscription_Event{}, false
 	}
+	event := Subscription_Event{}
+	if id, hasID := object["id"].(json.Integer); hasID {
+		event.subscriptionID = int(id)
+	}
 	method, methodOK := object["method"].(json.String)
 	if !methodOK {
 		if _, hasResult := object["result"]; hasResult {
-			return Subscription_Event{kind = .Completed}, true
+			event.kind = .Completed
+			return event, true
 		}
 		return Subscription_Event{}, false
 	}
@@ -434,9 +443,7 @@ parse_subscription_event :: proc(
 	if !idOK {
 		return Subscription_Event{}, false
 	}
-	event := Subscription_Event {
-		subscriptionID = int(idValue),
-	}
+	event.subscriptionID = int(idValue)
 	switch string(method) {
 	case "notifications/subscriptions/acknowledged":
 		event.kind = .Acknowledged
