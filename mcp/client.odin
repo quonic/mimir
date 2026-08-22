@@ -11,18 +11,22 @@ Transport_Kind :: enum {
 }
 
 Client :: struct {
-	name:               string,
-	kind:               Transport_Kind,
-	stdio:              Stdio_Transport,
-	http:               Http_Transport,
-	nextID:             int,
-	protocolEra:        Protocol_Era,
-	protocolVersion:    string,
-	discovered:         bool,
-	toolsSupported:     bool,
-	resourcesSupported: bool,
-	promptsSupported:   bool,
-	allocator:          mem.Allocator,
+	name:                 string,
+	kind:                 Transport_Kind,
+	stdio:                Stdio_Transport,
+	http:                 Http_Transport,
+	nextID:               int,
+	protocolEra:          Protocol_Era,
+	protocolVersion:      string,
+	discovered:           bool,
+	toolsSupported:       bool,
+	toolsListChanged:     bool,
+	resourcesSupported:   bool,
+	resourcesListChanged: bool,
+	resourcesSubscribe:   bool,
+	promptsSupported:     bool,
+	promptsListChanged:   bool,
+	allocator:            mem.Allocator,
 }
 
 client_init_stdio :: proc(
@@ -77,8 +81,12 @@ client_reset_protocol :: proc(client: ^Client, allocator := context.allocator) {
 	client.protocolEra = .Unknown
 	client.discovered = false
 	client.toolsSupported = false
+	client.toolsListChanged = false
 	client.resourcesSupported = false
+	client.resourcesListChanged = false
+	client.resourcesSubscribe = false
 	client.promptsSupported = false
+	client.promptsListChanged = false
 	if client.kind == .Http {
 		delete(client.http.protocolVersion, client.allocator)
 		client.http.protocolVersion = strings.clone(PROTOCOL_VERSION, client.allocator)
@@ -203,15 +211,7 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 		delete(client.http.protocolVersion, client.allocator)
 		client.http.protocolVersion = strings.clone(string(version), client.allocator)
 	}
-	client.toolsSupported = false
-	client.resourcesSupported = false
-	client.promptsSupported = false
-	if capabilities, hasCapabilities := response.result["capabilities"].(json.Object);
-	   hasCapabilities {
-		_, client.toolsSupported = capabilities["tools"].(json.Object)
-		_, client.resourcesSupported = capabilities["resources"].(json.Object)
-		_, client.promptsSupported = capabilities["prompts"].(json.Object)
-	}
+	client_set_capabilities(client, response.result["capabilities"])
 	notification := build_legacy_initialized(allocator)
 	encoded, encodeOK := encode_message(notification, allocator)
 	json.destroy_value(notification, allocator)
@@ -244,6 +244,42 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 		}
 	}
 	return false
+}
+
+client_set_capabilities :: proc(client: ^Client, value: json.Value) {
+	client.toolsSupported = false
+	client.toolsListChanged = false
+	client.resourcesSupported = false
+	client.resourcesListChanged = false
+	client.resourcesSubscribe = false
+	client.promptsSupported = false
+	client.promptsListChanged = false
+
+	capabilities, hasCapabilities := value.(json.Object)
+	if !hasCapabilities {
+		return
+	}
+	if tools, hasTools := capabilities["tools"].(json.Object); hasTools {
+		client.toolsSupported = true
+		if changed, hasChanged := tools["listChanged"].(json.Boolean); hasChanged {
+			client.toolsListChanged = bool(changed)
+		}
+	}
+	if resources, hasResources := capabilities["resources"].(json.Object); hasResources {
+		client.resourcesSupported = true
+		if changed, hasChanged := resources["listChanged"].(json.Boolean); hasChanged {
+			client.resourcesListChanged = bool(changed)
+		}
+		if subscribe, hasSubscribe := resources["subscribe"].(json.Boolean); hasSubscribe {
+			client.resourcesSubscribe = bool(subscribe)
+		}
+	}
+	if prompts, hasPrompts := capabilities["prompts"].(json.Object); hasPrompts {
+		client.promptsSupported = true
+		if changed, hasChanged := prompts["listChanged"].(json.Boolean); hasChanged {
+			client.promptsListChanged = bool(changed)
+		}
+	}
 }
 
 // Calls `server/discover` and caches the server's declared capabilities.

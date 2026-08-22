@@ -70,6 +70,75 @@ test_build_request_without_meta_is_legacy_shape :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_build_subscription_request_includes_requested_filters :: proc(t: ^testing.T) {
+	filter := Subscription_Filter {
+		toolsListChanged     = true,
+		resourcesListChanged = true,
+	}
+	append(&filter.resourceSubscriptions, strings.clone("file:///config.json", context.allocator))
+	defer subscription_filter_destroy(&filter, context.allocator)
+	request := build_subscription_request(7, filter, allocator = context.allocator)
+	defer json.destroy_value(request, context.allocator)
+
+	object := request.(json.Object)
+	assert(object["method"].(json.String) == "subscriptions/listen", "expected listen method")
+	params := object["params"].(json.Object)
+	notifications := params["notifications"].(json.Object)
+	assert(bool(notifications["toolsListChanged"].(json.Boolean)), "expected tools filter")
+	assert(bool(notifications["resourcesListChanged"].(json.Boolean)), "expected resources filter")
+	_, hasPrompts := notifications["promptsListChanged"]
+	assert(!hasPrompts, "did not expect prompts filter")
+	uris := notifications["resourceSubscriptions"].(json.Array)
+	assert(len(uris) == 1, "expected one resource subscription")
+}
+
+@(test)
+test_build_subscription_cancelled_uses_subscription_metadata :: proc(t: ^testing.T) {
+	notification := build_subscription_cancelled(9, context.allocator)
+	defer json.destroy_value(notification, context.allocator)
+	object := notification.(json.Object)
+	assert(
+		object["method"].(json.String) == "notifications/cancelled",
+		"expected cancellation method",
+	)
+	params := object["params"].(json.Object)
+	meta := params["_meta"].(json.Object)
+	assert(
+		meta["io.modelcontextprotocol/subscriptionId"].(json.Integer) == 9,
+		"expected subscription ID",
+	)
+}
+
+@(test)
+test_parse_subscription_events_and_resource_uri :: proc(t: ^testing.T) {
+	ack, ackOK := parse_subscription_event(
+		`{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":3}}}`,
+		context.allocator,
+	)
+	assert(
+		ackOK && ack.kind == .Acknowledged && ack.subscriptionID == 3,
+		"expected acknowledgment event",
+	)
+
+	updated, updatedOK := parse_subscription_event(
+		`{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":3},"uri":"file:///config.json"}}`,
+		context.allocator,
+	)
+	assert(updatedOK && updated.kind == .ResourceUpdated, "expected resource update event")
+	assert(updated.resourceURI == "file:///config.json", "expected resource URI")
+	subscription_event_destroy(&updated, context.allocator)
+}
+
+@(test)
+test_parse_subscription_event_rejects_missing_metadata :: proc(t: ^testing.T) {
+	_, ok := parse_subscription_event(
+		`{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}`,
+		context.allocator,
+	)
+	assert(!ok, "expected uncorrelated notification to be rejected")
+}
+
+@(test)
 test_build_legacy_initialize_and_initialized :: proc(t: ^testing.T) {
 	request := build_legacy_initialize(6, context.allocator)
 	defer json.destroy_value(request, context.allocator)

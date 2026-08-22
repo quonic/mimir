@@ -28,6 +28,41 @@ Protocol_Era :: enum {
 	Legacy,
 }
 
+Subscription_Filter :: struct {
+	toolsListChanged:      bool,
+	promptsListChanged:    bool,
+	resourcesListChanged:  bool,
+	resourceSubscriptions: [dynamic]string,
+}
+
+subscription_filter_destroy :: proc(filter: ^Subscription_Filter, allocator := context.allocator) {
+	for uri in filter.resourceSubscriptions {
+		delete(uri, allocator)
+	}
+	delete(filter.resourceSubscriptions)
+	filter^ = {}
+}
+
+Subscription_Event_Kind :: enum {
+	Acknowledged,
+	ToolsListChanged,
+	ResourcesListChanged,
+	PromptsListChanged,
+	ResourceUpdated,
+	Completed,
+}
+
+Subscription_Event :: struct {
+	kind:           Subscription_Event_Kind,
+	subscriptionID: int,
+	resourceURI:    string,
+}
+
+subscription_event_destroy :: proc(event: ^Subscription_Event, allocator := context.allocator) {
+	delete(event.resourceURI, allocator)
+	event^ = {}
+}
+
 RPC_Error :: struct {
 	code:    int,
 	message: string,
@@ -149,6 +184,74 @@ build_request_without_meta :: proc(
 	object_set(&request, "method", json.String(strings.clone(method, allocator)), allocator)
 	object_set(&request, "params", params, allocator)
 	return request
+}
+
+build_subscription_params :: proc(
+	filter: Subscription_Filter,
+	allocator := context.allocator,
+) -> json.Object {
+	notifications := json.Object(make(map[string]json.Value, 4, allocator))
+	if filter.toolsListChanged {
+		object_set(&notifications, "toolsListChanged", json.Boolean(true), allocator)
+	}
+	if filter.promptsListChanged {
+		object_set(&notifications, "promptsListChanged", json.Boolean(true), allocator)
+	}
+	if filter.resourcesListChanged {
+		object_set(&notifications, "resourcesListChanged", json.Boolean(true), allocator)
+	}
+	if len(filter.resourceSubscriptions) > 0 {
+		uris := make([dynamic]json.Value, 0, len(filter.resourceSubscriptions), allocator)
+		for uri in filter.resourceSubscriptions {
+			append(&uris, json.String(strings.clone(uri, allocator)))
+		}
+		object_set(&notifications, "resourceSubscriptions", json.Array(uris), allocator)
+	}
+
+	params := json.Object(make(map[string]json.Value, 1, allocator))
+	object_set(&params, "notifications", notifications, allocator)
+	return params
+}
+
+build_subscription_request :: proc(
+	id: int,
+	filter: Subscription_Filter,
+	protocolVersion := PROTOCOL_VERSION,
+	allocator := context.allocator,
+) -> json.Value {
+	return build_request_for_version(
+		id,
+		"subscriptions/listen",
+		build_subscription_params(filter, allocator),
+		protocolVersion,
+		allocator,
+	)
+}
+
+build_subscription_cancelled :: proc(
+	subscriptionID: int,
+	allocator := context.allocator,
+) -> json.Value {
+	meta := json.Object(make(map[string]json.Value, 1, allocator))
+	object_set(
+		&meta,
+		"io.modelcontextprotocol/subscriptionId",
+		json.Integer(i64(subscriptionID)),
+		allocator,
+	)
+	params := json.Object(make(map[string]json.Value, 1, allocator))
+	object_set(&params, "_meta", meta, allocator)
+
+	notification := json.Object(make(map[string]json.Value, 3, allocator))
+	object_set(&notification, "jsonrpc", json.String(strings.clone("2.0", allocator)), allocator)
+	object_set(
+		&notification,
+		"method",
+		json.String(strings.clone("notifications/cancelled", allocator)),
+		allocator,
+	)
+	object_set(&notification, "params", params, allocator)
+	return notification
 }
 
 build_legacy_initialize :: proc(id: int, allocator := context.allocator) -> json.Value {
@@ -294,6 +397,66 @@ parse_response :: proc(raw: string, allocator := context.allocator) -> (RPC_Resp
 
 	rpc_response_destroy(&response, allocator)
 	return RPC_Response{}, false
+}
+
+parse_subscription_event :: proc(
+	raw: string,
+	allocator := context.allocator,
+) -> (
+	Subscription_Event,
+	bool,
+) {
+	value, err := json.parse_string(raw, parse_integers = true, allocator = context.temp_allocator)
+	if err != .None {
+		return Subscription_Event{}, false
+	}
+	defer json.destroy_value(value, context.temp_allocator)
+	object, objectOK := value.(json.Object)
+	if !objectOK {
+		return Subscription_Event{}, false
+	}
+	method, methodOK := object["method"].(json.String)
+	if !methodOK {
+		if _, hasResult := object["result"]; hasResult {
+			return Subscription_Event{kind = .Completed}, true
+		}
+		return Subscription_Event{}, false
+	}
+	params, paramsOK := object["params"].(json.Object)
+	if !paramsOK {
+		return Subscription_Event{}, false
+	}
+	meta, metaOK := params["_meta"].(json.Object)
+	if !metaOK {
+		return Subscription_Event{}, false
+	}
+	idValue, idOK := meta["io.modelcontextprotocol/subscriptionId"].(json.Integer)
+	if !idOK {
+		return Subscription_Event{}, false
+	}
+	event := Subscription_Event {
+		subscriptionID = int(idValue),
+	}
+	switch string(method) {
+	case "notifications/subscriptions/acknowledged":
+		event.kind = .Acknowledged
+	case "notifications/tools/list_changed":
+		event.kind = .ToolsListChanged
+	case "notifications/resources/list_changed":
+		event.kind = .ResourcesListChanged
+	case "notifications/prompts/list_changed":
+		event.kind = .PromptsListChanged
+	case "notifications/resources/updated":
+		event.kind = .ResourceUpdated
+		uri, uriOK := params["uri"].(json.String)
+		if !uriOK {
+			return Subscription_Event{}, false
+		}
+		event.resourceURI = strings.clone(string(uri), allocator)
+	case:
+		return Subscription_Event{}, false
+	}
+	return event, true
 }
 
 // Reads the `resultType` field of a result object, defaulting to "complete"
