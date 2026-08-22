@@ -39,6 +39,64 @@ test_build_notification_has_no_id :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_build_request_for_version_uses_selected_version :: proc(t: ^testing.T) {
+	params := json.Object(make(map[string]json.Value, 0, context.allocator))
+	request := build_request_for_version(
+		4,
+		"server/discover",
+		params,
+		LEGACY_PROTOCOL_VERSION,
+		context.allocator,
+	)
+	defer json.destroy_value(request, context.allocator)
+
+	object := request.(json.Object)
+	requestParams := object["params"].(json.Object)
+	meta := requestParams["_meta"].(json.Object)
+	version := meta["io.modelcontextprotocol/protocolVersion"].(json.String)
+	assert(string(version) == LEGACY_PROTOCOL_VERSION, "expected selected protocol version")
+}
+
+@(test)
+test_build_request_without_meta_is_legacy_shape :: proc(t: ^testing.T) {
+	params := json.Object(make(map[string]json.Value, 0, context.allocator))
+	request := build_request_without_meta(5, "tools/list", params, context.allocator)
+	defer json.destroy_value(request, context.allocator)
+
+	object := request.(json.Object)
+	requestParams := object["params"].(json.Object)
+	_, hasMeta := requestParams["_meta"]
+	assert(!hasMeta, "legacy requests must not include modern metadata")
+}
+
+@(test)
+test_build_legacy_initialize_and_initialized :: proc(t: ^testing.T) {
+	request := build_legacy_initialize(6, context.allocator)
+	defer json.destroy_value(request, context.allocator)
+	object := request.(json.Object)
+	assert(object["method"].(json.String) == "initialize", "expected initialize method")
+	params := object["params"].(json.Object)
+	assert(
+		params["protocolVersion"].(json.String) == LEGACY_PROTOCOL_VERSION,
+		"expected legacy protocol version",
+	)
+	_, hasCapabilities := params["capabilities"].(json.Object)
+	assert(hasCapabilities, "expected legacy capabilities")
+	_, hasClientInfo := params["clientInfo"].(json.Object)
+	assert(hasClientInfo, "expected legacy client info")
+
+	notification := build_legacy_initialized(context.allocator)
+	defer json.destroy_value(notification, context.allocator)
+	notificationObject := notification.(json.Object)
+	assert(
+		notificationObject["method"].(json.String) == "notifications/initialized",
+		"expected initialized notification",
+	)
+	_, hasID := notificationObject["id"]
+	assert(!hasID, "initialized must be a notification")
+}
+
+@(test)
 test_encode_message_round_trips_through_parse_response :: proc(t: ^testing.T) {
 	result := json.Object(make(map[string]json.Value, 0, context.allocator))
 	result[strings.clone("resultType", context.allocator)] = json.String(

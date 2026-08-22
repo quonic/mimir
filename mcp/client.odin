@@ -10,15 +10,14 @@ Transport_Kind :: enum {
 	Http,
 }
 
-// Client is a session-less MCP client bound to one server (stdio subprocess or
-// Streamable HTTP endpoint). Per the 2026-07-28 spec there is no connection
-// state beyond the transport itself: every RPC carries its own `_meta`.
 Client :: struct {
 	name:               string,
 	kind:               Transport_Kind,
 	stdio:              Stdio_Transport,
 	http:               Http_Transport,
 	nextID:             int,
+	protocolEra:        Protocol_Era,
+	protocolVersion:    string,
 	discovered:         bool,
 	toolsSupported:     bool,
 	resourcesSupported: bool,
@@ -43,6 +42,7 @@ client_init_stdio :: proc(
 			name = strings.clone(name, allocator),
 			kind = .Stdio,
 			stdio = stdio,
+			protocolEra = .Unknown,
 			allocator = allocator,
 		},
 		true
@@ -53,12 +53,14 @@ client_init_http :: proc(name: string, url: string, allocator := context.allocat
 		name = strings.clone(name, allocator),
 		kind = .Http,
 		http = http_transport_init(url, allocator),
+		protocolEra = .Unknown,
 		allocator = allocator,
 	}
 }
 
 client_destroy :: proc(client: ^Client) {
 	delete(client.name, client.allocator)
+	delete(client.protocolVersion, client.allocator)
 	switch client.kind {
 	case .Stdio:
 		stdio_transport_close(&client.stdio)
@@ -69,23 +71,16 @@ client_destroy :: proc(client: ^Client) {
 	client^ = {}
 }
 
-// Sends a JSON-RPC request and waits for its response. `mcpName` is used only
-// by the HTTP transport (`Mcp-Name` header); stdio ignores it. `params` is
-// consumed (ownership transferred, matching `build_request`).
-client_call :: proc(
+client_send_value :: proc(
 	client: ^Client,
 	method: string,
 	mcpName: string,
-	params: json.Object,
+	request: json.Value,
 	allocator := context.allocator,
 ) -> (
 	RPC_Response,
 	bool,
 ) {
-	client.nextID += 1
-	request := build_request(client.nextID, method, params, allocator)
-	defer json.destroy_value(request, allocator)
-
 	encoded, encodeOK := encode_message(request, allocator)
 	if !encodeOK {
 		return RPC_Response{}, false
@@ -104,7 +99,20 @@ client_call :: proc(
 		defer delete(line, allocator)
 		return parse_response(line, allocator)
 	case .Http:
-		body, _, sendOK := http_transport_send(&client.http, method, mcpName, encoded, allocator)
+		version := PROTOCOL_VERSION
+		if client.protocolVersion != "" {
+			version = client.protocolVersion
+		} else if client.kind == .Http && client.http.protocolVersion != "" {
+			version = client.http.protocolVersion
+		}
+		body, _, sendOK := http_transport_send(
+			&client.http,
+			method,
+			mcpName,
+			encoded,
+			version,
+			allocator,
+		)
 		if !sendOK {
 			return RPC_Response{}, false
 		}
@@ -116,18 +124,170 @@ client_call :: proc(
 	return RPC_Response{}, false
 }
 
-// Calls `server/discover` and caches the server's declared capabilities.
-// Must succeed before `client_list_tools`/`client_list_resources`/`client_list_prompts`
-// will return anything.
-client_discover :: proc(client: ^Client, allocator := context.allocator) -> bool {
-	params := json.Object(make(map[string]json.Value, 0, allocator))
-	response, ok := client_call(client, "server/discover", "", params, allocator)
+// Sends a JSON-RPC request and waits for its response. `mcpName` is used only
+// by the HTTP transport (`Mcp-Name` header); stdio ignores it. `params` is
+// consumed (ownership transferred, matching `build_request`).
+client_call :: proc(
+	client: ^Client,
+	method: string,
+	mcpName: string,
+	params: json.Object,
+	allocator := context.allocator,
+) -> (
+	RPC_Response,
+	bool,
+) {
+	client.nextID += 1
+	request: json.Value
+	if client.protocolEra == .Legacy {
+		request = build_request_without_meta(client.nextID, method, params, allocator)
+	} else {
+		version := PROTOCOL_VERSION
+		if client.protocolVersion != "" {
+			version = client.protocolVersion
+		}
+		request = build_request_for_version(client.nextID, method, params, version, allocator)
+	}
+	defer json.destroy_value(request, allocator)
+	return client_send_value(client, method, mcpName, request, allocator)
+}
+
+client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator) -> bool {
+	if client.kind == .Http {
+		delete(client.http.protocolVersion, client.allocator)
+		client.http.protocolVersion = strings.clone(LEGACY_PROTOCOL_VERSION, client.allocator)
+	}
+	client.nextID += 1
+	request := build_legacy_initialize(client.nextID, allocator)
+	response, ok := client_send_value(client, "initialize", "", request, allocator)
+	json.destroy_value(request, allocator)
 	if !ok {
 		return false
 	}
 	defer rpc_response_destroy(&response, allocator)
 	if response.isError {
 		return false
+	}
+	version, hasVersion := response.result["protocolVersion"].(json.String)
+	if !hasVersion || string(version) != LEGACY_PROTOCOL_VERSION {
+		return false
+	}
+	client.protocolEra = .Legacy
+	delete(client.protocolVersion, client.allocator)
+	client.protocolVersion = strings.clone(string(version), client.allocator)
+	if client.kind == .Http {
+		delete(client.http.protocolVersion, client.allocator)
+		client.http.protocolVersion = strings.clone(string(version), client.allocator)
+	}
+	client.toolsSupported = false
+	client.resourcesSupported = false
+	client.promptsSupported = false
+	if capabilities, hasCapabilities := response.result["capabilities"].(json.Object);
+	   hasCapabilities {
+		_, client.toolsSupported = capabilities["tools"].(json.Object)
+		_, client.resourcesSupported = capabilities["resources"].(json.Object)
+		_, client.promptsSupported = capabilities["prompts"].(json.Object)
+	}
+	client.discovered = true
+
+	notification := build_legacy_initialized(allocator)
+	encoded, encodeOK := encode_message(notification, allocator)
+	json.destroy_value(notification, allocator)
+	if !encodeOK {
+		return false
+	}
+	defer delete(encoded, allocator)
+	if client.kind == .Stdio {
+		return stdio_transport_write_line(&client.stdio, encoded)
+	}
+	if client.kind == .Http {
+		body, status, sendOK := http_transport_send(
+			&client.http,
+			"notifications/initialized",
+			"",
+			encoded,
+			client.protocolVersion,
+			allocator,
+		)
+		if sendOK {
+			delete(body, allocator)
+			return status == 202 || status == 200
+		}
+	}
+	return false
+}
+
+// Calls `server/discover` and caches the server's declared capabilities.
+// Must succeed before `client_list_tools`/`client_list_resources`/`client_list_prompts`
+// will return anything.
+client_discover :: proc(client: ^Client, allocator := context.allocator) -> bool {
+	if client.protocolEra == .Legacy {
+		return client_initialize_legacy(client, allocator)
+	}
+	params := json.Object(make(map[string]json.Value, 0, allocator))
+	client.nextID += 1
+	probe := build_request_for_version(
+		client.nextID,
+		"server/discover",
+		params,
+		PROTOCOL_VERSION,
+		allocator,
+	)
+	response, ok := client_send_value(client, "server/discover", "", probe, allocator)
+	json.destroy_value(probe, allocator)
+	if !ok {
+		return client_initialize_legacy(client, allocator)
+	}
+	defer rpc_response_destroy(&response, allocator)
+	if response.isError {
+		if response.error.code == ERROR_UNSUPPORTED_PROTOCOL_VERSION {
+			version, versionOK := select_protocol_version(response.error.data, allocator)
+			if !versionOK {
+				return false
+			}
+			rpc_response_destroy(&response, allocator)
+			client.protocolEra = .Modern
+			client.protocolVersion = version
+			if client.kind == .Http {
+				delete(client.http.protocolVersion, client.allocator)
+				client.http.protocolVersion = strings.clone(string(version), client.allocator)
+			}
+			params = json.Object(make(map[string]json.Value, 0, allocator))
+			client.nextID += 1
+			retry := build_request_for_version(
+				client.nextID,
+				"server/discover",
+				params,
+				client.protocolVersion,
+				allocator,
+			)
+			response, ok = client_send_value(client, "server/discover", "", retry, allocator)
+			json.destroy_value(retry, allocator)
+			if !ok || response.isError {
+				if ok {
+					rpc_response_destroy(&response, allocator)
+				}
+				return false
+			}
+		} else {
+			rpc_response_destroy(&response, allocator)
+			return client_initialize_legacy(client, allocator)
+		}
+	} else {
+		client.protocolEra = .Modern
+		version := PROTOCOL_VERSION
+		selectedVersion := ""
+		if supported, hasSupported := response.result["supportedVersions"]; hasSupported {
+			selected, selectedOK := select_protocol_version(supported, allocator)
+			if !selectedOK {
+				return false
+			}
+			version = selected
+			selectedVersion = selected
+		}
+		delete(client.protocolVersion, client.allocator)
+		client.protocolVersion = strings.clone(version, client.allocator)
+		delete(selectedVersion, allocator)
 	}
 
 	client.toolsSupported = false

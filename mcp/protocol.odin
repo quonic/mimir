@@ -7,6 +7,7 @@ import "core:encoding/json"
 import "core:strings"
 
 PROTOCOL_VERSION :: "2026-07-28"
+LEGACY_PROTOCOL_VERSION :: "2025-11-25"
 
 CLIENT_NAME :: "mimir"
 CLIENT_VERSION :: "0.1.0"
@@ -20,6 +21,12 @@ ERROR_INTERNAL_ERROR :: -32603
 ERROR_HEADER_MISMATCH :: -32020
 ERROR_MISSING_REQUIRED_CLIENT_CAPABILITY :: -32021
 ERROR_UNSUPPORTED_PROTOCOL_VERSION :: -32022
+
+Protocol_Era :: enum {
+	Unknown,
+	Modern,
+	Legacy,
+}
 
 RPC_Error :: struct {
 	code:    int,
@@ -60,12 +67,15 @@ object_set :: proc(
 // Builds the required `_meta` object for a request per the spec's per-request
 // protocol fields (protocolVersion + clientCapabilities are required; clientInfo
 // is recommended).
-build_meta :: proc(allocator := context.allocator) -> json.Object {
+build_meta_for_version :: proc(
+	protocolVersion: string,
+	allocator := context.allocator,
+) -> json.Object {
 	meta := json.Object(make(map[string]json.Value, 2, allocator))
 	object_set(
 		&meta,
 		"io.modelcontextprotocol/protocolVersion",
-		json.String(strings.clone(PROTOCOL_VERSION, allocator)),
+		json.String(strings.clone(protocolVersion, allocator)),
 		allocator,
 	)
 	object_set(
@@ -86,6 +96,10 @@ build_meta :: proc(allocator := context.allocator) -> json.Object {
 	return meta
 }
 
+build_meta :: proc(allocator := context.allocator) -> json.Object {
+	return build_meta_for_version(PROTOCOL_VERSION, allocator)
+}
+
 // Builds a JSON-RPC request envelope: {jsonrpc, id, method, params}. `params`
 // is consumed (its `_meta` key is set/overwritten) and takes ownership.
 build_request :: proc(
@@ -103,6 +117,108 @@ build_request :: proc(
 	object_set(&request, "method", json.String(strings.clone(method, allocator)), allocator)
 	object_set(&request, "params", params, allocator)
 	return request
+}
+
+build_request_for_version :: proc(
+	id: int,
+	method: string,
+	params: json.Object,
+	protocolVersion: string,
+	allocator := context.allocator,
+) -> json.Value {
+	params := params
+	object_set(&params, "_meta", build_meta_for_version(protocolVersion, allocator), allocator)
+
+	request := json.Object(make(map[string]json.Value, 4, allocator))
+	object_set(&request, "jsonrpc", json.String(strings.clone("2.0", allocator)), allocator)
+	object_set(&request, "id", json.Integer(i64(id)), allocator)
+	object_set(&request, "method", json.String(strings.clone(method, allocator)), allocator)
+	object_set(&request, "params", params, allocator)
+	return request
+}
+
+build_request_without_meta :: proc(
+	id: int,
+	method: string,
+	params: json.Object,
+	allocator := context.allocator,
+) -> json.Value {
+	request := json.Object(make(map[string]json.Value, 4, allocator))
+	object_set(&request, "jsonrpc", json.String(strings.clone("2.0", allocator)), allocator)
+	object_set(&request, "id", json.Integer(i64(id)), allocator)
+	object_set(&request, "method", json.String(strings.clone(method, allocator)), allocator)
+	object_set(&request, "params", params, allocator)
+	return request
+}
+
+build_legacy_initialize :: proc(id: int, allocator := context.allocator) -> json.Value {
+	params := json.Object(make(map[string]json.Value, 3, allocator))
+	object_set(
+		&params,
+		"protocolVersion",
+		json.String(strings.clone(LEGACY_PROTOCOL_VERSION, allocator)),
+		allocator,
+	)
+	object_set(
+		&params,
+		"capabilities",
+		json.Object(make(map[string]json.Value, 0, allocator)),
+		allocator,
+	)
+	clientInfo := json.Object(make(map[string]json.Value, 2, allocator))
+	object_set(&clientInfo, "name", json.String(strings.clone(CLIENT_NAME, allocator)), allocator)
+	object_set(
+		&clientInfo,
+		"version",
+		json.String(strings.clone(CLIENT_VERSION, allocator)),
+		allocator,
+	)
+	object_set(&params, "clientInfo", clientInfo, allocator)
+
+	request := json.Object(make(map[string]json.Value, 4, allocator))
+	object_set(&request, "jsonrpc", json.String(strings.clone("2.0", allocator)), allocator)
+	object_set(&request, "id", json.Integer(i64(id)), allocator)
+	object_set(&request, "method", json.String(strings.clone("initialize", allocator)), allocator)
+	object_set(&request, "params", params, allocator)
+	return request
+}
+
+build_legacy_initialized :: proc(allocator := context.allocator) -> json.Value {
+	notification := json.Object(make(map[string]json.Value, 2, allocator))
+	object_set(&notification, "jsonrpc", json.String(strings.clone("2.0", allocator)), allocator)
+	object_set(
+		&notification,
+		"method",
+		json.String(strings.clone("notifications/initialized", allocator)),
+		allocator,
+	)
+	return notification
+}
+
+select_protocol_version :: proc(
+	supported: json.Value,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
+	versions, ok := supported.(json.Array)
+	if object, isObject := supported.(json.Object); isObject {
+		versions, ok = object["supported"].(json.Array)
+		if !ok {
+			versions, ok = object["supportedVersions"].(json.Array)
+		}
+	}
+	if !ok {
+		return "", false
+	}
+	for versionValue in versions {
+		version, isString := versionValue.(json.String)
+		if isString && string(version) == PROTOCOL_VERSION {
+			return strings.clone(PROTOCOL_VERSION, allocator), true
+		}
+	}
+	return "", false
 }
 
 // Builds a JSON-RPC notification envelope: {jsonrpc, method, params}.
