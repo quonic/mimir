@@ -12,11 +12,21 @@ import "../settings"
 // server (`manager_ensure_discovered`).
 Manager :: struct {
 	clients:   map[string]^Client,
+	cache:     map[string]Era_Cache_Entry,
 	allocator: mem.Allocator,
 }
 
+Era_Cache_Entry :: struct {
+	era:     Protocol_Era,
+	version: string,
+}
+
 manager_init :: proc(allocator := context.allocator) -> Manager {
-	return Manager{clients = make(map[string]^Client, 0, allocator), allocator = allocator}
+	return Manager {
+		clients = make(map[string]^Client, 0, allocator),
+		cache = make(map[string]Era_Cache_Entry, 0, allocator),
+		allocator = allocator,
+	}
 }
 
 manager_destroy :: proc(manager: ^Manager) {
@@ -26,6 +36,11 @@ manager_destroy :: proc(manager: ^Manager) {
 		delete(name, manager.allocator)
 	}
 	delete(manager.clients)
+	for origin, entry in manager.cache {
+		delete(origin, manager.allocator)
+		delete(entry.version, manager.allocator)
+	}
+	delete(manager.cache)
 	manager^ = {}
 }
 
@@ -63,6 +78,15 @@ manager_load_registry :: proc(
 		if !ok {
 			continue
 		}
+		if client.kind == .Http {
+			if entry, cached := manager.cache[client.http.origin]; cached {
+				client.protocolEra = entry.era
+				client.protocolVersion = strings.clone(entry.version, allocator)
+				if entry.era == .Modern {
+					client.http.protocolVersion = strings.clone(entry.version, allocator)
+				}
+			}
+		}
 		clientPtr := new(Client, allocator)
 		clientPtr^ = client
 		manager.clients[strings.clone(server.config.name, allocator)] = clientPtr
@@ -91,6 +115,18 @@ manager_ensure_discovered :: proc(
 	if !clientPtr.discovered {
 		if !client_discover(clientPtr, allocator) {
 			return clientPtr, false
+		}
+		if clientPtr.kind == .Http && clientPtr.protocolVersion != "" {
+			origin := clientPtr.http.origin
+			if old, exists := manager.cache[origin]; exists {
+				delete(old.version, manager.allocator)
+			} else {
+				origin = strings.clone(origin, manager.allocator)
+			}
+			manager.cache[origin] = Era_Cache_Entry {
+				era     = clientPtr.protocolEra,
+				version = strings.clone(clientPtr.protocolVersion, manager.allocator),
+			}
 		}
 	}
 	return clientPtr, true

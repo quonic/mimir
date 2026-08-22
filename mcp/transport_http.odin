@@ -12,15 +12,27 @@ import httpClient "../http/client"
 // Sessions, resumable streams, and the GET/DELETE endpoint from earlier
 // revisions are not part of this protocol version and are not implemented.
 Http_Transport :: struct {
-	url: string,
+	url:             string,
+	origin:          string,
+	protocolVersion: string,
+	sessionID:       string,
 }
 
 http_transport_init :: proc(url: string, allocator := context.allocator) -> Http_Transport {
-	return Http_Transport{url = strings.clone(url, allocator)}
+	parsedURL := http.url_parse(url)
+	origin := strings.concatenate({parsedURL.scheme, "://", parsedURL.host}, allocator)
+	return Http_Transport {
+		url = strings.clone(url, allocator),
+		origin = origin,
+		protocolVersion = strings.clone(PROTOCOL_VERSION, allocator),
+	}
 }
 
 http_transport_destroy :: proc(t: ^Http_Transport, allocator := context.allocator) {
 	delete(t.url, allocator)
+	delete(t.origin, allocator)
+	delete(t.protocolVersion, allocator)
+	delete(t.sessionID, allocator)
 	t^ = {}
 }
 
@@ -33,6 +45,7 @@ http_transport_send :: proc(
 	method: string,
 	mcpName: string,
 	rawJSON: string,
+	protocolVersion := PROTOCOL_VERSION,
 	allocator := context.allocator,
 ) -> (
 	body: string,
@@ -45,8 +58,11 @@ http_transport_send :: proc(
 
 	http.headers_set_content_type(&req.headers, http.mime_to_content_type(.Json))
 	http.headers_set_unsafe(&req.headers, "Accept", "application/json, text/event-stream")
-	http.headers_set_unsafe(&req.headers, "MCP-Protocol-Version", PROTOCOL_VERSION)
+	http.headers_set_unsafe(&req.headers, "MCP-Protocol-Version", protocolVersion)
 	http.headers_set_unsafe(&req.headers, "Mcp-Method", method)
+	if t.sessionID != "" && method != "initialize" {
+		http.headers_set_unsafe(&req.headers, "MCP-Session-Id", t.sessionID)
+	}
 	if mcpName != "" {
 		http.headers_set_unsafe(&req.headers, "Mcp-Name", mcpName)
 	}
@@ -58,6 +74,13 @@ http_transport_send :: proc(
 	}
 	defer httpClient.response_destroy(&res)
 	status = int(res.status)
+	if method == "initialize" {
+		if sessionID, hasSessionID := http.headers_get(res.headers, "MCP-Session-Id");
+		   hasSessionID {
+			delete(t.sessionID, allocator)
+			t.sessionID = strings.clone(sessionID, allocator)
+		}
+	}
 
 	responseBody, allocated, bodyErr := httpClient.response_body(&res, -1, allocator)
 	if bodyErr != nil {

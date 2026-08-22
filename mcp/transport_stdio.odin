@@ -1,9 +1,13 @@
 package mcp
 
+import "core:c"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:sys/posix"
 import "core:time"
+
+MCP_IO_TIMEOUT_MS :: 30_000
 
 // Stdio_Transport spawns an MCP server as a subprocess and exchanges
 // newline-delimited JSON-RPC messages over its stdin/stdout, per
@@ -91,9 +95,7 @@ stdio_transport_write_line :: proc(t: ^Stdio_Transport, line: string) -> bool {
 
 // Reads the next newline-delimited message from the server's stdout. Blocks
 // until a full line is available, the process closes stdout, or a read error
-// occurs. The stdio transport has no per-request timeout in this pass; callers
-// that need one should wrap this call in a separate goroutine/thread with a
-// deadline.
+// occurs. A timeout marks the transport unavailable so callers can re-probe.
 stdio_transport_read_line :: proc(
 	t: ^Stdio_Transport,
 	allocator := context.allocator,
@@ -115,6 +117,18 @@ stdio_transport_read_line :: proc(
 				t.pending = remainder
 				return line, true
 			}
+		}
+		fds := [1]posix.pollfd {
+			{fd = posix.FD(os.fd(t.stdoutRead)), events = posix.Poll_Event{.IN}},
+		}
+		pollResult := posix.poll(
+			raw_data(fds[:]),
+			posix.nfds_t(len(fds)),
+			c.int(MCP_IO_TIMEOUT_MS),
+		)
+		if pollResult <= 0 || .IN not_in fds[0].revents {
+			t.alive = false
+			return "", false
 		}
 		buf: [4096]byte
 		read, err := os.read(t.stdoutRead, buf[:])
