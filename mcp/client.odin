@@ -26,6 +26,8 @@ Client :: struct {
 	resourcesSubscribe:   bool,
 	promptsSupported:     bool,
 	promptsListChanged:   bool,
+	subscriptionActive:   bool,
+	subscriptionID:       int,
 	allocator:            mem.Allocator,
 }
 
@@ -87,6 +89,8 @@ client_reset_protocol :: proc(client: ^Client, allocator := context.allocator) {
 	client.resourcesSubscribe = false
 	client.promptsSupported = false
 	client.promptsListChanged = false
+	client.subscriptionActive = false
+	client.subscriptionID = 0
 	if client.kind == .Http {
 		delete(client.http.protocolVersion, client.allocator)
 		client.http.protocolVersion = strings.clone(PROTOCOL_VERSION, client.allocator)
@@ -174,6 +178,59 @@ client_poll_subscription_event :: proc(
 	}
 	defer delete(raw, client.stdio.allocator)
 	return parse_subscription_event(raw, allocator)
+}
+
+client_start_stdio_subscription :: proc(client: ^Client, allocator := context.allocator) -> bool {
+	if client.kind != .Stdio || !client.discovered || client.subscriptionActive {
+		return client.subscriptionActive
+	}
+	filter := Subscription_Filter {
+		toolsListChanged     = client.toolsListChanged,
+		resourcesListChanged = client.resourcesListChanged,
+		promptsListChanged   = client.promptsListChanged,
+	}
+	defer subscription_filter_destroy(&filter, allocator)
+	if !filter.toolsListChanged && !filter.resourcesListChanged && !filter.promptsListChanged {
+		return false
+	}
+
+	client.nextID += 1
+	request := build_subscription_request(client.nextID, filter, client.protocolVersion, allocator)
+	defer json.destroy_value(request, allocator)
+	encoded, encodeOK := encode_message(request, allocator)
+	if !encodeOK {
+		return false
+	}
+	defer delete(encoded, allocator)
+	if !stdio_transport_write_line(&client.stdio, encoded) {
+		return false
+	}
+
+	for {
+		line, readOK := stdio_transport_read_line(&client.stdio, allocator)
+		if !readOK {
+			return false
+		}
+		stdio_transport_route_message(&client.stdio, line)
+		delete(line, allocator)
+		for {
+			raw, found := stdio_transport_take_notification(&client.stdio)
+			if !found {
+				break
+			}
+			event, eventOK := parse_subscription_event(raw, allocator)
+			delete(raw, client.stdio.allocator)
+			if eventOK && event.kind == .Acknowledged && event.subscriptionID == client.nextID {
+				client.subscriptionActive = true
+				client.subscriptionID = event.subscriptionID
+				subscription_event_destroy(&event, allocator)
+				return true
+			}
+			if eventOK {
+				subscription_event_destroy(&event, allocator)
+			}
+		}
+	}
 }
 
 // Sends a JSON-RPC request and waits for its response. `mcpName` is used only

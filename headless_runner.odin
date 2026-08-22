@@ -6,6 +6,7 @@ import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import mcpClient "mcp"
 import "settings"
 import "text_input"
 
@@ -284,6 +285,7 @@ headless_handle_key :: proc(state: ^App_State, request: ^Headless_Request) {
 headless_poll_once :: proc(state: ^App_State) {
 	_ = app_poll_agent_host(state)
 	_ = app_poll_tool_execution(state)
+	_ = mcpClient.manager_poll_subscription_events(&state.mcpManager, state.allocator)
 }
 
 headless_wait_until_idle :: proc(state: ^App_State) {

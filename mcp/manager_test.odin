@@ -99,3 +99,32 @@ test_manager_reprobe_clears_cached_session_before_discovery :: proc(t: ^testing.
 	_, cached := manager.cache[client.http.origin]
 	assert(!cached, "expected failed era assumption to be evicted")
 }
+
+@(test)
+test_manager_poll_subscription_events_marks_tools_dirty :: proc(t: ^testing.T) {
+	manager := manager_init(context.allocator)
+	defer manager_destroy(&manager)
+	client := new(Client, context.allocator)
+	client^ = Client {
+		kind = .Stdio,
+		subscriptionActive = true,
+		subscriptionID = 4,
+		allocator = context.allocator,
+		stdio = Stdio_Transport {
+			responses = make([dynamic]Stdio_Response, 0, 1, context.allocator),
+			notifications = make([dynamic]string, 0, 1, context.allocator),
+			allocator = context.allocator,
+		},
+	}
+	manager.clients[strings.clone("server", context.allocator)] = client
+	stdio_transport_route_message(
+		&client.stdio,
+		`{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":4}}}`,
+	)
+
+	assert(
+		manager_poll_subscription_events(&manager, context.allocator),
+		"expected catalog change",
+	)
+	assert(manager.toolsDirty, "expected tools catalog to become dirty")
+}

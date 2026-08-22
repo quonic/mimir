@@ -11,9 +11,12 @@ import "../settings"
 // manager is loaded, but `server/discover` only runs on first use of a given
 // server (`manager_ensure_discovered`).
 Manager :: struct {
-	clients:   map[string]^Client,
-	cache:     map[string]Era_Cache_Entry,
-	allocator: mem.Allocator,
+	clients:        map[string]^Client,
+	cache:          map[string]Era_Cache_Entry,
+	toolsDirty:     bool,
+	resourcesDirty: bool,
+	promptsDirty:   bool,
+	allocator:      mem.Allocator,
 }
 
 Era_Cache_Entry :: struct {
@@ -99,6 +102,40 @@ manager_get :: proc(manager: ^Manager, name: string) -> (^Client, bool) {
 	return clientPtr, ok
 }
 
+manager_poll_subscription_events :: proc(
+	manager: ^Manager,
+	allocator := context.allocator,
+) -> bool {
+	changed := false
+	for _, client in manager.clients {
+		for {
+			event, found := client_poll_subscription_event(client, allocator)
+			if !found {
+				break
+			}
+			if !client.subscriptionActive || event.subscriptionID != client.subscriptionID {
+				subscription_event_destroy(&event, allocator)
+				continue
+			}
+			switch event.kind {
+			case .ToolsListChanged:
+				manager.toolsDirty = true
+				changed = true
+			case .ResourcesListChanged, .ResourceUpdated:
+				manager.resourcesDirty = true
+				changed = true
+			case .PromptsListChanged:
+				manager.promptsDirty = true
+				changed = true
+			case .Acknowledged, .Completed:
+			case:
+			}
+			subscription_event_destroy(&event, allocator)
+		}
+	}
+	return changed
+}
+
 manager_invalidate_cache :: proc(manager: ^Manager, client: ^Client) {
 	if client.kind != .Http {
 		return
@@ -151,6 +188,7 @@ manager_ensure_discovered :: proc(
 		if !client_discover(clientPtr, allocator) {
 			return clientPtr, false
 		}
+		_ = client_start_stdio_subscription(clientPtr, allocator)
 		if clientPtr.kind == .Http && clientPtr.protocolVersion != "" {
 			origin := clientPtr.http.origin
 			if old, exists := manager.cache[origin]; exists {

@@ -570,6 +570,9 @@ run_app :: proc() {
 		if app_poll_tool_execution(&state) {
 			frameDirty = true
 		}
+		if mcpClient.manager_poll_subscription_events(&state.mcpManager, state.allocator) {
+			frameDirty = true
+		}
 		if app_poll_agent_host(&state) {
 			frameDirty = true
 			if state.historyRenderOnly {
