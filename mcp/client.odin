@@ -157,6 +157,25 @@ client_send_value :: proc(
 	return RPC_Response{}, false
 }
 
+client_poll_subscription_event :: proc(
+	client: ^Client,
+	allocator := context.allocator,
+) -> (
+	Subscription_Event,
+	bool,
+) {
+	if client.kind != .Stdio {
+		return Subscription_Event{}, false
+	}
+	_ = stdio_transport_poll(&client.stdio)
+	raw, found := stdio_transport_take_notification(&client.stdio)
+	if !found {
+		return Subscription_Event{}, false
+	}
+	defer delete(raw, client.stdio.allocator)
+	return parse_subscription_event(raw, allocator)
+}
+
 // Sends a JSON-RPC request and waits for its response. `mcpName` is used only
 // by the HTTP transport (`Mcp-Name` header); stdio ignores it. `params` is
 // consumed (ownership transferred, matching `build_request`).

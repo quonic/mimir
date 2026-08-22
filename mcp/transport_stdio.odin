@@ -163,6 +163,44 @@ stdio_transport_read_response :: proc(
 	}
 }
 
+// Reads and routes at most one available message without waiting for input.
+stdio_transport_poll :: proc(t: ^Stdio_Transport) -> bool {
+	if !t.alive {
+		return false
+	}
+	for {
+		for index := 0; index < len(t.pending); index += 1 {
+			if t.pending[index] != '\n' {
+				continue
+			}
+			line := strings.clone(string(t.pending[:index]), t.allocator)
+			remainderLength := len(t.pending) - index - 1
+			remainder := make([dynamic]byte, remainderLength, t.allocator)
+			copy(remainder[:], t.pending[index + 1:])
+			delete(t.pending)
+			t.pending = remainder
+			routed := stdio_transport_route_message(t, line)
+			delete(line, t.allocator)
+			return routed
+		}
+
+		fds := [1]posix.pollfd {
+			{fd = posix.FD(os.fd(t.stdoutRead)), events = posix.Poll_Event{.IN}},
+		}
+		pollResult := posix.poll(raw_data(fds[:]), posix.nfds_t(len(fds)), 0)
+		if pollResult <= 0 || .IN not_in fds[0].revents {
+			return false
+		}
+		buf: [4096]byte
+		read, err := os.read(t.stdoutRead, buf[:])
+		if err != nil || read == 0 {
+			t.alive = false
+			return false
+		}
+		append(&t.pending, ..buf[:read])
+	}
+}
+
 // Writes one JSON-RPC message line (request or notification) to the server's stdin.
 stdio_transport_write_line :: proc(t: ^Stdio_Transport, line: string) -> bool {
 	if !t.alive {

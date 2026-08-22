@@ -39,3 +39,25 @@ test_list_params_includes_cloned_cursor :: proc(t: ^testing.T) {
 	assert(isString, "expected cursor value to be a string")
 	assert(string(text) == "abc", "expected cursor value to round-trip")
 }
+
+@(test)
+test_client_polls_owned_stdio_subscription_event :: proc(t: ^testing.T) {
+	client := Client {
+		kind = .Stdio,
+		allocator = context.allocator,
+		stdio = Stdio_Transport {
+			responses = make([dynamic]Stdio_Response, 0, 1, context.allocator),
+			notifications = make([dynamic]string, 0, 1, context.allocator),
+			allocator = context.allocator,
+		},
+	}
+	defer stdio_transport_clear_messages(&client.stdio)
+	stdio_transport_route_message(
+		&client.stdio,
+		`{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"_meta":{"io.modelcontextprotocol/subscriptionId":4}}}`,
+	)
+	event, ok := client_poll_subscription_event(&client, context.allocator)
+	assert(ok, "expected subscription event")
+	assert(event.kind == .ToolsListChanged, "expected tools list change event")
+	assert(event.subscriptionID == 4, "expected subscription ID")
+}
