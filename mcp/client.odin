@@ -248,6 +248,10 @@ client_discover :: proc(client: ^Client, allocator := context.allocator) -> bool
 			rpc_response_destroy(&response, allocator)
 			client.protocolEra = .Modern
 			client.protocolVersion = version
+			if client.kind == .Http {
+				delete(client.http.protocolVersion, client.allocator)
+				client.http.protocolVersion = strings.clone(string(version), client.allocator)
+			}
 			params = json.Object(make(map[string]json.Value, 0, allocator))
 			client.nextID += 1
 			retry := build_request_for_version(
