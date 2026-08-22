@@ -16,6 +16,7 @@ Http_Transport :: struct {
 	origin:          string,
 	protocolVersion: string,
 	sessionID:       string,
+	lastStatus:      int,
 }
 
 http_transport_init :: proc(url: string, allocator := context.allocator) -> Http_Transport {
@@ -74,6 +75,7 @@ http_transport_send :: proc(
 	}
 	defer httpClient.response_destroy(&res)
 	status = int(res.status)
+	t.lastStatus = status
 	if method == "initialize" {
 		if sessionID, hasSessionID := http.headers_get(res.headers, "MCP-Session-Id");
 		   hasSessionID {

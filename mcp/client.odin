@@ -71,6 +71,23 @@ client_destroy :: proc(client: ^Client) {
 	client^ = {}
 }
 
+client_reset_protocol :: proc(client: ^Client, allocator := context.allocator) {
+	delete(client.protocolVersion, client.allocator)
+	client.protocolVersion = ""
+	client.protocolEra = .Unknown
+	client.discovered = false
+	client.toolsSupported = false
+	client.resourcesSupported = false
+	client.promptsSupported = false
+	if client.kind == .Http {
+		delete(client.http.protocolVersion, client.allocator)
+		client.http.protocolVersion = strings.clone(PROTOCOL_VERSION, client.allocator)
+		delete(client.http.sessionID, client.allocator)
+		client.http.sessionID = ""
+		client.http.lastStatus = 0
+	}
+}
+
 client_send_value :: proc(
 	client: ^Client,
 	method: string,
@@ -149,7 +166,14 @@ client_call :: proc(
 		request = build_request_for_version(client.nextID, method, params, version, allocator)
 	}
 	defer json.destroy_value(request, allocator)
-	return client_send_value(client, method, mcpName, request, allocator)
+	response, callOK := client_send_value(client, method, mcpName, request, allocator)
+	if client.kind == .Http && client.http.lastStatus == 404 && client.http.sessionID != "" {
+		if callOK {
+			rpc_response_destroy(&response, allocator)
+		}
+		return RPC_Response{}, false
+	}
+	return response, callOK
 }
 
 client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator) -> bool {
@@ -188,8 +212,6 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 		_, client.resourcesSupported = capabilities["resources"].(json.Object)
 		_, client.promptsSupported = capabilities["prompts"].(json.Object)
 	}
-	client.discovered = true
-
 	notification := build_legacy_initialized(allocator)
 	encoded, encodeOK := encode_message(notification, allocator)
 	json.destroy_value(notification, allocator)
@@ -198,7 +220,11 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 	}
 	defer delete(encoded, allocator)
 	if client.kind == .Stdio {
-		return stdio_transport_write_line(&client.stdio, encoded)
+		if !stdio_transport_write_line(&client.stdio, encoded) {
+			return false
+		}
+		client.discovered = true
+		return true
 	}
 	if client.kind == .Http {
 		body, status, sendOK := http_transport_send(
@@ -211,7 +237,10 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 		)
 		if sendOK {
 			delete(body, allocator)
-			return status == 202 || status == 200
+			if status == 202 || status == 200 {
+				client.discovered = true
+				return true
+			}
 		}
 	}
 	return false
@@ -247,11 +276,13 @@ client_discover :: proc(client: ^Client, allocator := context.allocator) -> bool
 			}
 			rpc_response_destroy(&response, allocator)
 			client.protocolEra = .Modern
-			client.protocolVersion = version
+			delete(client.protocolVersion, client.allocator)
+			client.protocolVersion = strings.clone(version, client.allocator)
 			if client.kind == .Http {
 				delete(client.http.protocolVersion, client.allocator)
-				client.http.protocolVersion = strings.clone(string(version), client.allocator)
+				client.http.protocolVersion = strings.clone(version, client.allocator)
 			}
+			delete(version, allocator)
 			params = json.Object(make(map[string]json.Value, 0, allocator))
 			client.nextID += 1
 			retry := build_request_for_version(

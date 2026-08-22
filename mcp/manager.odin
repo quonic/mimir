@@ -99,6 +99,40 @@ manager_get :: proc(manager: ^Manager, name: string) -> (^Client, bool) {
 	return clientPtr, ok
 }
 
+manager_invalidate_cache :: proc(manager: ^Manager, client: ^Client) {
+	if client.kind != .Http {
+		return
+	}
+	for origin, entry in manager.cache {
+		if origin != client.http.origin {
+			continue
+		}
+		delete(entry.version, manager.allocator)
+		delete_key(&manager.cache, origin)
+		delete(origin, manager.allocator)
+		break
+	}
+}
+
+manager_reprobe :: proc(
+	manager: ^Manager,
+	client: ^Client,
+	allocator := context.allocator,
+) -> bool {
+	manager_invalidate_cache(manager, client)
+	client_reset_protocol(client, allocator)
+	if !client_discover(client, allocator) {
+		return false
+	}
+	if client.kind == .Http {
+		manager.cache[strings.clone(client.http.origin, manager.allocator)] = Era_Cache_Entry {
+			era     = client.protocolEra,
+			version = strings.clone(client.protocolVersion, manager.allocator),
+		}
+	}
+	return true
+}
+
 // Returns the client for `name`, running `server/discover` on first use.
 // ok=false means the server is unknown/disabled or discovery failed.
 manager_ensure_discovered :: proc(
@@ -228,6 +262,16 @@ manager_call_tool :: proc(
 	if !clientPtr.toolsSupported {
 		return strings.clone("MCP server does not support tools.", allocator), true, false
 	}
+	callText, callIsError, callOK := client_call_tool(
+		clientPtr,
+		toolName,
+		argumentsJSON,
+		allocator,
+	)
+	if callOK || !manager_reprobe(manager, clientPtr, allocator) || !clientPtr.toolsSupported {
+		return callText, callIsError, callOK
+	}
+	delete(callText, allocator)
 	return client_call_tool(clientPtr, toolName, argumentsJSON, allocator)
 }
 
@@ -248,6 +292,11 @@ manager_read_resource :: proc(
 	if !clientPtr.resourcesSupported {
 		return strings.clone("MCP server does not support resources.", allocator), false
 	}
+	readText, readOK := client_read_resource(clientPtr, uri, allocator)
+	if readOK || !manager_reprobe(manager, clientPtr, allocator) || !clientPtr.resourcesSupported {
+		return readText, readOK
+	}
+	delete(readText, allocator)
 	return client_read_resource(clientPtr, uri, allocator)
 }
 
@@ -269,5 +318,10 @@ manager_get_prompt :: proc(
 	if !clientPtr.promptsSupported {
 		return strings.clone("MCP server does not support prompts.", allocator), false
 	}
+	promptText, promptOK := client_get_prompt(clientPtr, promptName, argumentsJSON, allocator)
+	if promptOK || !manager_reprobe(manager, clientPtr, allocator) || !clientPtr.promptsSupported {
+		return promptText, promptOK
+	}
+	delete(promptText, allocator)
 	return client_get_prompt(clientPtr, promptName, argumentsJSON, allocator)
 }
