@@ -117,7 +117,15 @@ client_send_value :: proc(
 		if !stdio_transport_write_line(&client.stdio, encoded) {
 			return RPC_Response{}, false
 		}
-		line, readOK := stdio_transport_read_line(&client.stdio, allocator)
+		requestObject, requestOK := request.(json.Object)
+		if !requestOK {
+			return RPC_Response{}, false
+		}
+		requestID, idOK := requestObject["id"].(json.Integer)
+		if !idOK {
+			return RPC_Response{}, false
+		}
+		line, readOK := stdio_transport_read_response(&client.stdio, int(requestID), allocator)
 		if !readOK {
 			return RPC_Response{}, false
 		}
@@ -533,7 +541,6 @@ client_read_resource :: proc(
 	if !callOK {
 		return "", false
 	}
-	defer rpc_response_destroy(&response, allocator)
 	if response.isError {
 		message := response.error.message
 		if message == "" {

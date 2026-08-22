@@ -142,6 +142,27 @@ stdio_transport_take_notification :: proc(t: ^Stdio_Transport) -> (string, bool)
 	return raw, true
 }
 
+stdio_transport_read_response :: proc(
+	t: ^Stdio_Transport,
+	id: int,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
+	for {
+		if raw, found := stdio_transport_take_response(t, id); found {
+			return raw, true
+		}
+		line, readOK := stdio_transport_read_line(t, allocator)
+		if !readOK {
+			return "", false
+		}
+		stdio_transport_route_message(t, line)
+		delete(line, allocator)
+	}
+}
+
 // Writes one JSON-RPC message line (request or notification) to the server's stdin.
 stdio_transport_write_line :: proc(t: ^Stdio_Transport, line: string) -> bool {
 	if !t.alive {
