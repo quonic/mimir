@@ -175,8 +175,10 @@ client_initialize_legacy :: proc(client: ^Client, allocator := context.allocator
 	client.protocolEra = .Legacy
 	delete(client.protocolVersion, client.allocator)
 	client.protocolVersion = strings.clone(string(version), client.allocator)
-	delete(client.http.protocolVersion, client.allocator)
-	client.http.protocolVersion = strings.clone(string(version), client.allocator)
+	if client.kind == .Http {
+		delete(client.http.protocolVersion, client.allocator)
+		client.http.protocolVersion = strings.clone(string(version), client.allocator)
+	}
 	client.toolsSupported = false
 	client.resourcesSupported = false
 	client.promptsSupported = false

@@ -83,6 +83,7 @@ manager_load_registry :: proc(
 				client.protocolEra = entry.era
 				client.protocolVersion = strings.clone(entry.version, allocator)
 				if entry.era == .Modern {
+					delete(client.http.protocolVersion, allocator)
 					client.http.protocolVersion = strings.clone(entry.version, allocator)
 				}
 			}
