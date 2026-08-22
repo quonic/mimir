@@ -65,6 +65,7 @@ client_init_http :: proc(name: string, url: string, allocator := context.allocat
 }
 
 client_destroy :: proc(client: ^Client) {
+	client_stop_subscription(client, client.allocator)
 	delete(client.name, client.allocator)
 	delete(client.protocolVersion, client.allocator)
 	switch client.kind {
@@ -78,6 +79,7 @@ client_destroy :: proc(client: ^Client) {
 }
 
 client_reset_protocol :: proc(client: ^Client, allocator := context.allocator) {
+	client_stop_subscription(client, allocator)
 	delete(client.protocolVersion, client.allocator)
 	client.protocolVersion = ""
 	client.protocolEra = .Unknown
@@ -178,6 +180,23 @@ client_poll_subscription_event :: proc(
 	}
 	defer delete(raw, client.stdio.allocator)
 	return parse_subscription_event(raw, allocator)
+}
+
+client_stop_subscription :: proc(client: ^Client, allocator := context.allocator) {
+	if !client.subscriptionActive {
+		return
+	}
+	if client.kind == .Stdio {
+		notification := build_subscription_cancelled(client.subscriptionID, allocator)
+		encoded, encodeOK := encode_message(notification, allocator)
+		json.destroy_value(notification, allocator)
+		if encodeOK {
+			_ = stdio_transport_write_line(&client.stdio, encoded)
+			delete(encoded, allocator)
+		}
+	}
+	client.subscriptionActive = false
+	client.subscriptionID = 0
 }
 
 client_start_stdio_subscription :: proc(client: ^Client, allocator := context.allocator) -> bool {

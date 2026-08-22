@@ -61,3 +61,22 @@ test_client_polls_owned_stdio_subscription_event :: proc(t: ^testing.T) {
 	assert(event.kind == .ToolsListChanged, "expected tools list change event")
 	assert(event.subscriptionID == 4, "expected subscription ID")
 }
+
+@(test)
+test_client_stop_subscription_clears_state :: proc(t: ^testing.T) {
+	client := Client {
+		kind = .Stdio,
+		subscriptionActive = true,
+		subscriptionID = 12,
+		allocator = context.allocator,
+		stdio = Stdio_Transport {
+			responses = make([dynamic]Stdio_Response, 0, 1, context.allocator),
+			notifications = make([dynamic]string, 0, 1, context.allocator),
+			allocator = context.allocator,
+		},
+	}
+	defer stdio_transport_clear_messages(&client.stdio)
+	client_stop_subscription(&client, context.allocator)
+	assert(!client.subscriptionActive, "expected subscription to stop")
+	assert(client.subscriptionID == 0, "expected subscription ID to clear")
+}
