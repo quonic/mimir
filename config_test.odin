@@ -335,7 +335,6 @@ test_parse_config_rejects_permission_grant_outside_project :: proc(t: ^testing.T
 	"selectedProvider": "ollama",
 	"selectedModel": "",
 	"providers": [],
-	"mcpServers": [],
 	"skillPaths": [],
 	"permissionGrants": [
 		{
