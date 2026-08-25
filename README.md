@@ -124,7 +124,7 @@ Windows and macOS are untested and may never be officially supported, as I do no
 1. Start Ollama and download a model:
 
    ```sh
-   ollama pull llama3.2
+   ollama pull qwen3.8:latest
    ```
 
 2. Run Mimir from the repository root:
