@@ -41,7 +41,6 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
       "enabled": true
     }
   ],
-  "mcpServers": [],
 	"skillPaths": ["/tmp/mimir/skills"],
 	"permissionGrants": [
 		{
@@ -116,7 +115,6 @@ test_parse_config_rejects_invalid_provider_type :: proc(t: ^testing.T) {
       "enabled": true
     }
   ],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
@@ -219,7 +217,6 @@ test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
 	payload := `{
   "toolContinuations": -1,
   "providers": [],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
@@ -233,7 +230,6 @@ test_parse_config_rejects_negative_max_subagent_depth :: proc(t: ^testing.T) {
 	payload := `{
   "maxSubagentDepth": -1,
   "providers": [],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
@@ -247,7 +243,6 @@ test_parse_config_rejects_negative_max_subagents_per_session :: proc(t: ^testing
 	payload := `{
   "maxSubagentsPerSession": -1,
   "providers": [],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
@@ -261,7 +256,6 @@ test_parse_config_rejects_invalid_approval_method :: proc(t: ^testing.T) {
 	payload := `{
   "approvalMethod": "sometimes",
   "providers": [],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
@@ -275,7 +269,6 @@ test_parse_config_rejects_invalid_system_prompt_mode :: proc(t: ^testing.T) {
 	payload := `{
   "systemPromptMode": "sometimes",
   "providers": [],
-  "mcpServers": [],
   "skillPaths": []
 }`
 
