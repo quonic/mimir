@@ -1,9 +1,19 @@
 # Mimir
 
-A flicker free terminal agent harness for Ollama, written in Odin.
+A terminal-native, repository-aware AI coding agent for Ollama, written in Odin.
 
-I started this to primarily learn how an agent harness works, and secondarily make a
-harness in Odin that works with Ollama.
+Mimir lets you work with an AI assistant directly from a project directory. It
+streams conversations in a terminal UI, understands the active repository, and
+can use tools to inspect and modify project files, run shell commands, and
+search the codebase. Tool calls are subject to project-root boundaries and
+configurable permission approval, with optional safety analysis for risky
+actions.
+
+Mimir also supports delegated subagents for self-contained tasks and a headless
+JSONL interface for automation and integration with other tools.
+
+The project started as a way to learn how agent systems work while building a
+usable coding assistant in Odin that works with local Ollama models.
 
 Mimir takes its name from Mímir, the Norse figure associated with wisdom and counsel.
 
