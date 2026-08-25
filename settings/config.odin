@@ -53,7 +53,6 @@ Permission_Grant_Wire :: struct {
 	projectRoot: string,
 	directory:   string,
 	command:     string,
-	mcpServer:   string,
 }
 
 Mimir_Config_Wire :: struct {
@@ -71,7 +70,6 @@ Mimir_Config_Wire :: struct {
 	systemPromptMode:       string,
 	providers:              []Provider_Config_Wire,
 	contextWindows:         []Context_Window_Config_Wire,
-	mcpServers:             []MCP_Server_Config,
 	skillPaths:             []string,
 	permissionGrants:       []Permission_Grant_Wire,
 }
@@ -110,7 +108,6 @@ Mimir_Config :: struct {
 	systemPromptMode:       System_Prompt_Mode,
 	providers:              [dynamic]Provider_Config,
 	contextWindows:         [dynamic]Context_Window_Config,
-	mcpServers:             [dynamic]MCP_Server_Config,
 	skillPaths:             [dynamic]string,
 	permissionGrants:       [dynamic]tool_policy.Permission_Grant,
 	allocationAllocator:    mem.Allocator,
@@ -199,7 +196,6 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.systemPromptMode = .Append
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
-	config.mcpServers = make([dynamic]MCP_Server_Config, 0, 0, allocator)
 	config.skillPaths = make([dynamic]string, 0, 2, allocator)
 	config.permissionGrants = make([dynamic]tool_policy.Permission_Grant, 0, 0, allocator)
 	append(
@@ -335,7 +331,6 @@ config_destroy :: proc(config: ^Mimir_Config) {
 	}
 	delete(config.providers)
 	delete(config.contextWindows)
-	delete(config.mcpServers)
 	delete(config.skillPaths)
 	delete(config.permissionGrants)
 }
@@ -371,8 +366,6 @@ permission_grant_kind_from_string :: proc(
 		return .Directory_Subtree, true
 	case "commandPrefix":
 		return .Command_Prefix, true
-	case "mcpServer":
-		return .MCP_Server, true
 	}
 	return .Directory_Subtree, false
 }
@@ -383,8 +376,6 @@ permission_grant_kind_to_string :: proc(kind: tool_policy.Permission_Grant_Kind)
 		return "directorySubtree"
 	case .Command_Prefix:
 		return "commandPrefix"
-	case .MCP_Server:
-		return "mcpServer"
 	}
 	return ""
 }
@@ -429,12 +420,6 @@ permission_grant_from_wire :: proc(
 			return tool_policy.Permission_Grant{}, false
 		}
 		grant.command = strings.clone(wire.command, allocator)
-	case .MCP_Server:
-		if wire.mcpServer == "" {
-			tool_policy.permission_grant_destroy(&grant, allocator)
-			return tool_policy.Permission_Grant{}, false
-		}
-		grant.mcpServer = strings.clone(wire.mcpServer, allocator)
 	}
 	return grant, true
 }
@@ -502,7 +487,6 @@ parse_config_from_json :: proc(
 		len(wire.contextWindows),
 		allocator,
 	)
-	config.mcpServers = make([dynamic]MCP_Server_Config, 0, len(wire.mcpServers), allocator)
 	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
 	config.permissionGrants = make(
 		[dynamic]tool_policy.Permission_Grant,
@@ -546,9 +530,6 @@ parse_config_from_json :: proc(
 				tokens = entry.tokens,
 			},
 		)
-	}
-	for server in wire.mcpServers {
-		append(&config.mcpServers, server)
 	}
 	for path in wire.skillPaths {
 		append(&config.skillPaths, strings.clone(path, allocator))
@@ -697,7 +678,6 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		strings.write_string(&builder, "\n  ")
 	}
 	strings.write_string(&builder, "],\n")
-	strings.write_string(&builder, "  \"mcpServers\": [],\n")
 	strings.write_string(&builder, "  \"skillPaths\": [],\n")
 	strings.write_string(&builder, "  \"permissionGrants\": [")
 	for grant, index in config.permissionGrants {
@@ -716,9 +696,6 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		case .Command_Prefix:
 			strings.write_string(&builder, ",\n      \"command\": ")
 			write_json_string(&builder, grant.command)
-		case .MCP_Server:
-			strings.write_string(&builder, ",\n      \"mcpServer\": ")
-			write_json_string(&builder, grant.mcpServer)
 		}
 		strings.write_string(&builder, "\n    }")
 	}

@@ -159,9 +159,6 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 				context.temp_allocator,
 			)
 			write_clipped_line(batch, row, interior.left_column, width, displayDirectory)
-		case .Remote:
-			displayServer := approval_display_text(action.mcpServer, context.temp_allocator)
-			write_clipped_line(batch, row, interior.left_column, width, displayServer)
 		}
 		row += 2
 		showSafetyAdvice :=
@@ -224,8 +221,6 @@ approval_effect_label :: proc(effect: tool_policy.Permission_Effect) -> string {
 		return "Write"
 	case .Execute:
 		return "Run command"
-	case .Remote:
-		return "Remote tool"
 	}
 	return "Tool"
 }

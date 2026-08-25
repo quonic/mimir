@@ -14,7 +14,6 @@ TOOL_RUN_COMMAND :: "run_command"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
-TOOL_READ_MCP_RESOURCE :: "read_mcp_resource"
 TOOL_CREATE_SUBAGENT :: "create_subagent"
 
 // ============================================================
@@ -263,14 +262,6 @@ builtin_ai_tool_definitions :: proc(
 			name = TOOL_GET_FILE_INFO,
 			description = "Get metadata for a file in the active project",
 			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
-		},
-	)
-	append(
-		&definitions,
-		ai.Tool_Definition {
-			name = TOOL_READ_MCP_RESOURCE,
-			description = "Read a resource exposed by a configured MCP server",
-			parametersJSON = `{"type":"object","properties":{"mcp_server":{"type":"string"},"uri":{"type":"string"}},"required":["mcp_server","uri"]}`,
 		},
 	)
 	append(

@@ -20,15 +20,10 @@ test_action_prompt_describes_each_effect :: proc(t: ^testing.T) {
 			command = "git status",
 		},
 	)
-	remotePrompt := action_prompt(
-		tool_policy.Permission_Action{effect = .Remote, mcpServer = "github"},
-	)
-
 	assert(strings.contains(readPrompt, "/workspace/read.txt"), "expected read target")
 	assert(strings.contains(writePrompt, "/workspace/write.txt"), "expected write target")
 	assert(strings.contains(executePrompt, "/workspace"), "expected working directory")
 	assert(strings.contains(executePrompt, "git status"), "expected command")
-	assert(strings.contains(remotePrompt, "github"), "expected MCP server")
 	_ = t
 }
 

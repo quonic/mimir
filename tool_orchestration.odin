@@ -11,7 +11,6 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
-import mcpClient "mcp"
 import "tool_policy"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
@@ -41,77 +40,11 @@ AI_Tool_Call_Arguments :: struct {
 	command:           string,
 	working_directory: string,
 	timeout:           int,
-	mcp_server:        string,
 	query:             string,
 	max_results:       int,
-	uri:               string,
 	task:              string,
 	tools:             []string,
 	depth:             int,
-}
-
-// Handles `/prompts` (list all discoverable MCP prompts) and
-// `/prompts <server>.<name> [json arguments]` (resolve one, appending its
-// rendered text to the conversation history). No argument auto-completion.
-app_run_prompts_command :: proc(state: ^App_State, args: string) {
-	trimmedArgs := strings.trim_space(args)
-	if trimmedArgs == "" {
-		qualifiedPrompts := mcpClient.manager_all_prompts(
-			&state.mcpManager,
-			state.dispatcher.allocator,
-		)
-		defer mcpClient.qualified_prompts_destroy(qualifiedPrompts, state.dispatcher.allocator)
-		if len(qualifiedPrompts) == 0 {
-			append_history(state, .Assistant, "No MCP prompts are available.")
-			state.status = "No MCP prompts available"
-			return
-		}
-		builder: strings.Builder
-		strings.builder_init(&builder, state.dispatcher.allocator)
-		defer strings.builder_destroy(&builder)
-		strings.write_string(&builder, "Available MCP prompts:")
-		for entry in qualifiedPrompts {
-			strings.write_byte(&builder, '\n')
-			strings.write_string(&builder, entry.serverName)
-			strings.write_byte(&builder, '.')
-			strings.write_string(&builder, entry.prompt.name)
-			if entry.prompt.description != "" {
-				strings.write_string(&builder, " - ")
-				strings.write_string(&builder, entry.prompt.description)
-			}
-		}
-		append_history(state, .Assistant, strings.to_string(builder))
-		state.status = "Listed MCP prompts"
-		return
-	}
-
-	nameEnd := strings.index_byte(trimmedArgs, ' ')
-	qualifiedName := trimmedArgs
-	argumentsJSON := ""
-	if nameEnd >= 0 {
-		qualifiedName = trimmedArgs[:nameEnd]
-		argumentsJSON = strings.trim_space(trimmedArgs[nameEnd + 1:])
-	}
-	serverName, promptName, isQualified := mcpClient.split_qualified_name(qualifiedName)
-	if !isQualified {
-		state.status = "Usage: /prompts <server>.<name> [json arguments]"
-		return
-	}
-	text, ok := mcpClient.manager_get_prompt(
-		&state.mcpManager,
-		serverName,
-		promptName,
-		argumentsJSON,
-		state.dispatcher.allocator,
-	)
-	defer delete(text, state.dispatcher.allocator)
-	if !ok {
-		append_history(state, .Assistant, text)
-		state.status = "MCP prompt resolution failed"
-		return
-	}
-	append_history(state, .Assistant, text)
-	state.status = "MCP prompt resolved"
 }
 
 app_tool_definitions_for_provider :: proc(
@@ -123,23 +56,6 @@ app_tool_definitions_for_provider :: proc(
 		return make([dynamic]ai.Tool_Definition, 0, 0, allocator)
 	}
 	definitions := builtin_tools.builtin_ai_tool_definitions(allocator)
-	qualifiedTools := mcpClient.manager_all_tools(&state.mcpManager, allocator)
-	defer mcpClient.qualified_tools_destroy(qualifiedTools, allocator)
-	for entry in qualifiedTools {
-		qualifiedName := mcpClient.qualify_name(entry.serverName, entry.tool.name, allocator)
-		inputSchemaJSON := entry.tool.inputSchemaJSON
-		if inputSchemaJSON == "" {
-			inputSchemaJSON = `{"type":"object"}`
-		}
-		append(
-			&definitions,
-			ai.Tool_Definition {
-				name = qualifiedName,
-				description = strings.clone(entry.tool.description, allocator),
-				parametersJSON = strings.clone(inputSchemaJSON, allocator),
-			},
-		)
-	}
 	return definitions
 }
 app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
@@ -321,9 +237,6 @@ app_tool_output_is_error :: proc(output: string) -> bool {
 		strings.contains(output, ": Command exited ") ||
 		strings.starts_with(output, "File already exists.") ||
 		strings.starts_with(output, "Invalid value for overwrite:") ||
-		output == "MCP tool dispatch is not implemented." ||
-		output == "MCP server unavailable." ||
-		strings.starts_with(output, "MCP server does not support") ||
 		output == "Permission denied." ||
 		output == "Permission approval required." \
 	)
@@ -338,17 +251,6 @@ app_tool_call_from_ai :: proc(
 ) {
 	if aiCall.name == "" || aiCall.arguments == "" {
 		return tool_policy.Tool_Call{}, false
-	}
-
-	if serverName, toolName, isQualified := mcpClient.split_qualified_name(aiCall.name);
-	   isQualified {
-		return tool_policy.Tool_Call {
-				callID = strings.clone(aiCall.id, allocator),
-				id = strings.clone(toolName, allocator),
-				mcpServer = strings.clone(serverName, allocator),
-				argumentsJSON = strings.clone(aiCall.arguments, allocator),
-			},
-			true
 	}
 
 	arguments: AI_Tool_Call_Arguments
@@ -371,10 +273,8 @@ app_tool_call_from_ai :: proc(
 		command          = strings.clone(arguments.command, allocator),
 		workingDirectory = strings.clone(arguments.working_directory, allocator),
 		timeout          = arguments.timeout,
-		mcpServer        = strings.clone(arguments.mcp_server, allocator),
 		query            = strings.clone(arguments.query, allocator),
 		maxResults       = arguments.max_results,
-		uri              = strings.clone(arguments.uri, allocator),
 		task             = strings.clone(arguments.task, allocator),
 		subagentDepth    = arguments.depth,
 	}
@@ -405,25 +305,6 @@ app_tool_call_from_ai :: proc(
 }
 
 app_execute_tool_call :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> string {
-	if call.id == "read_mcp_resource" && call.mcpServer != "" {
-		text, _ := mcpClient.manager_read_resource(
-			&state.mcpManager,
-			call.mcpServer,
-			call.uri,
-			state.dispatcher.allocator,
-		)
-		return text
-	}
-	if call.mcpServer != "" {
-		text, _, _ := mcpClient.manager_call_tool(
-			&state.mcpManager,
-			call.mcpServer,
-			call.id,
-			call.argumentsJSON,
-			state.dispatcher.allocator,
-		)
-		return text
-	}
 	if call.id != "search_code" && call.id != "find_code" {
 		return builtin_tools.execute_builtin_tool(&state.dispatcher, call)
 	}

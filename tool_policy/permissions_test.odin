@@ -21,7 +21,6 @@ test_permission_resolve_project_path_rejects_traversal :: proc(t: ^testing.T) {
 	)
 	_ = t
 }
-
 @(test)
 test_permission_directory_grant_matches_project_subtree :: proc(t: ^testing.T) {
 	grant := Permission_Grant {
@@ -43,7 +42,6 @@ test_permission_directory_grant_matches_project_subtree :: proc(t: ^testing.T) {
 	)
 	_ = t
 }
-
 @(test)
 test_permission_command_grant_requires_project_shell :: proc(t: ^testing.T) {
 	grant := Permission_Grant {
@@ -58,26 +56,5 @@ test_permission_command_grant_requires_project_shell :: proc(t: ^testing.T) {
 		workingDirectory = "/workspace/project",
 	}
 	assert(permission_grant_matches_action(grant, action), "expected matching command prefix")
-	_ = t
-}
-
-@(test)
-test_permission_remote_grant_matches_server :: proc(t: ^testing.T) {
-	grant := Permission_Grant {
-		kind        = .MCP_Server,
-		projectRoot = "/workspace/project",
-		mcpServer   = "github",
-	}
-	action := Permission_Action {
-		effect      = .Remote,
-		projectRoot = "/workspace/project",
-		mcpServer   = "github",
-	}
-	assert(permission_grant_matches_action(grant, action), "expected matching MCP server grant")
-	action.mcpServer = "filesystem"
-	assert(
-		!permission_grant_matches_action(grant, action),
-		"expected different MCP server to be denied",
-	)
 	_ = t
 }

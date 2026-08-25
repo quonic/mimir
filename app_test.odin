@@ -222,7 +222,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 10, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 9, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }
@@ -481,14 +481,6 @@ test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T)
 		) ==
 		"search_code: permission dispatch (completed)",
 		"expected search query in history",
-	)
-	assert(
-		app_tool_history_content(
-			tool_policy.Tool_Call{id = "mcp", mcpServer = "github"},
-			"running",
-		) ==
-		"mcp: github (running)",
-		"expected MCP server in history",
 	)
 	assert(
 		app_tool_history_content(
@@ -783,7 +775,7 @@ test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testin
 	app_run_command(&state, commands.parse_slash_command("/help"))
 	assert(
 		state.history[len(state.history) - 1].content ==
-		"Commands: /exit, /config, /help, /stop, /clear, /prompts",
+		"Commands: /exit, /config, /help, /stop, /clear",
 		"expected help to list only supported commands",
 	)
 	_ = t
@@ -2266,7 +2258,6 @@ test_default_config_json_shape :: proc(t: ^testing.T) {
 	config := settings.default_ollama_config(context.temp_allocator)
 	defer {
 		delete(config.providers)
-		delete(config.mcpServers)
 		delete(config.skillPaths)
 	}
 
@@ -2276,7 +2267,6 @@ test_default_config_json_shape :: proc(t: ^testing.T) {
 		contains_string(json, "\"endpoint\": \"http://localhost:11434\""),
 		"expected default config JSON to include Ollama endpoint",
 	)
-	assert(contains_string(json, "\"mcpServers\": []"), "expected MCP registry config key")
 	assert(contains_string(json, "\"skillPaths\": []"), "expected skill path config key")
 	_ = t
 }
@@ -2323,7 +2313,6 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 	config.providers[0].model = "llama3.2"
 	defer {
 		delete(config.providers)
-		delete(config.mcpServers)
 		delete(config.skillPaths)
 	}
 	assert(settings.save_config_to_file(home, config) == .None, "expected test config save")

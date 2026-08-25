@@ -6,13 +6,11 @@ Permission_Effect :: enum int {
 	Read = 0,
 	Write,
 	Execute,
-	Remote,
 }
 
 Permission_Grant_Kind :: enum int {
 	Directory_Subtree = 0,
 	Command_Prefix,
-	MCP_Server,
 }
 
 Permission_Action :: struct {
@@ -23,7 +21,6 @@ Permission_Action :: struct {
 	command:               string,
 	workingDirectory:      string,
 	workingDirectoryOwned: bool,
-	mcpServer:             string,
 }
 
 permission_action_destroy :: proc(action: ^Permission_Action, allocator := context.allocator) {
@@ -40,7 +37,6 @@ Permission_Grant :: struct {
 	projectRoot: string,
 	directory:   string,
 	command:     string,
-	mcpServer:   string,
 }
 
 permission_grant_destroy :: proc(grant: ^Permission_Grant, allocator := context.allocator) {
@@ -52,9 +48,6 @@ permission_grant_destroy :: proc(grant: ^Permission_Grant, allocator := context.
 	}
 	if grant.command != "" {
 		delete(grant.command, allocator)
-	}
-	if grant.mcpServer != "" {
-		delete(grant.mcpServer, allocator)
 	}
 }
 
@@ -159,8 +152,6 @@ permission_grant_matches_action :: proc(
 			action.workingDirectory == action.projectRoot &&
 			strings.starts_with(action.command, grant.command) \
 		)
-	case .MCP_Server:
-		return action.effect == .Remote && action.mcpServer == grant.mcpServer
 	}
 	return false
 }

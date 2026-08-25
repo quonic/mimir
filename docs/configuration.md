@@ -77,7 +77,6 @@ The initial configuration shape is:
       "enabled": true
     }
   ],
-  "mcpServers": [],
   "skillPaths": [],
   "permissionGrants": []
 }
@@ -94,27 +93,13 @@ the approval dialog. Select a chat provider and model in `Safety Model` to use
 a separate safety model. If both values are empty, Mimir uses the chat provider
 and model. An incomplete or invalid safety selection disables safety advice.
 
-`mcpServers` configures MCP (Model Context Protocol) servers. Each entry has:
-
-- `name`: identifies the server. Tool, resource, and prompt names from this
-  server are exposed to the model as `{name}.{toolName}`.
-- `command` and `args`: spawns the server as a subprocess and speaks
-  newline-delimited JSON-RPC over its stdin/stdout.
-- `url`: connects to the server over Streamable HTTP instead. Set either
-  `command` or `url`, not both.
-- `enabled`: set to `false` to keep the entry in the config without
-  connecting to it.
-
-See [tools-mcp-skills.md](tools-mcp-skills.md) for the supported protocol
-revision, transports, and approval model.
-
 `approvalMethod` controls actions that require approval after Mimir checks the
 normal permission grants. It defaults to `alwaysAsk` when omitted. Set it in
 `/config` under `Advanced`, or use one of these JSON values:
 
 - `alwaysAsk`: show the approval dialog. Shell commands show safety advice when
   a safety model is available.
-- `approveSafe`: classify writes, shell commands, and remote/MCP calls. Mimir
+- `approveSafe`: classify writes and shell commands. Mimir
   allows only an exact `SAFE|reason` response. An unavailable safety model,
   malformed response, `RISKY`, or `UNCLEAR` response opens the approval dialog.
 - `approveAll`: allow every action that would otherwise require approval. Mimir
@@ -190,11 +175,6 @@ configuration. Each grant applies to one canonical project path.
       "kind": "commandPrefix",
       "projectRoot": "/home/user/project",
       "command": "odin test"
-    },
-    {
-      "kind": "mcpServer",
-      "projectRoot": "/home/user/project",
-      "mcpServer": "github"
     }
   ]
 }
@@ -202,8 +182,7 @@ configuration. Each grant applies to one canonical project path.
 
 A `directorySubtree` grant applies only to writes in that directory. A
 `commandPrefix` grant applies only when the command runs from the project root
-and starts with the configured command. An `mcpServer` grant reserves trust for
-a future MCP server connection.
+and starts with the configured command.
 
 Mimir rejects malformed grants, paths outside the project root, and path
 traversal when it loads the configuration.

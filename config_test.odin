@@ -166,7 +166,6 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 			delete(entry.model, context.temp_allocator)
 		}
 		delete(config.contextWindows)
-		delete(config.mcpServers)
 		delete(config.skillPaths)
 		delete(config.permissionGrants)
 	}
@@ -182,7 +181,6 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 			delete(entry.model, context.temp_allocator)
 		}
 		delete(loaded.contextWindows)
-		delete(loaded.mcpServers)
 		delete(loaded.skillPaths)
 		delete(loaded.permissionGrants)
 	}

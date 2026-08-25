@@ -38,11 +38,8 @@ Tool_Call :: struct {
 	command:           string,
 	workingDirectory:  string,
 	timeout:           int,
-	mcpServer:         string,
 	query:             string,
 	maxResults:        int,
-	argumentsJSON:     string,
-	uri:               string,
 	task:              string,
 	subagentToolsJSON: string,
 	subagentDepth:     int,
@@ -61,11 +58,8 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		command           = strings.clone(call.command, allocator),
 		workingDirectory  = strings.clone(call.workingDirectory, allocator),
 		timeout           = call.timeout,
-		mcpServer         = strings.clone(call.mcpServer, allocator),
 		query             = strings.clone(call.query, allocator),
 		maxResults        = call.maxResults,
-		argumentsJSON     = strings.clone(call.argumentsJSON, allocator),
-		uri               = strings.clone(call.uri, allocator),
 		task              = strings.clone(call.task, allocator),
 		subagentToolsJSON = strings.clone(call.subagentToolsJSON, allocator),
 		subagentDepth     = call.subagentDepth,
@@ -84,10 +78,7 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.overwrite, allocator)
 	delete(call.command, allocator)
 	delete(call.workingDirectory, allocator)
-	delete(call.mcpServer, allocator)
 	delete(call.query, allocator)
-	delete(call.argumentsJSON, allocator)
-	delete(call.uri, allocator)
 	delete(call.task, allocator)
 	delete(call.subagentToolsJSON, allocator)
 }
@@ -136,7 +127,6 @@ tool_dispatcher_add_session_grant :: proc(
 		projectRoot = strings.clone(grant.projectRoot, dispatcher.allocator),
 		directory   = strings.clone(grant.directory, dispatcher.allocator),
 		command     = strings.clone(grant.command, dispatcher.allocator),
-		mcpServer   = strings.clone(grant.mcpServer, dispatcher.allocator),
 	}
 	append(&dispatcher.sessionGrants, clone)
 	return true
@@ -151,11 +141,6 @@ tool_dispatch_build_action :: proc(
 ) {
 	action := Permission_Action {
 		projectRoot = dispatcher.projectRoot,
-	}
-	if call.mcpServer != "" {
-		action.effect = .Remote
-		action.mcpServer = call.mcpServer
-		return action, true
 	}
 	switch call.id {
 	case "read_file", "get_file_info":
@@ -299,9 +284,6 @@ tool_dispatch_grant_from_action :: proc(
 		}
 		grant.kind = .Command_Prefix
 		grant.command = strings.clone(action.command, allocator)
-	case .Remote:
-		grant.kind = .MCP_Server
-		grant.mcpServer = strings.clone(action.mcpServer, allocator)
 	case .Read:
 		permission_grant_destroy(&grant, allocator)
 		return Permission_Grant{}, false

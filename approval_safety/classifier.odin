@@ -188,8 +188,6 @@ action_prompt :: proc(action: tool_policy.Permission_Action) -> string {
 			action.workingDirectory,
 			action.command,
 		)
-	case .Remote:
-		return fmt.tprintf("Action: Remote tool\nMCP server: %s", action.mcpServer)
 	}
 	return "Action: Unknown"
 }

@@ -7,7 +7,6 @@ Slash_Command :: enum int {
 	Help,
 	Stop,
 	Clear,
-	Prompts,
 	Unknown,
 }
 
@@ -56,8 +55,6 @@ slash_command_kind :: proc(name: string) -> Slash_Command {
 		return .Stop
 	case "clear":
 		return .Clear
-	case "prompts":
-		return .Prompts
 	case:
 		return .Unknown
 	}

@@ -17,7 +17,6 @@ import "core:sys/posix"
 import "core:time"
 import "core:unicode/utf8"
 import "input_history"
-import mcpClient "mcp"
 import "settings"
 import "text_input"
 import "tool_policy"
@@ -202,8 +201,6 @@ App_State :: struct {
 	dispatcher:             tool_policy.Tool_Dispatcher,
 	dispatcherReady:        bool,
 	approval:               Approval_State,
-	mcp:                    settings.MCP_Registry,
-	mcpManager:             mcpClient.Manager,
 	skills:                 settings.Skill_Registry,
 	codeIndex:              code_index.Code_Index,
 	codeIndexReady:         bool,
@@ -268,9 +265,6 @@ app_init_with_home :: proc(
 		state.config.permissionGrants[:],
 		allocator,
 	)
-	state.mcp = settings.mcp_registry_from_config(state.config.mcpServers[:], allocator)
-	state.mcpManager = mcpClient.manager_init(allocator)
-	mcpClient.manager_load_registry(&state.mcpManager, state.mcp, allocator)
 	state.skills = settings.skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
@@ -293,7 +287,6 @@ app_bootstrap_config :: proc(
 				settings.config_destroy(&state.config)
 			} else {
 				delete(state.config.providers)
-				delete(state.config.mcpServers)
 				delete(state.config.skillPaths)
 				delete(state.config.permissionGrants)
 			}
@@ -446,7 +439,6 @@ app_destroy :: proc(state: ^App_State) {
 			}
 		}
 		delete(state.config.contextWindows)
-		delete(state.config.mcpServers)
 		delete(state.config.skillPaths)
 		delete(state.config.permissionGrants)
 	}
@@ -461,8 +453,6 @@ app_destroy :: proc(state: ^App_State) {
 	if state.setupAPIKey != "" {
 		delete(state.setupAPIKey, context.allocator)
 	}
-	mcpClient.manager_destroy(&state.mcpManager)
-	delete(state.mcp.servers)
 	delete(state.skills.skills)
 	if !state.configStringsOwned {
 		if state.modelProviderOwned && state.config.selectedProvider != "" {
@@ -661,8 +651,6 @@ app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) ->
 		target = call.command
 	case "search_code", "find_code":
 		target = call.query
-	case "mcp":
-		target = call.mcpServer
 	case "create_subagent":
 		target = call.task
 	}
@@ -1829,18 +1817,12 @@ app_run_command :: proc(state: ^App_State, command: commands.Parsed_Command) {
 	case commands.Slash_Command.Config:
 		app_show_config(state)
 	case commands.Slash_Command.Help:
-		append_history(
-			state,
-			.Assistant,
-			"Commands: /exit, /config, /help, /stop, /clear, /prompts",
-		)
+		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
 	case commands.Slash_Command.Stop:
 		app_cancel_agent_host_stream(state)
 	case commands.Slash_Command.Clear:
 		app_clear_input_history(state)
-	case commands.Slash_Command.Prompts:
-		app_run_prompts_command(state, command.args)
 	case commands.Slash_Command.Unknown:
 		state.status = "Unknown command"
 	case commands.Slash_Command.None:
@@ -1884,7 +1866,6 @@ app_complete_setup :: proc(state: ^App_State) {
 	defer ai.models_destroy(&models, context.allocator)
 
 	delete(state.config.providers)
-	delete(state.config.mcpServers)
 	delete(state.config.skillPaths)
 	delete(state.config.permissionGrants)
 	state.config = settings.default_ollama_config(context.allocator)
@@ -1911,11 +1892,6 @@ app_complete_setup :: proc(state: ^App_State) {
 		models[:],
 	)
 
-	mcpClient.manager_destroy(&state.mcpManager)
-	delete(state.mcp.servers)
-	state.mcp = settings.mcp_registry_from_config(state.config.mcpServers[:], context.allocator)
-	state.mcpManager = mcpClient.manager_init(context.allocator)
-	mcpClient.manager_load_registry(&state.mcpManager, state.mcp, context.allocator)
 	state.mode = .Chat
 	if settings.save_config_to_file(state.configHome, state.config) == .None {
 		state.status = "Setup complete; config saved"
