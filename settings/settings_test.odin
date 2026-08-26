@@ -215,3 +215,56 @@ test_skill_registry_rejects_symlink_resource :: proc(t: ^testing.T) {
 	assert(!readOK, "expected symlink resource to be rejected")
 	_ = t
 }
+
+@(test)
+test_skill_registry_body_uses_exact_frontmatter_delimiter :: proc(t: ^testing.T) {
+	root, rootErr := os.make_directory_temp("", "skill_body_", context.temp_allocator)
+	assert(rootErr == nil, "expected temporary directory")
+	defer os.remove_all(root)
+	skillRoot := strings.concatenate({root, "/.mimir/skills/delimiters"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	path := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			path,
+			"---\nname: delimiters\ndescription: Value with --- text\n---\nbody with --- text",
+		) ==
+		nil,
+		"expected skill file",
+	)
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", root)
+	body, ok := skill_registry_read(&registry, "delimiters")
+	defer delete(body, context.temp_allocator)
+	assert(ok && strings.contains(body, "body with --- text"), "expected complete skill body")
+	_ = t
+}
+
+@(test)
+test_skill_registry_skips_symlinked_skill_root :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "skill_root_link_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	realRoot := strings.concatenate({project, "/real"}, context.temp_allocator)
+	skillParent := strings.concatenate({project, "/.mimir/skills"}, context.temp_allocator)
+	linkRoot := strings.concatenate({skillParent, "/linked"}, context.temp_allocator)
+	assert(os.make_directory_all(realRoot) == nil, "expected real skill directory")
+	assert(os.make_directory_all(skillParent) == nil, "expected skill parent directory")
+	skillPath := strings.concatenate({realRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: linked\ndescription: Linked skill\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+	assert(os.symlink(realRoot, linkRoot) == nil, "expected skill-root symlink")
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", project)
+	assert(len(registry.skills) == 0, "expected symlinked skill root to be skipped")
+	_ = t
+}

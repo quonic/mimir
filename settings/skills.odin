@@ -300,6 +300,7 @@ skill_registry_load_root :: proc(registry: ^Skill_Registry, path: string, scope:
 		skillPath := fmt.aprintf("%s/SKILL.md", skillRoot, allocator = registry.allocator)
 		if !os.is_directory(skillRoot) ||
 		   !os.exists(skillPath) ||
+		   skill_path_contains_symlink(skillRoot, "SKILL.md", registry.allocator) ||
 		   skill_registry_has_name(registry, entry.name) {
 			delete(skillRoot, registry.allocator)
 			delete(skillPath, registry.allocator)
@@ -428,30 +429,53 @@ skill_set_enabled :: proc(skill: ^Skill, enabled: bool) {
 	skill.enabled = enabled
 }
 
+skill_body_start :: proc(text: string) -> (int, bool) {
+	firstLineEnd := strings.index_byte(text, '\n')
+	if firstLineEnd < 0 || strings.trim(text[:firstLineEnd], " \t\r") != "---" {
+		return 0, false
+	}
+	lineStart := strings.index_byte(text, '\n') + 1
+	for lineStart < len(text) {
+		lineEnd := strings.index_byte(text[lineStart:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(text)
+		} else {
+			lineEnd += lineStart
+		}
+		if strings.trim(text[lineStart:lineEnd], " \t\r") == "---" {
+			if lineEnd < len(text) {
+				return lineEnd + 1, true
+			}
+			return lineEnd, true
+		}
+		if lineEnd >= len(text) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return 0, false
+}
+
 skill_registry_read :: proc(registry: ^Skill_Registry, name: string) -> (string, bool) {
 	skill, ok := skill_registry_find(registry, name)
 	if !ok || !skill.enabled {
 		return strings.clone("Skill is unavailable.", registry.allocator), false
 	}
 	if !skill.bodyLoaded {
+		if skill_path_contains_symlink(skill.root, "SKILL.md", registry.allocator) {
+			return strings.clone("Skill body path uses a symlink.", registry.allocator), false
+		}
 		data, err := os.read_entire_file(skill.path, registry.allocator)
 		if err != nil || len(data) > MAX_SKILL_BODY_BYTES {
 			return strings.clone("Skill body could not be loaded.", registry.allocator), false
 		}
 		text := string(data)
-		separator := strings.index(text[3:], "---")
-		if separator < 0 {
+		bodyStart, bodyOK := skill_body_start(text)
+		if !bodyOK {
 			delete(data, registry.allocator)
 			return strings.clone("Skill body has invalid frontmatter.", registry.allocator), false
 		}
-		separator += 3
-		bodyStart := strings.index_byte(text[separator:], '\n')
-		if bodyStart < 0 {
-			delete(data, registry.allocator)
-			return strings.clone("Skill body is empty.", registry.allocator), false
-		}
-		bodyStart += separator
-		skill.body = strings.clone(text[bodyStart + 1:], registry.allocator)
+		skill.body = strings.clone(text[bodyStart:], registry.allocator)
 		skill.bodyLoaded = true
 		delete(data, registry.allocator)
 	}
