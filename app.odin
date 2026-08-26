@@ -71,6 +71,7 @@ History_Role :: enum int {
 	Assistant,
 	Tool,
 	Subagent,
+	Note, // rendered but never sent to the model
 }
 
 Mouse_Selection_Panel :: enum int {
@@ -1824,7 +1825,7 @@ app_run_command :: proc(state: ^App_State, command: commands.Parsed_Command) {
 	case commands.Slash_Command.Config:
 		app_show_config(state)
 	case commands.Slash_Command.Help:
-		append_history(state, .Assistant, "Commands: /exit, /config, /help, /stop, /clear")
+		append_history(state, .Note, "Commands: /exit, /config, /help, /stop, /clear")
 		state.status = "Help displayed"
 	case commands.Slash_Command.Stop:
 		app_cancel_agent_host_stream(state)

@@ -451,6 +451,7 @@ test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 		{role = .User, content = "hello"},
 		{role = .Assistant, content = "hi"},
 		{role = .Tool, content = "tool output"},
+		{role = .Note, content = "note text"},
 		{role = .Assistant, content = ""},
 	}
 
@@ -471,6 +472,7 @@ test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t
 		{role = .User, content = "hello"},
 		{role = .Assistant, content = "hi"},
 		{role = .Tool, content = "tool output"},
+		{role = .Note, content = "note text"},
 		{role = .Assistant, content = ""},
 	}
 

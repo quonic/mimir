@@ -659,6 +659,8 @@ headless_history_role_name :: proc(role: History_Role) -> string {
 		return "tool"
 	case .Subagent:
 		return "subagent"
+	case .Note:
+		return "note"
 	}
 	return "unknown"
 }

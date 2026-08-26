@@ -477,6 +477,8 @@ app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, b
 		return .User, false
 	case .Subagent:
 		return .User, false
+	case .Note:
+		return .User, false
 	}
 	return .User, false
 }
