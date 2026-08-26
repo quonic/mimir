@@ -268,7 +268,7 @@ test_parse_config_rejects_invalid_system_prompt_mode :: proc(t: ^testing.T) {
 	payload := `{
   "systemPromptMode": "sometimes",
   "providers": [],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)

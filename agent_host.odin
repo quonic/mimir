@@ -503,8 +503,18 @@ app_start_subagent :: proc(
 	if agent.runtime_begin(&state.agentHost.runtime, childID) != .None {
 		return app_fail_subagent_tool(state, parentID, "Could not start subagent.")
 	}
+	skillCatalog := settings.skill_registry_prompt_catalog(&state.skills, context.temp_allocator)
+	defer delete(skillCatalog, context.temp_allocator)
+	childSystemPrompt := SUBAGENT_SYSTEM_PROMPT
+	if skillCatalog != "" {
+		childSystemPrompt = strings.concatenate(
+			{SUBAGENT_SYSTEM_PROMPT, "\n\nAvailable skills:\n", skillCatalog},
+			context.temp_allocator,
+		)
+		defer delete(childSystemPrompt, context.temp_allocator)
+	}
 	messages := []ai.Message {
-		{role = .System, content = SUBAGENT_SYSTEM_PROMPT},
+		{role = .System, content = childSystemPrompt},
 		{role = .User, content = call.task},
 	}
 	if agent.runtime_set_conversation(&state.agentHost.runtime, childID, messages) != .None {

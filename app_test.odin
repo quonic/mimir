@@ -228,6 +228,29 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_refresh_skills_does_not_mutate_active_agent :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.agentHost.activeAgentID = agent.Agent_ID(1)
+	state.agentHost.runtime.instances = make(
+		[dynamic]agent.Agent_Instance,
+		0,
+		1,
+		context.allocator,
+	)
+	append(
+		&state.agentHost.runtime.instances,
+		agent.Agent_Instance{state = .Streaming, id = agent.Agent_ID(1)},
+	)
+	app_refresh_skills(&state)
+	assert(
+		state.status == "Stop the active agent before refreshing skills",
+		"expected skill refresh to wait for an active agent",
+	)
+	_ = t
+}
+
+@(test)
 test_app_embedding_client_requires_embedding_configuration :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -461,6 +484,22 @@ test_app_decodes_ai_tool_call_arguments :: proc(t: ^testing.T) {
 	assert(call.id == "write_file", "expected decoded tool ID")
 	assert(call.filePath == "notes.txt", "expected decoded file path")
 	assert(call.content == "hello", "expected decoded content")
+	_ = t
+}
+
+@(test)
+test_app_decodes_read_skill_arguments :: proc(t: ^testing.T) {
+	aiCall := ai.Tool_Call {
+		id        = "call-skill",
+		name      = "read_skill",
+		arguments = `{"name":"odin","resource":"references/REFERENCE.md"}`,
+	}
+	call, ok := app_tool_call_from_ai(aiCall, context.allocator)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
+	assert(ok, "expected read_skill arguments to decode")
+	assert(call.id == "read_skill", "expected read_skill tool ID")
+	assert(call.query == "odin", "expected skill name")
+	assert(call.content == "references/REFERENCE.md", "expected skill resource")
 	_ = t
 }
 

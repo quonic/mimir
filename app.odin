@@ -2239,6 +2239,10 @@ app_toggle_skill :: proc(state: ^App_State, index: int) {
 }
 
 app_refresh_skills :: proc(state: ^App_State) {
+	if app_agent_host_stream_active(state) {
+		state.status = "Stop the active agent before refreshing skills"
+		return
+	}
 	settings.skill_registry_load(&state.skills, state.configHome, state.workingDirectory)
 	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
 	app_rebuild_config_settings(state)
