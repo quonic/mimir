@@ -152,7 +152,9 @@ skill_name_valid :: proc(name: string) -> bool {
 
 skill_frontmatter_value :: proc(value: string) -> string {
 	result := strings.trim(value, " \t")
-	if len(result) >= 2 && result[0] == '"' && result[len(result) - 1] == '"' {
+	if len(result) >= 2 &&
+	   ((result[0] == '"' && result[len(result) - 1] == '"') ||
+			   (result[0] == '\'' && result[len(result) - 1] == '\'')) {
 		result = result[1:len(result) - 1]
 	}
 	return result
@@ -189,12 +191,18 @@ skill_parse_file :: proc(
 		metadata = make([dynamic]Skill_Metadata, 0, 4, allocator),
 	}
 	frontmatterEnd := -1
+	inMetadata := false
 	for index := 1; index < len(lines); index += 1 {
-		line := strings.trim(lines[index], " \t\r")
+		rawLine := lines[index]
+		line := strings.trim(rawLine, " \t\r")
 		if line == "---" {
 			frontmatterEnd = index
 			break
 		}
+		if line == "" || strings.starts_with(line, "#") {
+			continue
+		}
+		isIndented := strings.starts_with(rawLine, " ") || strings.starts_with(rawLine, "\t")
 		separator := strings.index_byte(line, ':')
 		if separator < 0 {
 			skill_destroy(&skill, allocator)
@@ -204,6 +212,20 @@ skill_parse_file :: proc(
 		}
 		key := line[:separator]
 		value := skill_frontmatter_value(line[separator + 1:])
+		if isIndented && inMetadata {
+			append(
+				&skill.metadata,
+				Skill_Metadata {
+					key = strings.clone(key, allocator),
+					value = strings.clone(value, allocator),
+				},
+			)
+			continue
+		}
+		if isIndented {
+			skill_destroy(&skill, allocator)
+			return {}, strings.clone("unexpected indented frontmatter field", allocator), false
+		}
 		switch key {
 		case "name":
 			skill.name = strings.clone(value, allocator)
@@ -216,17 +238,9 @@ skill_parse_file :: proc(
 		case "allowed-tools":
 			skill.allowedTools = strings.clone(value, allocator)
 		case "metadata":
-			continue
+			inMetadata = true
 		case:
-			if strings.starts_with(lines[index], " ") || strings.starts_with(lines[index], "\t") {
-				append(
-					&skill.metadata,
-					Skill_Metadata {
-						key = strings.clone(key, allocator),
-						value = strings.clone(value, allocator),
-					},
-				)
-			}
+			inMetadata = false
 		}
 	}
 	if frontmatterEnd < 0 {

@@ -26,6 +26,31 @@ test_skill_name_validation_accepts_lowercase_unicode :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_skill_parser_retains_nested_metadata :: proc(t: ^testing.T) {
+	root, rootErr := os.make_directory_temp("", "skill_metadata_", context.temp_allocator)
+	assert(rootErr == nil, "expected temporary directory")
+	defer os.remove_all(root)
+	skillRoot := strings.concatenate({root, "/metadata"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	path := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			path,
+			"---\n# skill metadata\nname: metadata\ndescription: Metadata skill\nmetadata:\n  author: example\n  version: '1.0'\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+	skill, message, ok := skill_parse_file(path, skillRoot, .Project, context.temp_allocator)
+	defer skill_destroy(&skill, context.temp_allocator)
+	assert(ok && message == "", "expected metadata skill to parse")
+	assert(len(skill.metadata) == 2, "expected nested metadata entries")
+	assert(skill.metadata[0].key == "author", "expected metadata key")
+	assert(skill.metadata[1].value == "1.0", "expected quoted metadata value")
+	_ = t
+}
+
+@(test)
 test_skill_registry_discovers_project_before_global_and_loads_body :: proc(t: ^testing.T) {
 	home, homeErr := os.make_directory_temp("", "skills_home_", context.temp_allocator)
 	project, projectErr := os.make_directory_temp("", "skills_project_", context.temp_allocator)
