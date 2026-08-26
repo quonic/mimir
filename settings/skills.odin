@@ -486,6 +486,9 @@ skill_registry_read_resource :: proc(
 			),
 			false
 	}
+	if skill_path_contains_symlink(skill.root, relativePath, registry.allocator) {
+		return strings.clone("Skill resource path uses a symlink.", registry.allocator), false
+	}
 	path := fmt.aprintf("%s/%s", skill.root, relativePath, allocator = registry.allocator)
 	defer delete(path, registry.allocator)
 	data, err := os.read_entire_file(path, registry.allocator)
@@ -493,4 +496,30 @@ skill_registry_read_resource :: proc(
 		return strings.clone("Skill resource could not be loaded.", registry.allocator), false
 	}
 	return strings.clone(string(data), registry.allocator), true
+}
+
+skill_path_contains_symlink :: proc(root, relativePath: string, allocator: mem.Allocator) -> bool {
+	parts := strings.split(relativePath, "/", context.temp_allocator)
+	defer delete(parts, context.temp_allocator)
+	current := strings.clone(root, allocator)
+	if linkTarget, err := os.read_link(current, context.temp_allocator); err == nil {
+		delete(linkTarget, context.temp_allocator)
+		delete(current, allocator)
+		return true
+	}
+	for part in parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := fmt.aprintf("%s/%s", current, part, allocator = allocator)
+		delete(current, allocator)
+		current = next
+		if linkTarget, err := os.read_link(current, context.temp_allocator); err == nil {
+			delete(linkTarget, context.temp_allocator)
+			delete(current, allocator)
+			return true
+		}
+	}
+	delete(current, allocator)
+	return false
 }

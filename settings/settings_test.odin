@@ -183,3 +183,35 @@ test_skill_registry_catalog_excludes_disabled_skills :: proc(t: ^testing.T) {
 	delete(catalog, context.temp_allocator)
 	_ = t
 }
+
+@(test)
+test_skill_registry_rejects_symlink_resource :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "skill_symlink_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/good"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	outsidePath := strings.concatenate({project, "/outside.txt"}, context.temp_allocator)
+	linkPath := strings.concatenate({skillRoot, "/reference.txt"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: good\ndescription: Good skill\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+	assert(
+		os.write_entire_file_from_string(outsidePath, "outside") == nil,
+		"expected outside file",
+	)
+	assert(os.symlink(outsidePath, linkPath) == nil, "expected resource symlink")
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", project)
+	_, readOK := skill_registry_read_resource(&registry, "good", "reference.txt")
+	assert(!readOK, "expected symlink resource to be rejected")
+	_ = t
+}
