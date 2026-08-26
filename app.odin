@@ -2222,10 +2222,12 @@ app_toggle_skill :: proc(state: ^App_State, index: int) {
 	enabled := !settings.skill_is_enabled(skill)
 	settings.skill_set_enabled(skill, enabled)
 	if enabled {
-		for index := 0; index < len(state.config.disabledSkills); index += 1 {
-			if state.config.disabledSkills[index] == settings.skill_name(skill) {
-				delete(state.config.disabledSkills[index], context.allocator)
-				ordered_remove(&state.config.disabledSkills, index)
+		for disabledSkillIndex := 0;
+		    disabledSkillIndex < len(state.config.disabledSkills);
+		    disabledSkillIndex += 1 {
+			if state.config.disabledSkills[disabledSkillIndex] == settings.skill_name(skill) {
+				delete(state.config.disabledSkills[disabledSkillIndex], context.allocator)
+				ordered_remove(&state.config.disabledSkills, disabledSkillIndex)
 				break
 			}
 		}
