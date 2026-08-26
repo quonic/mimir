@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:unicode"
+import "core:unicode/utf8"
 
 MAX_SKILL_BODY_BYTES :: 1024 * 1024
 
@@ -118,20 +120,32 @@ skill_name_from_path :: proc(path: string) -> string {
 }
 
 skill_name_valid :: proc(name: string) -> bool {
-	if len(name) == 0 || len(name) > 64 || name[0] == '-' || name[len(name) - 1] == '-' {
+	if len(name) == 0 ||
+	   utf8.rune_count_in_string(name) > 64 ||
+	   name[0] == '-' ||
+	   name[len(name) - 1] == '-' {
 		return false
 	}
-	for index := 0; index < len(name); index += 1 {
-		character := name[index]
-		if character == '-' {
-			if index > 0 && name[index - 1] == '-' {
-				return false
-			}
-			continue
-		}
-		if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')) {
+	byteIndex := 0
+	previousWasHyphen := false
+	for byteIndex < len(name) {
+		character, width := utf8.decode_rune_in_string(name[byteIndex:])
+		if character == utf8.RUNE_ERROR || width <= 0 {
 			return false
 		}
+		if character == '-' {
+			if previousWasHyphen {
+				return false
+			}
+			previousWasHyphen = true
+			byteIndex += width
+			continue
+		}
+		if !(unicode.is_lower(character) || unicode.is_digit(character)) {
+			return false
+		}
+		previousWasHyphen = false
+		byteIndex += width
 	}
 	return true
 }

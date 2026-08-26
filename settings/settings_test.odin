@@ -18,6 +18,14 @@ test_skill_paths_and_names :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_skill_name_validation_accepts_lowercase_unicode :: proc(t: ^testing.T) {
+	assert(skill_name_valid("café-tools"), "expected lowercase Unicode skill name")
+	assert(!skill_name_valid("Cafe-tools"), "expected uppercase skill name to reject")
+	assert(!skill_name_valid("tool--name"), "expected consecutive hyphens to reject")
+	_ = t
+}
+
+@(test)
 test_skill_registry_discovers_project_before_global_and_loads_body :: proc(t: ^testing.T) {
 	home, homeErr := os.make_directory_temp("", "skills_home_", context.temp_allocator)
 	project, projectErr := os.make_directory_temp("", "skills_project_", context.temp_allocator)
@@ -118,5 +126,35 @@ test_skill_registry_rejects_resource_path_escape :: proc(t: ^testing.T) {
 	skill_registry_load(&registry, "", project)
 	_, readOK := skill_registry_read_resource(&registry, "good", "../outside.txt")
 	assert(!readOK, "expected resource traversal to be rejected")
+	_ = t
+}
+
+@(test)
+test_skill_registry_catalog_excludes_disabled_skills :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "skills_catalog_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/good"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: good\ndescription: Good skill\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", project)
+	catalog := skill_registry_prompt_catalog(&registry, context.temp_allocator)
+	assert(strings.contains(catalog, "good: Good skill"), "expected enabled skill in catalog")
+	delete(catalog, context.temp_allocator)
+	registry.skills[0].enabled = false
+	catalog = skill_registry_prompt_catalog(&registry, context.temp_allocator)
+	assert(catalog == "", "expected disabled skill omitted from catalog")
+	delete(catalog, context.temp_allocator)
 	_ = t
 }
