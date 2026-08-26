@@ -11,6 +11,7 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "settings"
 import "tool_policy"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
@@ -42,6 +43,8 @@ AI_Tool_Call_Arguments :: struct {
 	timeout:           int,
 	query:             string,
 	max_results:       int,
+	name:              string,
+	resource:          string,
 	task:              string,
 	tools:             []string,
 	depth:             int,
@@ -278,6 +281,16 @@ app_tool_call_from_ai :: proc(
 		task             = strings.clone(arguments.task, allocator),
 		subagentDepth    = arguments.depth,
 	}
+	if call.id == builtin_tools.TOOL_READ_SKILL {
+		delete(call.query, allocator)
+		call.query = strings.clone(arguments.name, allocator)
+		delete(call.content, allocator)
+		call.content = strings.clone(arguments.resource, allocator)
+		if call.query == "" {
+			tool_policy.tool_call_destroy(&call, allocator)
+			return tool_policy.Tool_Call{}, false
+		}
+	}
 	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
 			tool_policy.tool_call_destroy(&call, allocator)
@@ -305,6 +318,30 @@ app_tool_call_from_ai :: proc(
 }
 
 app_execute_tool_call :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> string {
+	if call.id == builtin_tools.TOOL_READ_SKILL {
+		if call.content != "" {
+			result, ok := settings.skill_registry_read_resource(
+				&state.skills,
+				call.query,
+				call.content,
+			)
+			if !ok {
+				return strings.concatenate(
+					{"Error reading skill resource: ", result},
+					state.dispatcher.allocator,
+				)
+			}
+			return result
+		}
+		result, ok := settings.skill_registry_read(&state.skills, call.query)
+		if !ok {
+			return strings.concatenate(
+				{"Error reading skill: ", result},
+				state.dispatcher.allocator,
+			)
+		}
+		return result
+	}
 	if call.id != "search_code" && call.id != "find_code" {
 		return builtin_tools.execute_builtin_tool(&state.dispatcher, call)
 	}
@@ -446,6 +483,7 @@ app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, b
 app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
 	case "read_file",
+	     "read_skill",
 	     "write_file",
 	     "list_directory",
 	     "get_file_info",

@@ -41,7 +41,7 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
       "enabled": true
     }
   ],
-	"skillPaths": ["/tmp/mimir/skills"],
+	"disabledSkills": [],
 	"permissionGrants": [
 		{
 			"kind": "directorySubtree",
@@ -90,8 +90,7 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 		"expected model-specific context window",
 	)
 	assert(config.providers[0].enabled, "expected provider to be enabled")
-	assert(len(config.skillPaths) == 1, "expected skill path to parse")
-	assert(config.skillPaths[0] == "/tmp/mimir/skills", "expected skill path")
+	assert(len(config.disabledSkills) == 0, "expected no disabled skills")
 	assert(len(config.permissionGrants) == 1, "expected one permission grant")
 	assert(
 		config.permissionGrants[0].kind == .Directory_Subtree,
@@ -115,7 +114,7 @@ test_parse_config_rejects_invalid_provider_type :: proc(t: ^testing.T) {
       "enabled": true
     }
   ],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.allocator)
@@ -164,7 +163,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 			delete(entry.model, context.temp_allocator)
 		}
 		delete(config.contextWindows)
-		delete(config.skillPaths)
+		delete(config.disabledSkills)
 		delete(config.permissionGrants)
 	}
 
@@ -179,7 +178,7 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 			delete(entry.model, context.temp_allocator)
 		}
 		delete(loaded.contextWindows)
-		delete(loaded.skillPaths)
+		delete(loaded.disabledSkills)
 		delete(loaded.permissionGrants)
 	}
 
@@ -217,7 +216,7 @@ test_parse_config_rejects_negative_tool_continuations :: proc(t: ^testing.T) {
 	payload := `{
   "toolContinuations": -1,
   "providers": [],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
@@ -230,7 +229,7 @@ test_parse_config_rejects_negative_max_subagent_depth :: proc(t: ^testing.T) {
 	payload := `{
   "maxSubagentDepth": -1,
   "providers": [],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
@@ -243,7 +242,7 @@ test_parse_config_rejects_negative_max_subagents_per_session :: proc(t: ^testing
 	payload := `{
   "maxSubagentsPerSession": -1,
   "providers": [],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
@@ -256,7 +255,7 @@ test_parse_config_rejects_invalid_approval_method :: proc(t: ^testing.T) {
 	payload := `{
   "approvalMethod": "sometimes",
   "providers": [],
-  "skillPaths": []
+	"disabledSkills": []
 }`
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
@@ -335,7 +334,7 @@ test_parse_config_rejects_permission_grant_outside_project :: proc(t: ^testing.T
 	"selectedProvider": "ollama",
 	"selectedModel": "",
 	"providers": [],
-	"skillPaths": [],
+	"disabledSkills": [],
 	"permissionGrants": [
 		{
 			"kind": "directorySubtree",

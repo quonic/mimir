@@ -77,7 +77,7 @@ The initial configuration shape is:
       "enabled": true
     }
   ],
-  "skillPaths": [],
+  "disabledSkills": [],
   "permissionGrants": []
 }
 ```
@@ -113,6 +113,30 @@ permission grants.
 `toolContinuations` sets the maximum number of consecutive model and tool
 continuation cycles for one request. It must be a positive integer and defaults
 to `1000`. Change it through `/config` in `Advanced`, or edit the JSON file.
+
+## Skills
+
+Mimir discovers Agent Skills from these locations, in this order:
+
+1. `.mimir/skills/` in the project
+2. `~/.config/mimir/skills/` in the user home directory
+3. `.agents/skills/` in the project
+4. `.agents/skills/` in the user home directory
+
+The first skill with a given name wins. A skill is a directory containing a
+`SKILL.md` file with YAML frontmatter. The required `name` and `description`
+fields are validated according to the Agent Skills specification. Optional
+`license`, `compatibility`, `metadata`, and `allowed-tools` fields are retained.
+
+Skills are enabled by default. The `disabledSkills` array stores names disabled
+from the Skills settings page. Enabled skill metadata is shown to the model;
+the full body is loaded only when the model calls `read_skill`. Relative files
+under a skill directory can also be requested as resources. Resource paths may
+not escape the skill directory.
+
+Invalid skills are skipped and shown as warnings in Settings. Refreshing the
+Skills page reloads discovery for future requests and does not change an agent
+that is already running.
 
 `maxSubagentDepth` sets how many levels of subagents the `create_subagent`
 tool may spawn. A top-level agent that calls `create_subagent` starts its

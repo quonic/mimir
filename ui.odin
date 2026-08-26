@@ -606,10 +606,10 @@ render_config_categories :: proc(
 	categoryLabels := make(
 		[dynamic]string,
 		0,
-		int(Config_Category.Advanced) + 1,
+		int(Config_Category.Skills) + 1,
 		context.temp_allocator,
 	)
-	for categoryIndex := 0; categoryIndex <= int(Config_Category.Advanced); categoryIndex += 1 {
+	for categoryIndex := 0; categoryIndex <= int(Config_Category.Skills); categoryIndex += 1 {
 		category := Config_Category(categoryIndex)
 		append(&categoryLabels, config_category_label(category))
 	}
@@ -640,6 +640,8 @@ config_category_label :: proc(category: Config_Category) -> string {
 		return "Safety Model"
 	case .Advanced:
 		return "Advanced"
+	case .Skills:
+		return "Skills"
 	}
 	return ""
 }
@@ -889,6 +891,32 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 	if setting.id == .Reset_System_Prompt {
 		return widgets.setting_row_button("Reset system prompt", context.temp_allocator)
 	}
+	if setting.id == .Skill_Toggle {
+		skill, ok := settings.skill_registry_skill_at(&state.skills, setting.skillIndex)
+		if ok {
+			return widgets.setting_row_checkbox(
+				settings.skill_name(skill),
+				settings.skill_is_enabled(skill),
+				context.temp_allocator,
+			)
+		}
+	}
+	if setting.id == .Refresh_Skills {
+		return widgets.setting_row_button("Refresh skills", context.temp_allocator)
+	}
+	if setting.id == .Skill_Warning {
+		diagnostic, ok := settings.skill_registry_diagnostic_at(&state.skills, setting.skillIndex)
+		if ok {
+			return widgets.setting_row_value(
+				"Warning",
+				strings.concatenate(
+					{diagnostic.path, ": ", diagnostic.message},
+					context.temp_allocator,
+				),
+				context.temp_allocator,
+			)
+		}
+	}
 	if setting.providerIndex < 0 || setting.providerIndex >= len(state.config.providers) {
 		return config_setting_label(setting.id)
 	}
@@ -990,6 +1018,12 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "System prompt"
 	case .Reset_System_Prompt:
 		return "Reset system prompt"
+	case .Skill_Toggle:
+		return "Skill"
+	case .Refresh_Skills:
+		return "Refresh skills"
+	case .Skill_Warning:
+		return "Warning"
 	}
 	return ""
 }

@@ -14,6 +14,7 @@ TOOL_RUN_COMMAND :: "run_command"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
+TOOL_READ_SKILL :: "read_skill"
 TOOL_CREATE_SUBAGENT :: "create_subagent"
 
 // ============================================================
@@ -222,6 +223,14 @@ builtin_ai_tool_definitions :: proc(
 			name = TOOL_READ_FILE,
 			description = "Read a file in the active project",
 			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = TOOL_READ_SKILL,
+			description = "Load the instructions for an enabled skill by name",
+			parametersJSON = `{"type":"object","properties":{"name":{"type":"string"},"resource":{"type":"string"}},"required":["name"]}`,
 		},
 	)
 	append(

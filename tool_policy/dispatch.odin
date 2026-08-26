@@ -143,7 +143,7 @@ tool_dispatch_build_action :: proc(
 		projectRoot = dispatcher.projectRoot,
 	}
 	switch call.id {
-	case "read_file", "get_file_info":
+	case "read_file", "get_file_info", "read_skill":
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
 			call.filePath,

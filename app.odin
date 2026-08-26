@@ -107,6 +107,7 @@ Config_Category :: enum int {
 	Embedding_Model,
 	Safety_Model,
 	Advanced,
+	Skills,
 }
 
 Config_Focus :: enum int {
@@ -148,6 +149,9 @@ Config_Setting_ID :: enum int {
 	System_Prompt_Mode,
 	System_Prompt,
 	Reset_System_Prompt,
+	Skill_Toggle,
+	Refresh_Skills,
+	Skill_Warning,
 }
 
 Config_Setting :: struct {
@@ -155,6 +159,7 @@ Config_Setting :: struct {
 	kind:          Config_Setting_Kind,
 	providerIndex: int,
 	modelIndex:    int,
+	skillIndex:    int,
 }
 
 Input_Escape_State :: enum int {
@@ -257,7 +262,10 @@ app_init_with_home :: proc(
 	}
 	ai.set_raw_http_log_home(state.configHome)
 	state.config = settings.default_ollama_config(allocator)
+	state.skills = settings.skill_registry_init(allocator)
 	app_bootstrap_config(&state, home, probeOllama, allocator)
+	settings.skill_registry_load(&state.skills, home, state.workingDirectory)
+	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
 	app_load_input_history(&state, allocator)
 	app_rebuild_code_index(&state, allocator)
 	state.dispatcher, state.dispatcherReady = tool_policy.tool_dispatcher_init(
@@ -265,7 +273,6 @@ app_init_with_home :: proc(
 		state.config.permissionGrants[:],
 		allocator,
 	)
-	state.skills = settings.skill_registry_init(allocator)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
 	state.configSettings = make([dynamic]Config_Setting, 0, 16, allocator)
 	state.configEditor = widgets.text_editor_init(allocator)
@@ -287,7 +294,7 @@ app_bootstrap_config :: proc(
 				settings.config_destroy(&state.config)
 			} else {
 				delete(state.config.providers)
-				delete(state.config.skillPaths)
+				delete(state.config.disabledSkills)
 				delete(state.config.permissionGrants)
 			}
 			state.config = loaded
@@ -429,7 +436,7 @@ app_destroy :: proc(state: ^App_State) {
 		for &provider in state.config.providers {
 			settings.provider_config_destroy(&provider, context.allocator)
 		}
-		delete(state.config.providers)
+		delete(state.config.disabledSkills)
 		for &entry in state.config.contextWindows {
 			if entry.providerName != "" {
 				delete(entry.providerName, context.allocator)
@@ -439,7 +446,7 @@ app_destroy :: proc(state: ^App_State) {
 			}
 		}
 		delete(state.config.contextWindows)
-		delete(state.config.skillPaths)
+		delete(state.config.disabledSkills)
 		delete(state.config.permissionGrants)
 	}
 	ai.set_raw_http_log_home("")
@@ -453,7 +460,7 @@ app_destroy :: proc(state: ^App_State) {
 	if state.setupAPIKey != "" {
 		delete(state.setupAPIKey, context.allocator)
 	}
-	delete(state.skills.skills)
+	settings.skill_registry_destroy(&state.skills)
 	if !state.configStringsOwned {
 		if state.modelProviderOwned && state.config.selectedProvider != "" {
 			delete(state.config.selectedProvider, context.allocator)
@@ -1866,7 +1873,7 @@ app_complete_setup :: proc(state: ^App_State) {
 	defer ai.models_destroy(&models, context.allocator)
 
 	delete(state.config.providers)
-	delete(state.config.skillPaths)
+	delete(state.config.disabledSkills)
 	delete(state.config.permissionGrants)
 	state.config = settings.default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
@@ -2038,6 +2045,22 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 		)
 		append(&state.configSettings, Config_Setting{id = .System_Prompt, kind = .Text})
 		append(&state.configSettings, Config_Setting{id = .Reset_System_Prompt, kind = .Button})
+	case .Skills:
+		for index := 0; index < settings.skill_registry_count(&state.skills); index += 1 {
+			append(
+				&state.configSettings,
+				Config_Setting{id = .Skill_Toggle, kind = .Checkbox, skillIndex = index},
+			)
+		}
+		for index := 0;
+		    index < settings.skill_registry_diagnostic_count(&state.skills);
+		    index += 1 {
+			append(
+				&state.configSettings,
+				Config_Setting{id = .Skill_Warning, kind = .Button, skillIndex = index},
+			)
+		}
+		append(&state.configSettings, Config_Setting{id = .Refresh_Skills, kind = .Button})
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
@@ -2113,7 +2136,7 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 		category := int(state.configCategory) + delta
 		if category < int(Config_Category.Providers) {
 			category = int(Config_Category.Advanced)
-		} else if category > int(Config_Category.Advanced) {
+		} else if category > int(Config_Category.Skills) {
 			category = int(Config_Category.Providers)
 		}
 		state.configCategory = Config_Category(category)
@@ -2183,8 +2206,43 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 		app_cycle_system_prompt_mode(state)
 	case .Reset_System_Prompt:
 		app_reset_system_prompt(state)
+	case .Skill_Toggle:
+		app_toggle_skill(state, setting.skillIndex)
+	case .Refresh_Skills:
+		app_refresh_skills(state)
 	}
 	return true
+}
+
+app_toggle_skill :: proc(state: ^App_State, index: int) {
+	skill, ok := settings.skill_registry_skill_at(&state.skills, index)
+	if !ok {
+		return
+	}
+	enabled := !settings.skill_is_enabled(skill)
+	settings.skill_set_enabled(skill, enabled)
+	if enabled {
+		for index := 0; index < len(state.config.disabledSkills); index += 1 {
+			if state.config.disabledSkills[index] == settings.skill_name(skill) {
+				delete(state.config.disabledSkills[index], context.allocator)
+				ordered_remove(&state.config.disabledSkills, index)
+				break
+			}
+		}
+	} else {
+		append(
+			&state.config.disabledSkills,
+			strings.clone(settings.skill_name(skill), context.allocator),
+		)
+	}
+	app_apply_config_change(state, "Skill setting saved")
+}
+
+app_refresh_skills :: proc(state: ^App_State) {
+	settings.skill_registry_load(&state.skills, state.configHome, state.workingDirectory)
+	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
+	app_rebuild_config_settings(state)
+	state.status = "Skills refreshed"
 }
 
 app_cancel_config :: proc(state: ^App_State) {

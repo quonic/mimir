@@ -70,7 +70,7 @@ Mimir_Config_Wire :: struct {
 	systemPromptMode:       string,
 	providers:              []Provider_Config_Wire,
 	contextWindows:         []Context_Window_Config_Wire,
-	skillPaths:             []string,
+	disabledSkills:         []string,
 	permissionGrants:       []Permission_Grant_Wire,
 }
 
@@ -108,7 +108,7 @@ Mimir_Config :: struct {
 	systemPromptMode:       System_Prompt_Mode,
 	providers:              [dynamic]Provider_Config,
 	contextWindows:         [dynamic]Context_Window_Config,
-	skillPaths:             [dynamic]string,
+	disabledSkills:         [dynamic]string,
 	permissionGrants:       [dynamic]tool_policy.Permission_Grant,
 	allocationAllocator:    mem.Allocator,
 }
@@ -196,7 +196,7 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.systemPromptMode = .Append
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
-	config.skillPaths = make([dynamic]string, 0, 2, allocator)
+	config.disabledSkills = make([dynamic]string, 0, 0, allocator)
 	config.permissionGrants = make([dynamic]tool_policy.Permission_Grant, 0, 0, allocator)
 	append(
 		&config.providers,
@@ -323,15 +323,15 @@ config_destroy :: proc(config: ^Mimir_Config) {
 			delete(entry.model, config.allocationAllocator)
 		}
 	}
-	for path in config.skillPaths {
-		delete(path, config.allocationAllocator)
+	for skillName in config.disabledSkills {
+		delete(skillName, config.allocationAllocator)
 	}
 	for &grant in config.permissionGrants {
 		tool_policy.permission_grant_destroy(&grant, config.allocationAllocator)
 	}
 	delete(config.providers)
 	delete(config.contextWindows)
-	delete(config.skillPaths)
+	delete(config.disabledSkills)
 	delete(config.permissionGrants)
 }
 
@@ -487,7 +487,7 @@ parse_config_from_json :: proc(
 		len(wire.contextWindows),
 		allocator,
 	)
-	config.skillPaths = make([dynamic]string, 0, len(wire.skillPaths), allocator)
+	config.disabledSkills = make([dynamic]string, 0, len(wire.disabledSkills), allocator)
 	config.permissionGrants = make(
 		[dynamic]tool_policy.Permission_Grant,
 		0,
@@ -531,8 +531,8 @@ parse_config_from_json :: proc(
 			},
 		)
 	}
-	for path in wire.skillPaths {
-		append(&config.skillPaths, strings.clone(path, allocator))
+	for skillName in wire.disabledSkills {
+		append(&config.disabledSkills, strings.clone(skillName, allocator))
 	}
 	for wireGrant in wire.permissionGrants {
 		grant, grantOK := permission_grant_from_wire(wireGrant, allocator)
@@ -678,7 +678,14 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 		strings.write_string(&builder, "\n  ")
 	}
 	strings.write_string(&builder, "],\n")
-	strings.write_string(&builder, "  \"skillPaths\": [],\n")
+	strings.write_string(&builder, "  \"disabledSkills\": [")
+	for skillName, index in config.disabledSkills {
+		if index > 0 {
+			strings.write_string(&builder, ",")
+		}
+		write_json_string(&builder, skillName)
+	}
+	strings.write_string(&builder, "],\n")
 	strings.write_string(&builder, "  \"permissionGrants\": [")
 	for grant, index in config.permissionGrants {
 		if index > 0 {

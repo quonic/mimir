@@ -1,5 +1,7 @@
 package settings
 
+import "core:os"
+import "core:strings"
 import "core:testing"
 
 @(test)
@@ -12,5 +14,109 @@ test_skill_paths_and_names :: proc(t: ^testing.T) {
 	assert(globalDir == "/home/test/.config/mimir/skills", "expected global skills directory")
 	assert(projectDir == "/repo/.mimir/skills", "expected project skills directory")
 	assert(skill_name_from_path("/repo/.mimir/skills/odin.md") == "odin", "expected name")
+	_ = t
+}
+
+@(test)
+test_skill_registry_discovers_project_before_global_and_loads_body :: proc(t: ^testing.T) {
+	home, homeErr := os.make_directory_temp("", "skills_home_", context.temp_allocator)
+	project, projectErr := os.make_directory_temp("", "skills_project_", context.temp_allocator)
+	assert(homeErr == nil && projectErr == nil, "expected temporary directories")
+	defer os.remove_all(home)
+	defer os.remove_all(project)
+
+	projectSkill := strings.concatenate({project, "/.mimir/skills/odin"}, context.temp_allocator)
+	globalSkill := strings.concatenate(
+		{home, "/.config/mimir/skills/odin"},
+		context.temp_allocator,
+	)
+	assert(os.make_directory_all(projectSkill) == nil, "expected project skill directory")
+	assert(os.make_directory_all(globalSkill) == nil, "expected global skill directory")
+	projectFile := strings.concatenate({projectSkill, "/SKILL.md"}, context.temp_allocator)
+	globalFile := strings.concatenate({globalSkill, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			projectFile,
+			"---\nname: odin\ndescription: Project skill\n---\nproject body",
+		) ==
+		nil,
+		"expected project skill file",
+	)
+	assert(
+		os.write_entire_file_from_string(
+			globalFile,
+			"---\nname: odin\ndescription: Global skill\n---\nglobal body",
+		) ==
+		nil,
+		"expected global skill file",
+	)
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, home, project)
+	assert(len(registry.skills) == 1, "expected duplicate skill to load once")
+	assert(registry.skills[0].description == "Project skill", "expected project precedence")
+	body, bodyOK := skill_registry_read(&registry, "odin")
+	defer delete(body, context.temp_allocator)
+	assert(bodyOK && strings.contains(body, "project body"), "expected project skill body")
+	_ = t
+}
+
+@(test)
+test_skill_registry_reports_invalid_skill_and_rejects_disabled_skill :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "skills_invalid_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/bad"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(os.write_entire_file_from_string(skillPath, "name: bad") == nil, "expected skill file")
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", project)
+	assert(len(registry.skills) == 0, "expected invalid skill to be skipped")
+	assert(len(registry.diagnostics) == 1, "expected invalid skill diagnostic")
+
+	validRoot := strings.concatenate({project, "/.mimir/skills/good"}, context.temp_allocator)
+	assert(os.make_directory_all(validRoot) == nil, "expected valid skill directory")
+	validPath := strings.concatenate({validRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			validPath,
+			"---\nname: good\ndescription: Good skill\n---\nbody",
+		) ==
+		nil,
+		"expected valid skill file",
+	)
+	skill_registry_load(&registry, "", project)
+	registry.skills[0].enabled = false
+	_, readOK := skill_registry_read(&registry, "good")
+	assert(!readOK, "expected disabled skill to be rejected")
+	_ = t
+}
+
+@(test)
+test_skill_registry_rejects_resource_path_escape :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "skills_resource_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/good"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: good\ndescription: Good skill\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+
+	registry := skill_registry_init(context.temp_allocator)
+	defer skill_registry_destroy(&registry)
+	skill_registry_load(&registry, "", project)
+	_, readOK := skill_registry_read_resource(&registry, "good", "../outside.txt")
+	assert(!readOK, "expected resource traversal to be rejected")
 	_ = t
 }
