@@ -535,6 +535,7 @@ run_app :: proc() {
 			}
 			prevMode := state.mode
 			prevInputLines := app_input_line_count(&state)
+			prevHistoryLen := len(state.history)
 			frameDirty = app_handle_input_byte(&state, buffer[0])
 			if state.historyRenderOnly {
 				historyDirty = true
@@ -543,9 +544,13 @@ run_app :: proc() {
 			} else if frameDirty &&
 			   state.mode == prevMode &&
 			   (state.mode == .Chat || state.mode == .Setup) &&
-			   app_input_line_count(&state) == prevInputLines {
+			   app_input_line_count(&state) == prevInputLines &&
+			   len(state.history) == prevHistoryLen {
 				// Typing rarely changes the panel layout; a full-screen clear on every
 				// keystroke causes visible border flicker under some Wayland compositors.
+				// Submitting input (e.g. a slash command) can leave the wrapped input line
+				// count unchanged while still appending a history entry, so guard against
+				// treating that as a no-op keystroke and skipping the history redraw.
 				inputDirty = true
 				frameDirty = false
 			}
