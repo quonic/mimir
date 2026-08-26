@@ -2134,7 +2134,7 @@ app_move_config_cursor :: proc(state: ^App_State, delta: int) {
 	if state.configFocus == .Categories {
 		category := int(state.configCategory) + delta
 		if category < int(Config_Category.Providers) {
-			category = int(Config_Category.Advanced)
+			category = int(Config_Category.Skills)
 		} else if category > int(Config_Category.Skills) {
 			category = int(Config_Category.Providers)
 		}

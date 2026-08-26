@@ -666,8 +666,26 @@ render_config_settings :: proc(batch: ^console.Batch, region: console.Region, st
 		width,
 		config_category_label(state.configCategory),
 	)
-	row := region.top_row + 2
+	listTop := region.top_row + 2
+	visibleRows := region.bottom_row - listTop + 1
+	scrollOffset := 0
+	if visibleRows > 0 {
+		maxOffset := len(state.configSettings) - visibleRows
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if state.configSettingCursor >= visibleRows {
+			scrollOffset = state.configSettingCursor - visibleRows + 1
+		}
+		if scrollOffset > maxOffset {
+			scrollOffset = maxOffset
+		}
+	}
+	row := listTop
 	for setting, index in state.configSettings {
+		if index < scrollOffset {
+			continue
+		}
 		if row > region.bottom_row {
 			break
 		}
