@@ -273,7 +273,8 @@ test_app_skill_setting_toggles_persisted_disabled_name :: proc(t: ^testing.T) {
 	state.configCategory = .Skills
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
-	assert(len(state.configSettings) == 2, "expected skill toggle and refresh settings")
+	assert(len(state.configSettings) == 2, "expected refresh and skill toggle settings")
+	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected skill toggle activation")
 	assert(len(state.config.disabledSkills) == 1, "expected disabled skill to persist")
 	assert(state.config.disabledSkills[0] == "demo", "expected demo skill to be disabled")

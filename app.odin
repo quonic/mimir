@@ -2045,6 +2045,7 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 		append(&state.configSettings, Config_Setting{id = .System_Prompt, kind = .Text})
 		append(&state.configSettings, Config_Setting{id = .Reset_System_Prompt, kind = .Button})
 	case .Skills:
+		append(&state.configSettings, Config_Setting{id = .Refresh_Skills, kind = .Button})
 		for index := 0; index < settings.skill_registry_count(&state.skills); index += 1 {
 			append(
 				&state.configSettings,
@@ -2059,7 +2060,6 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 				Config_Setting{id = .Skill_Warning, kind = .Button, skillIndex = index},
 			)
 		}
-		append(&state.configSettings, Config_Setting{id = .Refresh_Skills, kind = .Button})
 	}
 
 	if state.configSettingCursor >= len(state.configSettings) {
