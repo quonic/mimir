@@ -2,6 +2,7 @@ package main
 
 import "ai"
 import "core:os"
+import "core:strings"
 import "core:testing"
 import "settings"
 
@@ -95,6 +96,27 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 	assert(
 		config.permissionGrants[0].kind == .Directory_Subtree,
 		"expected directory subtree permission grant",
+	)
+	_ = t
+}
+
+@(test)
+test_disabled_skills_round_trip :: proc(t: ^testing.T) {
+	payload := `{
+  "providers": [],
+  "disabledSkills": ["odin", "code-review"]
+}`
+	config, err := settings.parse_config_from_json(payload, context.allocator)
+	defer settings.config_destroy(&config)
+	assert(err == .None, "expected disabled skills config to parse")
+	assert(len(config.disabledSkills) == 2, "expected disabled skill names")
+	assert(config.disabledSkills[0] == "odin", "expected first disabled skill")
+	assert(config.disabledSkills[1] == "code-review", "expected second disabled skill")
+	serialized := settings.config_to_json(config, context.temp_allocator)
+	defer delete(serialized, context.temp_allocator)
+	assert(
+		strings.contains(serialized, `"disabledSkills": ["odin","code-review"]`),
+		"expected disabled skills in serialized config",
 	)
 	_ = t
 }
