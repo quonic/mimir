@@ -504,6 +504,34 @@ test_app_decodes_read_skill_arguments :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_executes_read_skill_through_registry :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "app_skill_exec_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/demo"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: demo\ndescription: Demo skill\n---\nDemo instructions",
+		) == nil,
+		"expected skill file",
+	)
+
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	settings.skill_registry_load(&state.skills, "", project)
+	result := app_execute_tool_call(
+		&state,
+		tool_policy.Tool_Call{id = "read_skill", query = "demo"},
+	)
+	defer delete(result, context.allocator)
+	assert(strings.contains(result, "Demo instructions"), "expected skill body from tool execution")
+	_ = t
+}
+
+@(test)
 test_app_tool_history_content_shows_sanitized_tool_target :: proc(t: ^testing.T) {
 	assert(
 		app_tool_history_content(
