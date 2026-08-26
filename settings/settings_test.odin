@@ -62,7 +62,8 @@ test_skill_parser_rejects_duplicate_fields :: proc(t: ^testing.T) {
 		os.write_entire_file_from_string(
 			path,
 			"---\nname: duplicate\nname: duplicate\ndescription: Duplicate skill\n---\nbody",
-		) == nil,
+		) ==
+		nil,
 		"expected skill file",
 	)
 	_, message, ok := skill_parse_file(path, skillRoot, .Project, context.temp_allocator)
