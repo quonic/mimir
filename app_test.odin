@@ -550,6 +550,10 @@ test_app_executes_read_skill_through_registry :: proc(t: ^testing.T) {
 		) == nil,
 		"expected skill file",
 	)
+	resourceDirectory := strings.concatenate({skillRoot, "/references"}, context.temp_allocator)
+	assert(os.make_directory_all(resourceDirectory) == nil, "expected resource directory")
+	resourcePath := strings.concatenate({resourceDirectory, "/guide.md"}, context.temp_allocator)
+	assert(os.write_entire_file_from_string(resourcePath, "Reference content") == nil, "expected resource file")
 
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -560,6 +564,16 @@ test_app_executes_read_skill_through_registry :: proc(t: ^testing.T) {
 	)
 	defer delete(result, context.allocator)
 	assert(strings.contains(result, "Demo instructions"), "expected skill body from tool execution")
+	resourceResult := app_execute_tool_call(
+		&state,
+		tool_policy.Tool_Call {
+			id = "read_skill",
+			query = "demo",
+			content = "references/guide.md",
+		},
+	)
+	defer delete(resourceResult, context.allocator)
+	assert(resourceResult == "Reference content", "expected skill resource from tool execution")
 	_ = t
 }
 

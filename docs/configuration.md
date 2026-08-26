@@ -128,6 +128,11 @@ The first skill with a given name wins. A skill is a directory containing a
 fields are validated according to the Agent Skills specification. Optional
 `license`, `compatibility`, `metadata`, and `allowed-tools` fields are retained.
 
+Mimir supports scalar frontmatter values, comments, quoted values, and a flat
+string-to-string `metadata` map. It does not interpret arbitrary YAML types or
+multiline YAML values. `allowed-tools` is retained as metadata and does not
+bypass Mimir's normal tool policy.
+
 Skills are enabled by default. The `disabledSkills` array stores names disabled
 from the Skills settings page. Enabled skill metadata is shown to the model;
 the full body is loaded only when the model calls `read_skill`. Relative files
