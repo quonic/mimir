@@ -251,6 +251,38 @@ test_app_refresh_skills_does_not_mutate_active_agent :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_app_skill_setting_toggles_persisted_disabled_name :: proc(t: ^testing.T) {
+	project, projectErr := os.make_directory_temp("", "app_skill_setting_", context.temp_allocator)
+	assert(projectErr == nil, "expected temporary directory")
+	defer os.remove_all(project)
+	skillRoot := strings.concatenate({project, "/.mimir/skills/demo"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	skillPath := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			skillPath,
+			"---\nname: demo\ndescription: Demo skill\n---\nbody",
+		) ==
+		nil,
+		"expected skill file",
+	)
+
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	settings.skill_registry_load(&state.skills, "", project)
+	state.configCategory = .Skills
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+	assert(len(state.configSettings) == 2, "expected skill toggle and refresh settings")
+	assert(app_activate_config_setting(&state), "expected skill toggle activation")
+	assert(len(state.config.disabledSkills) == 1, "expected disabled skill to persist")
+	assert(state.config.disabledSkills[0] == "demo", "expected demo skill to be disabled")
+	assert(app_activate_config_setting(&state), "expected skill toggle activation")
+	assert(len(state.config.disabledSkills) == 0, "expected disabled skill to be removed")
+	_ = t
+}
+
+@(test)
 test_app_embedding_client_requires_embedding_configuration :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)

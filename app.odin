@@ -436,7 +436,6 @@ app_destroy :: proc(state: ^App_State) {
 		for &provider in state.config.providers {
 			settings.provider_config_destroy(&provider, context.allocator)
 		}
-		delete(state.config.disabledSkills)
 		for &entry in state.config.contextWindows {
 			if entry.providerName != "" {
 				delete(entry.providerName, context.allocator)
