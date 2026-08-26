@@ -444,6 +444,7 @@ app_destroy :: proc(state: ^App_State) {
 				delete(entry.model, context.allocator)
 			}
 		}
+		delete(state.config.providers)
 		delete(state.config.contextWindows)
 		delete(state.config.disabledSkills)
 		delete(state.config.permissionGrants)

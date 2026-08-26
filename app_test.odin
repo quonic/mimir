@@ -2372,7 +2372,9 @@ test_default_config_json_shape :: proc(t: ^testing.T) {
 	config := settings.default_ollama_config(context.temp_allocator)
 	defer {
 		delete(config.providers)
+		delete(config.contextWindows)
 		delete(config.disabledSkills)
+		delete(config.permissionGrants)
 	}
 
 	json := settings.config_to_json(config, context.temp_allocator)
@@ -2427,7 +2429,9 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 	config.providers[0].model = "llama3.2"
 	defer {
 		delete(config.providers)
+		delete(config.contextWindows)
 		delete(config.disabledSkills)
+		delete(config.permissionGrants)
 	}
 	assert(settings.save_config_to_file(home, config) == .None, "expected test config save")
 
