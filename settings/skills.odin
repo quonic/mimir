@@ -192,6 +192,12 @@ skill_parse_file :: proc(
 	}
 	frontmatterEnd := -1
 	inMetadata := false
+	seenName := false
+	seenDescription := false
+	seenLicense := false
+	seenCompatibility := false
+	seenAllowedTools := false
+	seenMetadata := false
 	for index := 1; index < len(lines); index += 1 {
 		rawLine := lines[index]
 		line := strings.trim(rawLine, " \t\r")
@@ -228,16 +234,46 @@ skill_parse_file :: proc(
 		}
 		switch key {
 		case "name":
+			if seenName {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate name field", allocator), false
+			}
+			seenName = true
 			skill.name = strings.clone(value, allocator)
 		case "description":
+			if seenDescription {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate description field", allocator), false
+			}
+			seenDescription = true
 			skill.description = strings.clone(value, allocator)
 		case "license":
+			if seenLicense {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate license field", allocator), false
+			}
+			seenLicense = true
 			skill.license = strings.clone(value, allocator)
 		case "compatibility":
+			if seenCompatibility {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate compatibility field", allocator), false
+			}
+			seenCompatibility = true
 			skill.compatibility = strings.clone(value, allocator)
 		case "allowed-tools":
+			if seenAllowedTools {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate allowed-tools field", allocator), false
+			}
+			seenAllowedTools = true
 			skill.allowedTools = strings.clone(value, allocator)
 		case "metadata":
+			if seenMetadata {
+				skill_destroy(&skill, allocator)
+				return {}, strings.clone("duplicate metadata field", allocator), false
+			}
+			seenMetadata = true
 			inMetadata = true
 		case:
 			inMetadata = false

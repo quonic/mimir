@@ -51,6 +51,27 @@ test_skill_parser_retains_nested_metadata :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_skill_parser_rejects_duplicate_fields :: proc(t: ^testing.T) {
+	root, rootErr := os.make_directory_temp("", "skill_duplicate_", context.temp_allocator)
+	assert(rootErr == nil, "expected temporary directory")
+	defer os.remove_all(root)
+	skillRoot := strings.concatenate({root, "/duplicate"}, context.temp_allocator)
+	assert(os.make_directory_all(skillRoot) == nil, "expected skill directory")
+	path := strings.concatenate({skillRoot, "/SKILL.md"}, context.temp_allocator)
+	assert(
+		os.write_entire_file_from_string(
+			path,
+			"---\nname: duplicate\nname: duplicate\ndescription: Duplicate skill\n---\nbody",
+		) == nil,
+		"expected skill file",
+	)
+	_, message, ok := skill_parse_file(path, skillRoot, .Project, context.temp_allocator)
+	assert(!ok && strings.contains(message, "duplicate name"), "expected duplicate name rejection")
+	delete(message, context.temp_allocator)
+	_ = t
+}
+
+@(test)
 test_skill_registry_discovers_project_before_global_and_loads_body :: proc(t: ^testing.T) {
 	home, homeErr := os.make_directory_temp("", "skills_home_", context.temp_allocator)
 	project, projectErr := os.make_directory_temp("", "skills_project_", context.temp_allocator)
