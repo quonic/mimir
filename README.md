@@ -121,7 +121,9 @@ Config: arrows/Tab, Enter, Esc
 ## Prerequisites
 
 - [Odin](https://odin-lang.org/)
-- [Ollama](https://ollama.com/) running locally with at least one model available
+- Supported Providers:
+  - [Ollama](https://ollama.com/) running locally with at least one model available
+  - OpenAI API Compatible providers (e.g., OpenAI, Azure OpenAI, GoModel)
 
 ## Supported Platforms
 
