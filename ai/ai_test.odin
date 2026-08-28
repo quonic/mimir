@@ -360,6 +360,25 @@ test_openai_stream_uses_tool_call_indexes :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_openai_endpoint_transport :: proc(t: ^testing.T) {
+	endpoint := os.get_env("MIMIR_OPENAI_PROBE_ENDPOINT", context.temp_allocator)
+	if endpoint == "" {
+		_ = t
+		return
+	}
+	apiKey := os.get_env("MIMIR_OPENAI_PROBE_KEY", context.temp_allocator)
+	models, err := probe_openai_endpoint_with_api_key(endpoint, apiKey, context.temp_allocator)
+	defer models_destroy(&models, context.temp_allocator)
+	if apiKey == "" {
+		assert(err != .Network_Error, "expected OpenAI endpoint to return an HTTP response")
+	} else {
+		assert(err == .None, "expected authenticated OpenAI model discovery to succeed")
+		assert(len(models) > 0, "expected at least one OpenAI model")
+	}
+	_ = t
+}
+
+@(test)
 test_ollama_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	request := Chat_Request {
 		model    = "qwen3",

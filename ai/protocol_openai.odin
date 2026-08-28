@@ -505,6 +505,7 @@ list_openai_models :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 	append_openai_auth_headers(&extraHeaders, client.apiKey)
+	append(&extraHeaders, [2]string{"Content-Type", "application/json"})
 	body, status, err := do_json_get(target, extraHeaders[:])
 	if err != .None {
 		return [dynamic]Model{}, err

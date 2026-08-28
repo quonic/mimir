@@ -728,15 +728,20 @@ do_json_get :: proc(
 		http.headers_set_unsafe(&req.headers, header[0], header[1])
 	}
 
+	_ = raw_http_log_begin(target)
+
 	res, reqErr := httpClient.request(&req, target)
 	if reqErr != nil {
+		_ = raw_http_log_append("end: network error\n")
 		return "", http.Status(0), .Network_Error
 	}
 	defer httpClient.response_destroy(&res)
 
 	status = res.status
+	_ = raw_http_log_append(fmt.tprintf("status: %d\nraw body:\n", int(status)))
 	resBody, allocated, bodyErr := httpClient.response_body(&res)
 	if bodyErr != nil {
+		_ = raw_http_log_append("\nend: invalid response body\n")
 		return "", status, .Invalid_Response
 	}
 	defer httpClient.body_destroy(resBody, allocated)
@@ -745,11 +750,14 @@ do_json_get :: proc(
 	case httpClient.Body_Plain:
 		body = strings.clone(plain)
 	}
+	_ = raw_http_log_append(body)
 
 	if body == "" && !http.status_is_success(status) {
+		_ = raw_http_log_append("\nend: empty error response\n")
 		return "", status, map_status_to_error(status)
 	}
 
+	_ = raw_http_log_append("\nend: complete\n")
 	return body, status, .None
 }
 

@@ -2609,7 +2609,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		return
 	}
 	if err != .None {
-		state.status = "Provider model refresh failed"
+		state.status = fmt.tprintf("Provider model refresh failed: %v", err)
 		return
 	}
 	defer ai.models_destroy(&models, context.allocator)
