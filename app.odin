@@ -2283,6 +2283,15 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 	provider := &state.config.providers[providerIndex]
 	switch provider.type {
 	case .Ollama:
+		provider.type = .OpenAI
+		if provider.endpoint == settings.DEFAULT_CONFIG_ENDPOINT {
+			if provider.endpointOwned {
+				delete(provider.endpoint, state.config.allocationAllocator)
+			}
+			provider.endpoint = settings.DEFAULT_OPENAI_CONFIG_ENDPOINT
+			provider.endpointOwned = false
+		}
+	case .OpenAI:
 		provider.type = .None
 	case .None:
 		provider.type = .Ollama
@@ -2580,27 +2589,40 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 		return
 	}
 	provider := state.config.providers[providerIndex]
-	if provider.type != .Ollama {
-		state.status = "Only Ollama providers support refresh"
+	models: [dynamic]ai.Model
+	err: ai.AI_Error
+	switch provider.type {
+	case .Ollama:
+		models, err = ai.probe_ollama_endpoint_with_api_key(
+			provider.endpoint,
+			provider.apiKey,
+			context.allocator,
+		)
+	case .OpenAI:
+		models, err = ai.probe_openai_endpoint_with_api_key(
+			provider.endpoint,
+			provider.apiKey,
+			context.allocator,
+		)
+	case .None:
+		state.status = "Disabled providers cannot refresh models"
 		return
 	}
-	models, err := ai.probe_ollama_endpoint_with_api_key(
-		provider.endpoint,
-		provider.apiKey,
-		context.allocator,
-	)
 	if err != .None {
 		state.status = "Provider model refresh failed"
 		return
 	}
 	defer ai.models_destroy(&models, context.allocator)
-	contextClient, contextClientErr := ai.new_client_with_endpoint(
-		.Ollama,
-		provider.endpoint,
-		provider.apiKey,
-	)
 	contextWindowsChanged := false
-	if contextClientErr == .None {
+	if provider.type == .Ollama {
+		contextClient, contextClientErr := ai.new_client_with_endpoint(
+			.Ollama,
+			provider.endpoint,
+			provider.apiKey,
+		)
+		if contextClientErr != .None {
+			contextClient = ai.Client{}
+		}
 		for model in models {
 			contextWindowTokens, contextWindowErr := ai.get_ollama_model_context_window(
 				contextClient,
@@ -2790,7 +2812,7 @@ app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
 	if !providerOK || !provider.enabled {
 		return ai.Client{}, .Interface_Not_Found
 	}
-	if provider.type != .Ollama {
+	if provider.type != .Ollama && provider.type != .OpenAI {
 		return ai.Client{}, .Unsupported_Interface
 	}
 	return ai.new_client(provider.name, provider.apiKey)

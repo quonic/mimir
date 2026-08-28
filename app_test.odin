@@ -1227,6 +1227,19 @@ test_config_modal_formats_provider_control_rows :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_config_provider_type_cycle_adds_openai_default_endpoint :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_cycle_config_provider_type(&state, 0)
+	assert(state.config.providers[0].type == .OpenAI, "expected OpenAI provider type")
+	assert(
+		state.config.providers[0].endpoint == settings.DEFAULT_OPENAI_CONFIG_ENDPOINT,
+		"expected OpenAI API base endpoint",
+	)
+	_ = t
+}
+
+@(test)
 test_config_modal_settings_cursor_wraps :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)

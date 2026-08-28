@@ -206,6 +206,160 @@ test_build_ollama_chat_request :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
+	request := Chat_Request {
+		model       = "gpt-test",
+		temperature = 0.4,
+		maxTokens   = 96,
+		messages    = []Message {
+			{
+				role = .Assistant,
+				toolCalls = []Tool_Call {
+					{id = "call_1", name = "read_file", arguments = `{"path":"main.odin"}`},
+				},
+			},
+			{
+				role = .Tool,
+				toolResults = []Tool_Result{{toolCallID = "call_1", content = "package main"}},
+			},
+		},
+		tools       = []Tool_Definition {
+			{
+				name = "read_file",
+				description = "Read a project file",
+				parametersJSON = `{"type":"object"}`,
+			},
+		},
+	}
+	wire := build_openai_chat_request(request, allocator = context.temp_allocator)
+	payloadBytes, marshalErr := json.marshal(wire, allocator = context.temp_allocator)
+	payload := string(payloadBytes)
+	assert(marshalErr == nil, "expected OpenAI request to serialize")
+	assert(strings.contains(payload, `"temperature":0.4`), "expected OpenAI temperature")
+	assert(strings.contains(payload, `"max_tokens":96`), "expected OpenAI max tokens")
+	assert(strings.contains(payload, `"tool_call_id":"call_1"`), "expected tool call ID")
+	assert(!strings.contains(payload, `"tool_calls":[]`), "expected empty tool calls omitted")
+
+	response, err := parse_openai_chat_response(
+		`{"model":"gpt-test","choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"main.odin\\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		context.allocator,
+	)
+	defer chat_response_destroy(&response, context.allocator)
+	assert(err == .None, "expected OpenAI tool call response")
+	assert(len(response.toolCalls) == 1, "expected one parsed OpenAI tool call")
+	assert(response.toolCalls[0].id == "call_1", "expected OpenAI tool call ID")
+	assert(response.toolCalls[0].arguments == `{"path":"main.odin"}`, "expected arguments")
+	_ = t
+}
+
+@(test)
+test_parse_openai_embedding_and_models_response :: proc(t: ^testing.T) {
+	embeddings, embeddingErr := parse_openai_embedding_response(
+		`{"model":"text-embedding","data":[{"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":3}}`,
+		1,
+		context.allocator,
+	)
+	defer embedding_batch_response_destroy(&embeddings, context.allocator)
+	assert(embeddingErr == .None, "expected OpenAI embedding response")
+	assert(embeddings.inputTokenCount == 3, "expected OpenAI embedding usage")
+	assert(embeddings.embeddings[0][1] == 0.2, "expected OpenAI embedding vector")
+
+	models, modelErr := parse_openai_models_response(
+		`{"data":[{"id":"gpt-test"}]}`,
+		context.allocator,
+	)
+	defer models_destroy(&models, context.allocator)
+	assert(modelErr == .None, "expected OpenAI models response")
+	assert(len(models) == 1, "expected one OpenAI model")
+	assert(model_supports_chat(models[0]), "expected OpenAI model chat capability")
+	assert(!model_supports_embeddings(models[0]), "expected embedding capability not inferred")
+	_ = t
+}
+
+@(test)
+test_openai_endpoint_target_and_sse_stream :: proc(t: ^testing.T) {
+	root := http.url_parse("https://example.test")
+	rootTarget, rootOK := openai_endpoint_target(root, OPENAI_CHAT_PATH)
+	assert(rootOK, "expected OpenAI root endpoint")
+	assert(
+		rootTarget == "https://example.test/v1/chat/completions",
+		"expected versioned root target",
+	)
+	apiBase := http.url_parse("https://example.test/v1/")
+	baseTarget, baseOK := openai_endpoint_target(apiBase, OPENAI_CHAT_PATH)
+	assert(baseOK, "expected versioned OpenAI endpoint")
+	assert(
+		baseTarget == "https://example.test/v1/chat/completions",
+		"expected no duplicated version",
+	)
+
+	state: Test_Stream_State
+	defer reset_test_stream_state(&state)
+	err := parse_sse_stream_body_internal(
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+		"data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n" +
+		"data: [DONE]\n\n",
+		Chat_Stream_Callback_State {
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&state),
+		},
+		parse_openai_stream_event,
+	)
+	assert(err == .None, "expected OpenAI SSE body to parse")
+	assert(len(state.parts) == 1 && state.parts[0] == "ok", "expected OpenAI content delta")
+	assert(state.done, "expected OpenAI final event")
+	assert(state.usage.inputTokens == 2, "expected OpenAI prompt token usage")
+	_ = t
+}
+
+@(test)
+test_openai_stream_buffers_fragmented_tool_calls :: proc(t: ^testing.T) {
+	state: Test_Stream_State
+	defer reset_test_stream_state(&state)
+	toolState: OpenAI_Stream_Tool_State
+	defer destroy_openai_stream_tool_state(&toolState)
+	err := parse_sse_stream_body_internal(
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"file\",\"arguments\":\"\\\"main.odin\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+		Chat_Stream_Callback_State {
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&state),
+			parserData = rawptr(&toolState),
+		},
+		parse_openai_stream_event,
+	)
+	assert(err == .None, "expected fragmented OpenAI tool stream")
+	assert(len(state.toolCalls) == 1, "expected one completed OpenAI tool call")
+	assert(state.toolCalls[0].id == "call_1", "expected fragmented tool ID")
+	assert(state.toolCalls[0].name == "read_file", "expected fragmented tool name")
+	assert(state.toolCalls[0].arguments == `{"path":"main.odin"}`, "expected fragmented arguments")
+	assert(state.done, "expected tool-call completion event")
+	_ = t
+}
+
+@(test)
+test_openai_stream_uses_tool_call_indexes :: proc(t: ^testing.T) {
+	state: Test_Stream_State
+	defer reset_test_stream_state(&state)
+	toolState: OpenAI_Stream_Tool_State
+	defer destroy_openai_stream_tool_state(&toolState)
+	err := parse_sse_stream_body_internal(
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}},{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+		Chat_Stream_Callback_State {
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&state),
+			parserData = rawptr(&toolState),
+		},
+		parse_openai_stream_event,
+	)
+	assert(err == .None, "expected indexed OpenAI tool stream")
+	assert(len(state.toolCalls) == 2, "expected two completed indexed tool calls")
+	assert(state.toolCalls[0].id == "call_1", "expected first indexed tool call")
+	assert(state.toolCalls[1].id == "call_2", "expected second indexed tool call")
+	_ = t
+}
+
+@(test)
 test_ollama_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	request := Chat_Request {
 		model    = "qwen3",

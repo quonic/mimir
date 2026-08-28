@@ -15,6 +15,10 @@ test_provider_type_round_trip :: proc(t: ^testing.T) {
 		settings.provider_type_to_string(providerType) == "ollama",
 		"expected ollama round trip",
 	)
+	openAIType, openAIOK := settings.provider_type_from_string("openai")
+	assert(openAIOK, "expected openai provider type string to parse")
+	assert(openAIType == .OpenAI, "expected OpenAI provider type")
+	assert(settings.provider_type_to_string(openAIType) == "openai", "expected OpenAI round trip")
 
 	_, invalidOk := settings.provider_type_from_string("wat")
 	assert(!invalidOk, "expected unknown provider type to fail")

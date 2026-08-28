@@ -9,6 +9,7 @@ import "core:strings"
 
 DEFAULT_CONFIG_ENDPOINT :: "http://localhost:11434"
 DEFAULT_CONFIG_PROVIDER :: "ollama"
+DEFAULT_OPENAI_CONFIG_ENDPOINT :: "https://api.openai.com/v1"
 DEFAULT_TOOL_CONTINUATIONS :: 1000
 DEFAULT_MAX_SUBAGENT_DEPTH :: 2
 DEFAULT_MAX_SUBAGENTS_PER_SESSION :: 10
@@ -339,6 +340,8 @@ provider_type_to_string :: proc(providerType: ai.Interface_Type) -> string {
 	switch providerType {
 	case .Ollama:
 		return "ollama"
+	case .OpenAI:
+		return "openai"
 	case .None:
 		return "none"
 	}
@@ -349,6 +352,8 @@ provider_type_from_string :: proc(text: string) -> (ai.Interface_Type, bool) {
 	switch text {
 	case "ollama":
 		return .Ollama, true
+	case "openai":
+		return .OpenAI, true
 	case "none":
 		return .None, true
 	}

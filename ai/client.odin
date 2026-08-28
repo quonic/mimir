@@ -14,6 +14,10 @@ OLLAMA_EMBED_PATH :: "/api/embed"
 OLLAMA_MODELS_PATH :: "/api/tags"
 OLLAMA_SHOW_PATH :: "/api/show"
 
+OPENAI_CHAT_PATH :: "/chat/completions"
+OPENAI_EMBED_PATH :: "/embeddings"
+OPENAI_MODELS_PATH :: "/models"
+
 send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Response, AI_Error) {
 	if request.model == "" || len(request.messages) == 0 {
 		return Chat_Response{}, .Invalid_Request
@@ -24,6 +28,9 @@ send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Res
 
 	if client.iface.type == .Ollama {
 		return send_ollama_chat_completion(client, request)
+	}
+	if client.iface.type == .OpenAI {
+		return send_openai_chat_completion(client, request)
 	}
 
 	return Chat_Response{}, .Unsupported_Interface
@@ -89,6 +96,9 @@ send_embeddings :: proc(
 	if client.iface.type == .Ollama {
 		return send_ollama_embeddings(client, request, allocator)
 	}
+	if client.iface.type == .OpenAI {
+		return send_openai_embeddings(client, request, allocator)
+	}
 
 	return Embedding_Batch_Response{}, .Unsupported_Interface
 }
@@ -135,6 +145,9 @@ send_chat_completion_stream_internal :: proc(
 	if client.iface.type == .Ollama {
 		return send_ollama_chat_completion_stream(client, request, callbackState)
 	}
+	if client.iface.type == .OpenAI {
+		return send_openai_chat_completion_stream(client, request, callbackState)
+	}
 
 	return .Unsupported_Interface
 }
@@ -169,6 +182,19 @@ list_models :: proc(
 ) {
 	if client.iface.type == .Ollama {
 		models, err := list_ollama_models(client, allocator)
+		if err != .None {
+			return [dynamic]string{}, err
+		}
+		defer models_destroy(&models)
+
+		names: [dynamic]string
+		for model in models {
+			append(&names, strings.clone(model.name, allocator))
+		}
+		return names, .None
+	}
+	if client.iface.type == .OpenAI {
+		models, err := list_openai_models(client, allocator)
 		if err != .None {
 			return [dynamic]string{}, err
 		}

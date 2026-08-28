@@ -23,6 +23,7 @@ Model :: struct {
 Interface_Type :: enum {
 	None,
 	Ollama,
+	OpenAI,
 }
 
 AI_Error :: enum {
@@ -174,6 +175,28 @@ probe_ollama_endpoint_with_api_key :: proc(
 	return list_ollama_models(
 		Client {
 			iface = Interface{name = "ollama", type = .Ollama, endpoint = url},
+			apiKey = apiKey,
+		},
+		allocator,
+	)
+}
+
+probe_openai_endpoint_with_api_key :: proc(
+	endpoint: string,
+	apiKey: string,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Model,
+	AI_Error,
+) {
+	url := http.url_parse(endpoint)
+	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
+		return [dynamic]Model{}, .Invalid_Request
+	}
+
+	return list_openai_models(
+		Client {
+			iface = Interface{name = "openai", type = .OpenAI, endpoint = url},
 			apiKey = apiKey,
 		},
 		allocator,
