@@ -1097,6 +1097,39 @@ test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^test
 }
 
 @(test)
+test_app_append_model_entry_infers_openai_embedding_capability_by_name :: proc(
+	t: ^testing.T,
+) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	provider := settings.Provider_Config {
+		name = "openai",
+		type = .OpenAI,
+	}
+
+	app_append_model_entry(&state, provider, ai.Model{name = "gpt-test"}, context.allocator)
+	app_append_model_entry(
+		&state,
+		provider,
+		ai.Model{name = "text-embedding-3-small"},
+		context.allocator,
+	)
+
+	assert(len(state.models) == 2, "expected two appended model entries")
+	assert(state.models[0].supportsChat, "expected chat model name to support chat")
+	assert(!state.models[0].supportsEmbeddings, "expected chat model name to reject embeddings")
+	assert(
+		!state.models[1].supportsChat,
+		"expected embedding-named model to reject chat",
+	)
+	assert(
+		state.models[1].supportsEmbeddings,
+		"expected embedding-named model to support embeddings",
+	)
+	_ = t
+}
+
+@(test)
 test_safety_model_selection_requires_chat_capability :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)

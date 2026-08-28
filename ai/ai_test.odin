@@ -277,6 +277,30 @@ test_parse_openai_embedding_and_models_response :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_parse_openai_models_response_infers_embedding_by_name :: proc(t: ^testing.T) {
+	models, modelErr := parse_openai_models_response(
+		`{"data":[{"id":"gpt-test"},{"id":"nomic-embed-text-v2-moe"},{"id":"qwen3-embedding"},{"id":"embeddinggemma"},{"id":"text-embedding-3-small"},{"id":"text-embedding-3-large"}]}`,
+		context.allocator,
+	)
+	defer models_destroy(&models, context.allocator)
+	assert(modelErr == .None, "expected OpenAI models response with embedding models to parse")
+	assert(len(models) == 6, "expected six OpenAI models")
+	assert(model_supports_chat(models[0]), "expected gpt-test to support chat")
+	assert(!model_supports_embeddings(models[0]), "expected gpt-test to not support embeddings")
+	for index in 1 ..< len(models) {
+		assert(
+			model_supports_embeddings(models[index]),
+			"expected embedding-named model to support embeddings",
+		)
+		assert(
+			!model_supports_chat(models[index]),
+			"expected embedding-named model to not support chat",
+		)
+	}
+	_ = t
+}
+
+@(test)
 test_openai_endpoint_target_and_sse_stream :: proc(t: ^testing.T) {
 	root := http.url_parse("https://example.test")
 	rootTarget, rootOK := openai_endpoint_target(root, OPENAI_CHAT_PATH)

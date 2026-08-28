@@ -247,6 +247,13 @@ model_supports_embeddings :: proc(model: Model) -> bool {
 	return model_has_capability(model, "embedding")
 }
 
+// OpenAI-compatible /models responses carry no capability data, so embedding models are
+// identified by name (e.g. "text-embedding-3-small", "nomic-embed-text-v2-moe").
+model_name_indicates_embedding :: proc(name: string) -> bool {
+	lower := strings.to_lower(name, context.temp_allocator)
+	return strings.contains(lower, "embed")
+}
+
 model_supported :: proc(iface: Interface, model: string) -> bool {
 	if len(iface.models) == 0 {
 		return true

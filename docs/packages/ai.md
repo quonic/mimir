@@ -69,7 +69,7 @@ err := ai.send_chat_completion_stream(client, ai.Chat_Request{
 
 ## Generating Embeddings
 
-Native Ollama interfaces support embeddings. One input
+Native Ollama and OpenAI-compatible interfaces support embeddings. One input
 returns one vector:
 
 ```odin
@@ -82,6 +82,12 @@ if err == .None {
     ai.embedding_response_destroy(&embedding)
 }
 ```
+
+OpenAI-compatible `/models` responses carry no capability data, so
+`ai.list_openai_models` identifies embedding models by name (any model whose
+id contains "embed", e.g. `text-embedding-3-small`, `nomic-embed-text-v2-moe`,
+`qwen3-embedding`, `embeddinggemma`). Use `ai.model_supports_embeddings` and
+`ai.model_supports_chat` to filter the results.
 
 Use `send_embeddings` for multiple inputs. The response vectors keep the order
 of the request inputs:

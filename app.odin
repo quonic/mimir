@@ -2974,14 +2974,22 @@ app_append_model_entry :: proc(
 	model: ai.Model,
 	allocator := context.allocator,
 ) {
+	supportsChat := ai.model_supports_chat(model)
+	supportsEmbeddings := ai.model_supports_embeddings(model)
+	if len(model.capabilities) == 0 && provider.type != .Ollama {
+		// No probed capabilities (manual fallback entry): infer from the model name.
+		isEmbedding := ai.model_name_indicates_embedding(model.name)
+		supportsChat = !isEmbedding
+		supportsEmbeddings = isEmbedding
+	}
 	append(
 		&state.models,
 		Model_Select_Entry {
 			providerName = strings.clone(provider.name, allocator),
 			providerType = provider.type,
 			model = strings.clone(model.name, allocator),
-			supportsChat = provider.type != .Ollama || ai.model_supports_chat(model),
-			supportsEmbeddings = provider.type == .Ollama || ai.model_supports_embeddings(model),
+			supportsChat = supportsChat,
+			supportsEmbeddings = supportsEmbeddings,
 		},
 	)
 }
@@ -3027,7 +3035,7 @@ app_select_first_available_model :: proc(state: ^App_State, allocator := context
 	}
 
 	for model in iface.models {
-		if iface.type == .Ollama && !ai.model_supports_chat(model) {
+		if !ai.model_supports_chat(model) {
 			continue
 		}
 		state.config.selectedModel = strings.clone(model.name, allocator)

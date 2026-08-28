@@ -291,8 +291,12 @@ parse_openai_models_response :: proc(
 		entry := Model {
 			name = strings.clone(model.id, allocator),
 		}
-		append(&entry.capabilities, strings.clone("completion", allocator))
-		append(&entry.capabilities, strings.clone("tools", allocator))
+		if model_name_indicates_embedding(model.id) {
+			append(&entry.capabilities, strings.clone("embedding", allocator))
+		} else {
+			append(&entry.capabilities, strings.clone("completion", allocator))
+			append(&entry.capabilities, strings.clone("tools", allocator))
+		}
 		append(&models, entry)
 	}
 	return models, .None
