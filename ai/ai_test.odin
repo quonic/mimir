@@ -367,8 +367,8 @@ test_openai_endpoint_transport :: proc(t: ^testing.T) {
 		return
 	}
 	apiKey := os.get_env("MIMIR_OPENAI_PROBE_KEY", context.temp_allocator)
-	models, err := probe_openai_endpoint_with_api_key(endpoint, apiKey, context.temp_allocator)
-	defer models_destroy(&models, context.temp_allocator)
+	models, err := probe_openai_endpoint_with_api_key(endpoint, apiKey, context.allocator)
+	defer models_destroy(&models, context.allocator)
 	if apiKey == "" {
 		assert(err != .Network_Error, "expected OpenAI endpoint to return an HTTP response")
 	} else {
