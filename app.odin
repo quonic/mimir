@@ -2763,8 +2763,36 @@ app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
 }
 
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
+	// Snapshot already-probed models (e.g. OpenAI) so re-registering interfaces
+	// after a config edit doesn't drop them back to a single fallback model.
+	preservedModels := make(map[string][dynamic]ai.Model, 0, context.temp_allocator)
+	for provider in state.config.providers {
+		iface, ok := ai.get_interface(provider.name)
+		if !ok || len(iface.models) == 0 {
+			continue
+		}
+		cloned := make([dynamic]ai.Model, 0, len(iface.models), context.temp_allocator)
+		for model in iface.models {
+			append(&cloned, ai.model_clone(model, context.temp_allocator))
+		}
+		preservedModels[provider.name] = cloned
+	}
 	ai.clear_interfaces()
-	app_register_config_interfaces(state.config, false, context.allocator)
+	for provider in state.config.providers {
+		if !provider.enabled {
+			continue
+		}
+		if models, ok := preservedModels[provider.name]; ok {
+			ai.add_interface_with_models(
+				provider.name,
+				provider.type,
+				provider.endpoint,
+				models[:],
+			)
+			continue
+		}
+		ai.add_interface(provider.name, provider.type, provider.endpoint)
+	}
 	app_rebuild_model_entries(state, context.allocator)
 	if state.configHome != "" &&
 	   settings.save_config_to_file(state.configHome, state.config) != .None {
