@@ -124,6 +124,7 @@ Config: arrows/Tab, Enter, Esc
 - Supported Providers:
   - [Ollama](https://ollama.com/) running locally with at least one model available
   - OpenAI API Compatible providers (e.g., OpenAI, Azure OpenAI, GoModel)
+    - Ollama is still needed for embedding models even if using other providers for chat.
 
 ## Supported Platforms
 
