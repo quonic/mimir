@@ -241,7 +241,7 @@ test_openai_request_and_response_support_tool_calls :: proc(t: ^testing.T) {
 	assert(!strings.contains(payload, `"tool_calls":[]`), "expected empty tool calls omitted")
 
 	response, err := parse_openai_chat_response(
-		`{"model":"gpt-test","choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"main.odin\\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`{"model":"gpt-test","choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"main.odin\"}"}}]},"finish_reason":"tool_calls"}]}`,
 		context.allocator,
 	)
 	defer chat_response_destroy(&response, context.allocator)

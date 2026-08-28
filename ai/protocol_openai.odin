@@ -323,8 +323,25 @@ parse_openai_stream_event :: proc(
 	}
 	wire: OpenAI_Chat_Response
 	decodeErr := json.unmarshal_string(event, &wire, allocator = context.temp_allocator)
-	if decodeErr != nil || len(wire.choices) == 0 {
+	if decodeErr != nil {
 		return false, .Invalid_Response
+	}
+	if len(wire.choices) == 0 {
+		// Some servers send a trailing usage-only chunk with an empty choices array.
+		if wire.usage.prompt_tokens == 0 && wire.usage.completion_tokens == 0 {
+			return false, .Invalid_Response
+		}
+		usage := Chat_Usage {
+			inputTokens     = wire.usage.prompt_tokens,
+			hasInputTokens  = wire.usage.prompt_tokens > 0,
+			outputTokens    = wire.usage.completion_tokens,
+			hasOutputTokens = wire.usage.completion_tokens > 0,
+		}
+		return !chat_stream_callback_call(
+				callbackState,
+				Chat_Stream_Delta{model = wire.model, usage = usage},
+			),
+			.None
 	}
 	choice := wire.choices[0]
 	toolState := cast(^OpenAI_Stream_Tool_State)callbackState.parserData
