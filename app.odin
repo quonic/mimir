@@ -27,11 +27,27 @@ APP_POLL_INTERVAL_MS :: 25
 APP_CURSOR_BLINK_INTERVAL :: 500 * time.Millisecond
 HISTORY_WHEEL_SCROLL_ROWS :: 3
 
-App_Mode :: enum int {
+// App_Screen is the mutually-exclusive full-screen takeover (unlike Config/
+// Approval/menus, which are overlays drawn on top of whichever screen is active).
+App_Screen :: enum int {
 	Chat = 0,
-	Config,
 	Setup,
-	Approval,
+}
+
+// Config_Overlay and Approval_Overlay are markers: their substantive state
+// (configCategory, approval, etc.) stays centralized on App_State since only
+// one config/approval session is ever active regardless of stack depth.
+Config_Overlay :: struct {}
+Approval_Overlay :: struct {}
+
+// Overlay is a nestable stack element: Context_Menu/Dropdown_List can be
+// pushed on top of Config_Overlay/Approval_Overlay (or each other) and only
+// the top-most overlay's input handler runs (no fallthrough to layers below).
+Overlay :: union {
+	Config_Overlay,
+	Approval_Overlay,
+	widgets.Context_Menu,
+	widgets.Dropdown_List,
 }
 
 Approval_Choice :: enum int {
@@ -152,7 +168,9 @@ Config_Setting :: struct {
 
 App_State :: struct {
 	allocator:              mem.Allocator,
-	mode:                   App_Mode,
+	screen:                 App_Screen,
+	overlayStack:           [dynamic]Overlay,
+	menuOnSelect:           proc(state: ^App_State, index: int),
 	input:                  text_input.Input_Buffer,
 	inputState:             term_input.Input_State,
 	inputHistory:           [dynamic]string,
@@ -211,7 +229,8 @@ app_init_with_home :: proc(
 ) -> App_State {
 	state: App_State
 	state.allocator = allocator
-	state.mode = .Chat
+	state.screen = .Chat
+	state.overlayStack = make([dynamic]Overlay, 0, 4, allocator)
 	state.agentHost = agent_host_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
@@ -281,7 +300,7 @@ app_bootstrap_config :: proc(
 		}
 	}
 
-	if state.mode == .Setup || (home == "" && !probeOllama) {
+	if state.screen == .Setup || (home == "" && !probeOllama) {
 		ai.clear_interfaces()
 		return
 	}
@@ -289,10 +308,10 @@ app_bootstrap_config :: proc(
 	ai.clear_interfaces()
 	registerResult := app_register_config_interfaces(
 		state.config,
-		probeOllama && state.mode != .Setup,
+		probeOllama && state.screen != .Setup,
 		allocator,
 	)
-	if state.mode != .Setup {
+	if state.screen != .Setup {
 		app_select_first_available_model(state, allocator)
 		if registerResult.ollamaProbeFailed {
 			state.status = "Ollama unavailable; using saved config"
@@ -372,12 +391,65 @@ app_register_config_interfaces :: proc(
 }
 
 app_enter_setup :: proc(state: ^App_State, status: string) {
-	state.mode = .Setup
+	state.screen = .Setup
 	state.setupStep = .Endpoint
 	state.status = status
 }
 
+// app_top_overlay returns the top-most active overlay, or nil if none.
+app_top_overlay :: proc(state: ^App_State) -> ^Overlay {
+	if len(state.overlayStack) == 0 {
+		return nil
+	}
+	return &state.overlayStack[len(state.overlayStack) - 1]
+}
+
+app_push_overlay :: proc(state: ^App_State, overlay: Overlay) {
+	append(&state.overlayStack, overlay)
+}
+
+app_pop_overlay :: proc(state: ^App_State) {
+	if len(state.overlayStack) == 0 {
+		return
+	}
+	app_destroy_overlay(state.overlayStack[len(state.overlayStack) - 1])
+	pop(&state.overlayStack)
+}
+
+// app_destroy_overlay frees a Context_Menu/Dropdown_List's items slice, which
+// callers allocate with context.allocator when opening the menu.
+app_destroy_overlay :: proc(overlay: Overlay) {
+	switch v in overlay {
+	case widgets.Context_Menu:
+		delete(v.core.items, context.allocator)
+	case widgets.Dropdown_List:
+		delete(v.core.items, context.allocator)
+	case Config_Overlay, Approval_Overlay:
+	}
+}
+
+// app_pop_overlay_if only pops when the top overlay is T, guarding against
+// popping a menu that a caller nested on top of Config/Approval.
+app_pop_overlay_if :: proc(state: ^App_State, $T: typeid) {
+	if app_has_overlay(state, T) {
+		app_pop_overlay(state)
+	}
+}
+
+app_has_overlay :: proc(state: ^App_State, $T: typeid) -> bool {
+	top := app_top_overlay(state)
+	if top == nil {
+		return false
+	}
+	_, ok := top^.(T)
+	return ok
+}
+
 app_destroy :: proc(state: ^App_State) {
+	for overlay in state.overlayStack {
+		app_destroy_overlay(overlay)
+	}
+	delete(state.overlayStack)
 	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
 	text_input.input_buffer_destroy(&state.input)
@@ -503,7 +575,8 @@ run_app :: proc() {
 				state.shouldQuit = true
 				break
 			}
-			prevMode := state.mode
+			prevScreen := state.screen
+			prevOverlayCount := len(state.overlayStack)
 			prevInputLines := app_input_line_count(&state)
 			prevHistoryLen := len(state.history)
 			frameDirty = app_handle_input_byte(&state, buffer[0])
@@ -512,8 +585,9 @@ run_app :: proc() {
 				state.historyRenderOnly = false
 				frameDirty = false
 			} else if frameDirty &&
-			   state.mode == prevMode &&
-			   (state.mode == .Chat || state.mode == .Setup) &&
+			   state.screen == prevScreen &&
+			   prevOverlayCount == 0 &&
+			   len(state.overlayStack) == 0 &&
 			   app_input_line_count(&state) == prevInputLines &&
 			   len(state.history) == prevHistoryLen {
 				// Typing rarely changes the panel layout; a full-screen clear on every
@@ -530,9 +604,9 @@ run_app :: proc() {
 		if !input_ready && time.tick_since(lastCursorBlink) >= APP_CURSOR_BLINK_INTERVAL {
 			state.cursorBlinkOn = !state.cursorBlinkOn
 			lastCursorBlink = time.tick_now()
-			if state.mode == .Config && state.configEditing {
+			if app_has_overlay(&state, Config_Overlay) && state.configEditing {
 				frameDirty = true
-			} else if state.mode == .Chat || state.mode == .Setup {
+			} else if len(state.overlayStack) == 0 {
 				inputDirty = true
 			}
 		}
@@ -551,8 +625,11 @@ run_app :: proc() {
 				frameDirty = false
 			}
 		}
-		if state.mode == .Approval && app_poll_approval_safety(&state) {
+		if app_has_overlay(&state, Approval_Overlay) && app_poll_approval_safety(&state) {
 			_ = app_apply_approval_method(&state)
+			frameDirty = true
+		}
+		if app_tick_menu_overlay(&state) {
 			frameDirty = true
 		}
 		if frameDirty {
@@ -681,6 +758,31 @@ app_history_panel :: proc(state: ^App_State) -> console.Region {
 	return console.panel_interior(console.Panel{region = layout.historyPanel})
 }
 
+// app_config_setting_row_region recomputes the on-screen region of the
+// setting row at `cursor`, matching render_config_modal's layout, so a
+// Dropdown_List can anchor directly below it.
+app_config_setting_row_region :: proc(state: ^App_State, cursor: int) -> console.Region {
+	input_width := state.terminal.columns - 2
+	if input_width < 1 {
+		input_width = 1
+	}
+	input_lines := wrapped_text_line_count(
+		text_input.input_buffer_string(&state.input),
+		input_width,
+	)
+	layout := compute_app_layout(state.terminal.rows, state.terminal.columns, input_lines)
+	modal := config_modal_region(layout.historyPanel)
+	interior := console.panel_interior(console.Panel{region = modal})
+	_, _, settingsRegion, _ := config_modal_regions(interior)
+	row := settingsRegion.top_row + cursor
+	return console.Region {
+		top_row = row,
+		left_column = settingsRegion.left_column,
+		bottom_row = row,
+		right_column = settingsRegion.right_column,
+	}
+}
+
 app_input_panel :: proc(state: ^App_State) -> console.Region {
 	input_width := state.terminal.columns - 2
 	if input_width < 1 {
@@ -774,7 +876,7 @@ app_input_grapheme_at :: proc(state: ^App_State, row, column: int) -> (int, bool
 }
 
 app_scroll_history :: proc(state: ^App_State, rows: int) -> bool {
-	if state.mode != .Chat || rows == 0 {
+	if state.screen != .Chat || len(state.overlayStack) != 0 || rows == 0 {
 		return false
 	}
 
@@ -942,6 +1044,13 @@ app_handle_mouse_sequence :: proc(state: ^App_State, event: console.Mouse_Event)
 	history := console.panel_interior(console.Panel{region = layout.historyPanel})
 	switch event.kind {
 	case .Press:
+		if event.button == .Right &&
+		   event.row >= history.top_row &&
+		   event.row <= history.bottom_row &&
+		   event.column >= history.left_column &&
+		   event.column <= history.right_column {
+			return app_open_history_context_menu(state, event.row, event.column)
+		}
 		if event.button != .Left {
 			return false
 		}
@@ -1027,7 +1136,7 @@ app_handle_mouse_sequence :: proc(state: ^App_State, event: console.Mouse_Event)
 }
 
 app_handle_input_byte :: proc(state: ^App_State, b: byte) -> bool {
-	if state.mode == .Config && state.configEditing {
+	if app_has_overlay(state, Config_Overlay) && state.configEditing {
 		return app_handle_config_edit_input(state, b)
 	}
 	event, ok := term_input.input_push_byte(&state.inputState, b)
@@ -1073,17 +1182,158 @@ app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Even
 	if key, isKey := event.(term_input.Key_Event); isKey && key.event_type == .Release {
 		return false
 	}
-	if state.mode == .Approval {
-		return app_handle_approval_event_with_safety_ready(
-			state,
-			event,
-			app_approval_safety_ready(state),
-		)
-	}
-	if state.mode == .Config {
-		return app_handle_config_event(state, event)
+	if top := app_top_overlay(state); top != nil {
+		switch _ in top^ {
+		case Approval_Overlay:
+			return app_handle_approval_event_with_safety_ready(
+				state,
+				event,
+				app_approval_safety_ready(state),
+			)
+		case Config_Overlay:
+			return app_handle_config_event(state, event)
+		case widgets.Context_Menu, widgets.Dropdown_List:
+			return app_handle_menu_overlay_event(state, event)
+		}
 	}
 	return app_handle_chat_event(state, event)
+}
+
+// app_handle_menu_overlay_event routes keyboard/mouse input to whichever
+// Context_Menu/Dropdown_List sits on top of the overlay stack. Values are
+// extracted, mutated, and written back since Overlay is stored by value.
+app_handle_menu_overlay_event :: proc(state: ^App_State, event: term_input.Input_Event) -> bool {
+	if mouse, isMouse := event.(console.Mouse_Event); isMouse {
+		return app_handle_menu_overlay_mouse(state, mouse)
+	}
+	key, isKey := event.(term_input.Key_Event)
+	if !isKey {
+		return true // swallow paste/unknown while a menu is open
+	}
+	#partial switch key.code {
+	case .Escape:
+		app_pop_overlay(state)
+	case .Arrow_Up:
+		app_menu_overlay_move(state, -1)
+	case .Arrow_Down:
+		app_menu_overlay_move(state, 1)
+	case .Enter:
+		app_menu_overlay_activate(state)
+	}
+	return true
+}
+
+app_menu_overlay_move :: proc(state: ^App_State, delta: int) {
+	top := app_top_overlay(state)
+	if top == nil {
+		return
+	}
+	switch v in top^ {
+	case widgets.Context_Menu:
+		menu := v
+		widgets.dropdown_move_highlight(&menu.core, delta)
+		top^ = menu
+	case widgets.Dropdown_List:
+		list := v
+		widgets.dropdown_move_highlight(&list.core, delta)
+		top^ = list
+	case Config_Overlay, Approval_Overlay:
+	}
+}
+
+app_menu_overlay_activate :: proc(state: ^App_State) {
+	top := app_top_overlay(state)
+	if top == nil {
+		return
+	}
+	switch v in top^ {
+	case widgets.Context_Menu:
+		menu := v
+		evt, index := widgets.dropdown_activate_highlighted(&menu.core)
+		top^ = menu
+		if evt == .Selected && state.menuOnSelect != nil {
+			state.menuOnSelect(state, index)
+		}
+	case widgets.Dropdown_List:
+		list := v
+		evt, index := widgets.dropdown_activate_highlighted(&list.core)
+		top^ = list
+		if evt == .Selected && state.menuOnSelect != nil {
+			state.menuOnSelect(state, index)
+		}
+	case Config_Overlay, Approval_Overlay:
+	}
+}
+
+app_handle_menu_overlay_mouse :: proc(state: ^App_State, event: console.Mouse_Event) -> bool {
+	top := app_top_overlay(state)
+	if top == nil {
+		return true
+	}
+	switch v in top^ {
+	case widgets.Context_Menu:
+		menu := v
+		_, evt, index := widgets.dropdown_handle_mouse(&menu.core, event)
+		top^ = menu
+		app_apply_menu_overlay_event(state, evt, index)
+	case widgets.Dropdown_List:
+		list := v
+		_, evt, index := widgets.dropdown_handle_mouse(&list.core, event)
+		top^ = list
+		app_apply_menu_overlay_event(state, evt, index)
+	case Config_Overlay, Approval_Overlay:
+	}
+	return true
+}
+
+app_apply_menu_overlay_event :: proc(state: ^App_State, evt: widgets.Menu_Event, index: int) {
+	switch evt {
+	case .Cancelled:
+		app_pop_overlay(state)
+	case .Selected:
+		if state.menuOnSelect != nil {
+			state.menuOnSelect(state, index)
+		}
+	case .None:
+	}
+}
+
+// app_tick_menu_overlay advances the top overlay's selection flip animation
+// once per frame, popping it once the animation completes. Returns true if a
+// redraw is needed.
+app_tick_menu_overlay :: proc(state: ^App_State) -> bool {
+	top := app_top_overlay(state)
+	if top == nil {
+		return false
+	}
+	switch v in top^ {
+	case widgets.Context_Menu:
+		if !v.core.anim.active {
+			return false
+		}
+		menu := v
+		finished := widgets.dropdown_tick(&menu.core)
+		if finished {
+			app_pop_overlay(state)
+		} else {
+			top^ = menu
+		}
+		return true
+	case widgets.Dropdown_List:
+		if !v.core.anim.active {
+			return false
+		}
+		list := v
+		finished := widgets.dropdown_tick(&list.core)
+		if finished {
+			app_pop_overlay(state)
+		} else {
+			top^ = list
+		}
+		return true
+	case Config_Overlay, Approval_Overlay:
+	}
+	return false
 }
 
 // app_key_code_cursor_byte maps a unified Key_Code back to the legacy
@@ -1221,7 +1471,7 @@ app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) 
 }
 
 app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
-	if !state.dispatcherReady || state.mode == .Approval {
+	if !state.dispatcherReady || app_has_overlay(state, Approval_Overlay) {
 		return false
 	}
 
@@ -1244,7 +1494,7 @@ app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> boo
 	   (state.config.approvalMethod == .Always_Ask && prepared.action.effect == .Execute) {
 		app_start_approval_safety(state)
 	}
-	state.mode = .Approval
+	app_push_overlay(state, Approval_Overlay{})
 	state.status = "Permission approval required"
 	return true
 }
@@ -1396,7 +1646,7 @@ app_handle_approval_event_with_safety_ready :: proc(
 
 app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	if !state.approval.callOwned || !state.approval.preparedOwned {
-		state.mode = .Chat
+		app_pop_overlay_if(state, Approval_Overlay)
 		return
 	}
 
@@ -1420,7 +1670,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			)
 		}
 		state.status = "Tool call denied"
-		state.mode = .Chat
+		app_pop_overlay_if(state, Approval_Overlay)
 		app_clear_approval(state)
 		return
 	}
@@ -1459,7 +1709,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 
 	if agent.agent_id_is_none(state.approval.agentID) || state.approval.agentRequestID == "" {
 		state.status = "Tool call is no longer active"
-		state.mode = .Chat
+		app_pop_overlay_if(state, Approval_Overlay)
 		app_clear_approval(state)
 		return
 	}
@@ -1480,7 +1730,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		state.approval.agentID,
 		state.approval.agentRequestID,
 	)
-	state.mode = .Chat
+	app_pop_overlay_if(state, Approval_Overlay)
 	app_clear_approval(state)
 	if !started {
 		state.status = "Tool call could not start"
@@ -1540,6 +1790,35 @@ app_copy_active_selection :: proc(state: ^App_State) -> bool {
 	}
 	state.status = "No selection to copy"
 	return true
+}
+
+// app_open_history_context_menu shows a right-click Copy menu at the mouse
+// point; its items slice is freed by app_pop_overlay when the menu closes.
+app_open_history_context_menu :: proc(state: ^App_State, row, column: int) -> bool {
+	items := make([]widgets.Menu_Item, 1, context.allocator)
+	items[0] = widgets.Menu_Item {
+		label = "Copy",
+	}
+	menu := widgets.context_menu_init(
+		items,
+		widgets.Menu_Style{normal = widgets.MENU_DEFAULT_NORMAL_STYLE},
+	)
+	terminal := console.Region {
+		top_row      = 1,
+		left_column  = 1,
+		bottom_row   = state.terminal.rows,
+		right_column = state.terminal.columns,
+	}
+	widgets.context_menu_open(&menu, row, column, terminal)
+	state.menuOnSelect = app_handle_history_context_menu_selection
+	app_push_overlay(state, menu)
+	return true
+}
+
+app_handle_history_context_menu_selection :: proc(state: ^App_State, index: int) {
+	if index == 0 {
+		_ = app_copy_active_selection(state)
+	}
 }
 
 app_record_input_history :: proc(state: ^App_State, text: string) {
@@ -1656,7 +1935,7 @@ app_input_history_next :: proc(state: ^App_State) -> bool {
 app_submit_input :: proc(state: ^App_State) {
 	text := text_input.input_buffer_submit(&state.input, context.allocator)
 	defer delete(text, context.allocator)
-	if state.mode == .Setup {
+	if state.screen == .Setup {
 		app_submit_setup_input(state, text)
 		return
 	}
@@ -1766,7 +2045,7 @@ app_complete_setup :: proc(state: ^App_State) {
 		models[:],
 	)
 
-	state.mode = .Chat
+	state.screen = .Chat
 	if settings.save_config_to_file(state.configHome, state.config) == .None {
 		state.status = "Setup complete; config saved"
 	} else {
@@ -1787,7 +2066,7 @@ app_show_config :: proc(state: ^App_State) {
 	state.configEditing = false
 	widgets.text_editor_clear(&state.configEditor)
 	app_rebuild_config_settings(state)
-	state.mode = .Config
+	app_push_overlay(state, Config_Overlay{})
 	state.status = "Config: arrows/Tab, Enter, Esc"
 }
 
@@ -2054,7 +2333,7 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 	case .Safety_Model:
 		app_select_config_safety_model(state, setting.modelIndex)
 	case .Approval_Method:
-		app_cycle_approval_method(state)
+		app_open_approval_method_dropdown(state)
 	case .System_Prompt_Mode:
 		app_cycle_system_prompt_mode(state)
 	case .Reset_System_Prompt:
@@ -2105,7 +2384,7 @@ app_refresh_skills :: proc(state: ^App_State) {
 }
 
 app_cancel_config :: proc(state: ^App_State) {
-	state.mode = .Chat
+	app_pop_overlay_if(state, Config_Overlay)
 	state.status = "Config closed"
 }
 
@@ -2145,17 +2424,45 @@ app_cycle_config_provider_type :: proc(state: ^App_State, providerIndex: int) {
 	app_apply_config_change(state, "Provider type saved")
 }
 
-app_cycle_approval_method :: proc(state: ^App_State) {
-	switch state.config.approvalMethod {
-	case .Always_Ask:
-		state.config.approvalMethod = .Approve_Safe
-	case .Approve_Safe:
-		state.config.approvalMethod = .Approve_All
-	case .Approve_All:
-		state.config.approvalMethod = .Deny_All
-	case .Deny_All:
-		state.config.approvalMethod = .Always_Ask
+app_approval_method_dropdown_options := [4]settings.Approval_Method {
+	.Always_Ask,
+	.Approve_Safe,
+	.Approve_All,
+	.Deny_All,
+}
+
+// app_open_approval_method_dropdown opens a Dropdown_List below the Approval
+// Method setting row; its items slice is freed by app_pop_overlay on close.
+app_open_approval_method_dropdown :: proc(state: ^App_State) {
+	options := app_approval_method_dropdown_options[:]
+	items := make([]widgets.Menu_Item, len(options), context.allocator)
+	for method, index in options {
+		items[index] = widgets.Menu_Item {
+			label = approval_method_label(method),
+		}
 	}
+	list := widgets.dropdown_list_init(
+		items,
+		widgets.Menu_Style{normal = widgets.MENU_DEFAULT_NORMAL_STYLE},
+	)
+	anchor := app_config_setting_row_region(state, state.configSettingCursor)
+	terminal := console.Region {
+		top_row      = 1,
+		left_column  = 1,
+		bottom_row   = state.terminal.rows,
+		right_column = state.terminal.columns,
+	}
+	widgets.dropdown_list_open(&list, anchor, terminal)
+	state.menuOnSelect = app_handle_approval_method_dropdown_selection
+	app_push_overlay(state, list)
+}
+
+app_handle_approval_method_dropdown_selection :: proc(state: ^App_State, index: int) {
+	options := app_approval_method_dropdown_options[:]
+	if index < 0 || index >= len(options) {
+		return
+	}
+	state.config.approvalMethod = options[index]
 	app_apply_config_change(state, "Approval method saved")
 }
 

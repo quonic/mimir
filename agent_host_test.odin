@@ -186,7 +186,7 @@ test_agent_host_approval_retains_runtime_request_identity :: proc(t: ^testing.T)
 		),
 		"expected approval modal",
 	)
-	assert(state.mode == .Approval, "expected approval mode")
+	assert(app_has_overlay(&state, Approval_Overlay), "expected approval mode")
 	assert(state.approval.agentID == agentID, "expected approval agent ID")
 	assert(state.approval.agentRequestID == "call-1", "expected approval request ID")
 	entry := state.history[len(state.history) - 1]
@@ -229,7 +229,7 @@ test_agent_approval_denial_resolves_the_runtime_request :: proc(t: ^testing.T) {
 		"expected approval modal",
 	)
 	app_apply_approval_choice(&state, .Deny)
-	assert(state.mode == .Chat, "expected approval denial to return to chat")
+	assert(len(state.overlayStack) == 0, "expected approval denial to return to chat")
 	assert(state.status == "Tool call denied", "expected denial status")
 	entry := state.history[len(state.history) - 1]
 	assert(entry.role == .Tool, "expected denied tool history entry")
@@ -290,7 +290,7 @@ test_agent_allow_once_executes_and_resumes_runtime :: proc(t: ^testing.T) {
 		"expected runtime tool request",
 	)
 	assert(app_poll_agent_host(&state), "expected tool request to open approval")
-	assert(state.mode == .Approval, "expected approval mode")
+	assert(app_has_overlay(&state, Approval_Overlay), "expected approval mode")
 	app_apply_approval_choice(&state, .Allow_Once)
 	assert(state.toolExecution.active, "expected approved tool execution to start")
 	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
@@ -328,7 +328,7 @@ test_agent_deny_all_resolves_request_without_modal :: proc(t: ^testing.T) {
 	)
 
 	assert(app_poll_agent_host(&state), "expected automatic denial to process request")
-	assert(state.mode == .Chat, "expected automatic denial not to open modal")
+	assert(len(state.overlayStack) == 0, "expected automatic denial not to open modal")
 	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
 	assert(runtimeOK && runtimeState == .Streaming, "expected denied request to resume agent")
 	_ = t
@@ -393,7 +393,7 @@ test_agent_approve_all_starts_tool_without_modal :: proc(t: ^testing.T) {
 	)
 
 	assert(app_poll_agent_host(&state), "expected automatic approval to process request")
-	assert(state.mode == .Chat, "expected automatic approval not to open modal")
+	assert(len(state.overlayStack) == 0, "expected automatic approval not to open modal")
 	assert(state.toolExecution.active, "expected automatic approval to start tool execution")
 	runtimeState, runtimeOK := agent.runtime_state(&state.agentHost.runtime, agentID)
 	assert(runtimeOK && runtimeState == .Executing_Tool, "expected runtime tool execution state")
@@ -485,7 +485,7 @@ test_agent_tool_completion_starts_queued_tool_request :: proc(t: ^testing.T) {
 	for !app_poll_tool_execution(&state) {
 	}
 	assert(app_poll_agent_host(&state), "expected queued tool request to open approval")
-	assert(state.mode == .Approval, "expected queued tool approval")
+	assert(app_has_overlay(&state, Approval_Overlay), "expected queued tool approval")
 	assert(state.approval.agentRequestID == "call-2", "expected second tool request")
 	_ = t
 }

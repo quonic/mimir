@@ -26,6 +26,84 @@ _send_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 }
 
 @(test)
+test_history_right_click_opens_context_menu :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	append_history(&state, .User, "hello world")
+
+	handled := app_handle_mouse_sequence(
+		&state,
+		console.Mouse_Event{row = 2, column = 3, kind = .Press, button = .Right},
+	)
+	assert(handled, "expected right-click in history panel to be handled")
+	assert(app_has_overlay(&state, widgets.Context_Menu), "expected a context menu to open")
+	_ = t
+}
+
+@(test)
+test_history_context_menu_selects_copy_immediately :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	text_input.input_buffer_push_text(&state.input, "abc")
+	text_input.input_buffer_select_range(&state.input, 0, 3)
+
+	assert(
+		app_handle_mouse_sequence(
+			&state,
+			console.Mouse_Event{row = 2, column = 3, kind = .Press, button = .Right},
+		),
+		"expected right-click to open the context menu",
+	)
+	app_menu_overlay_activate(&state) // highlight defaults to the only item, "Copy"
+	assert(state.status == "Copied input selection", "expected copy action to run immediately")
+	assert(
+		app_has_overlay(&state, widgets.Context_Menu),
+		"expected menu to stay open during the flip animation",
+	)
+	_ = t
+}
+
+@(test)
+test_history_context_menu_press_outside_cancels :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	assert(
+		app_handle_mouse_sequence(
+			&state,
+			console.Mouse_Event{row = 2, column = 3, kind = .Press, button = .Right},
+		),
+		"expected right-click to open the context menu",
+	)
+	assert(
+		app_handle_menu_overlay_mouse(
+			&state,
+			console.Mouse_Event{row = 1, column = 1, kind = .Press, button = .Left},
+		),
+		"expected press outside the menu to be handled",
+	)
+	assert(len(state.overlayStack) == 0, "expected press outside the menu to cancel it")
+	_ = t
+}
+
+@(test)
+test_config_approval_method_dropdown_escape_leaves_method_unchanged :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(app_activate_config_setting(&state), "expected approval method activation")
+	assert(app_has_overlay(&state, widgets.Dropdown_List), "expected dropdown to open")
+	app_pop_overlay(&state) // simulate Escape
+	assert(state.config.approvalMethod == .Always_Ask, "expected approval method unchanged")
+	assert(app_has_overlay(&state, Config_Overlay), "expected config modal still open")
+	_ = t
+}
+
+@(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -37,13 +115,13 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 		),
 		"expected write call to open approval modal",
 	)
-	assert(state.mode == .Approval, "expected approval mode")
+	assert(app_has_overlay(&state, Approval_Overlay), "expected approval mode")
 	assert(state.approval.choice == .Allow_Once, "expected once approval selected initially")
 	assert(app_handle_approval_input(&state, 'j'), "expected approval choice movement")
 	assert(state.approval.choice == .Allow_Session, "expected session approval selected")
 	assert(!app_handle_approval_input(&state, 0x1b), "expected escape sequence start")
 	assert(app_handle_approval_input(&state, 'x'), "expected escape to deny approval")
-	assert(state.mode == .Chat, "expected denial to restore chat mode")
+	assert(len(state.overlayStack) == 0, "expected denial to restore chat mode")
 	assert(state.status == "Tool call denied", "expected escape denial status")
 	_ = t
 }
@@ -64,7 +142,10 @@ test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
 	for inputIndex := 0; inputIndex < len(motion); inputIndex += 1 {
 		app_handle_input_byte(&state, motion[inputIndex])
 	}
-	assert(state.mode == .Approval, "expected mouse motion to keep approval modal open")
+	assert(
+		app_has_overlay(&state, Approval_Overlay),
+		"expected mouse motion to keep approval modal open",
+	)
 	assert(
 		state.approval.choice == .Allow_Once,
 		"expected mouse motion coordinates to leave the approval choice unchanged",
@@ -196,13 +277,16 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		!app_handle_approval_input_with_safety_ready(&state, '\r', false),
 		"expected pending safety analysis to ignore approval",
 	)
-	assert(state.mode == .Approval, "expected pending analysis to keep modal open")
+	assert(
+		app_has_overlay(&state, Approval_Overlay),
+		"expected pending analysis to keep modal open",
+	)
 	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
 
 	approval_safety.mark_unavailable(&state.approval.safety)
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
 	assert(app_handle_approval_input(&state, '\r'), "expected unavailable advice to allow denial")
-	assert(state.mode == .Chat, "expected denial after unavailable advice to close modal")
+	assert(len(state.overlayStack) == 0, "expected denial after unavailable advice to close modal")
 	_ = t
 }
 
@@ -397,7 +481,7 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 
 	state := app_init_with_home(home, false, context.temp_allocator)
 	defer app_destroy(&state)
-	state.mode = .Chat
+	state.screen = .Chat
 	assert(
 		len(state.inputHistory) == 1,
 		"expected persistent history to load during initialization",
@@ -435,7 +519,7 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 
 	text_input.input_buffer_push_text(&state.input, "/config")
 	app_submit_input(&state)
-	assert(state.mode == .Config, "expected /config to switch app mode")
+	assert(app_has_overlay(&state, Config_Overlay), "expected /config to switch app mode")
 	assert(state.status == "Config: arrows/Tab, Enter, Esc", "expected /config modal status")
 	assert(len(state.inputHistory) == 0, "expected commands to stay out of input history")
 
@@ -1318,7 +1402,7 @@ test_config_modal_opens_split_provider_settings :: proc(t: ^testing.T) {
 	app_show_config(&state)
 	sequence := render_app_frame_sequence(&state, 24, 100, context.temp_allocator)
 
-	assert(state.mode == .Config, "expected config modal mode")
+	assert(app_has_overlay(&state, Config_Overlay), "expected config modal mode")
 	assert(state.configCategory == .Providers, "expected providers category by default")
 	assert(len(state.configSettings) >= 10, "expected provider controls")
 	assert(contains_string(sequence, " Configuration "), "expected config modal title")
@@ -1594,7 +1678,13 @@ test_config_modal_cycles_approval_method :: proc(t: ^testing.T) {
 		"expected initial approval method label",
 	)
 	assert(app_activate_config_setting(&state), "expected approval method activation")
-	assert(state.config.approvalMethod == .Approve_Safe, "expected approval method to cycle")
+	assert(
+		app_has_overlay(&state, widgets.Dropdown_List),
+		"expected approval method dropdown to open",
+	)
+	app_menu_overlay_move(&state, 1) // Always ask -> Approve SAFE
+	app_menu_overlay_activate(&state)
+	assert(state.config.approvalMethod == .Approve_Safe, "expected selected approval method")
 	assert(state.status == "Approval method saved", "expected approval method save status")
 	_ = t
 }
@@ -1738,7 +1828,7 @@ test_render_app_frame_draws_input_cursor_cell :: proc(t: ^testing.T) {
 test_render_app_frame_draws_setup_input_cursor_cell :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	state.mode = .Setup
+	state.screen = .Setup
 	text_input.input_buffer_push_text(&state.input, "ab")
 	text_input.input_buffer_move_cursor_left(&state.input)
 	state.cursorBlinkOn = true
@@ -2023,7 +2113,10 @@ test_default_app_state_has_registries :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	assert(state.mode == .Chat, "expected app to start in chat mode")
+	assert(
+		state.screen == .Chat && len(state.overlayStack) == 0,
+		"expected app to start in chat mode",
+	)
 	assert(state.terminal.rows == 24, "expected default terminal rows")
 	assert(state.terminal.columns == 80, "expected default terminal columns")
 	assert(len(state.config.providers) == 1, "expected default Ollama provider")
@@ -2043,7 +2136,7 @@ test_app_init_with_missing_config_enters_setup_without_probe :: proc(t: ^testing
 	state := app_init_with_home(home, false, context.temp_allocator)
 	defer app_destroy(&state)
 
-	assert(state.mode == .Setup, "expected missing config without probe to enter setup")
+	assert(state.screen == .Setup, "expected missing config without probe to enter setup")
 	assert(state.setupStep == .Endpoint, "expected setup to ask for endpoint first")
 	assert(state.status == "Setup: enter Ollama endpoint", "expected setup status")
 	_ = t
@@ -2069,7 +2162,10 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 	state := app_init_with_home(home, false, context.temp_allocator)
 	defer app_destroy(&state)
 
-	assert(state.mode == .Chat, "expected saved config to start in chat mode")
+	assert(
+		state.screen == .Chat && len(state.overlayStack) == 0,
+		"expected saved config to start in chat mode",
+	)
 	assert(state.config.selectedModel == "llama3.2", "expected saved selected model")
 	assert(len(state.config.providers) == 1, "expected saved provider to load")
 	assert(state.status == "Config loaded", "expected loaded config status")
@@ -2080,13 +2176,13 @@ test_app_init_with_saved_config_loads_chat_mode :: proc(t: ^testing.T) {
 test_setup_endpoint_submission_prompts_for_api_key :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	state.mode = .Setup
+	state.screen = .Setup
 	state.setupStep = .Endpoint
 
 	text_input.input_buffer_push_text(&state.input, "http://localhost:11434")
 	app_submit_input(&state)
 
-	assert(state.mode == .Setup, "expected setup mode to continue")
+	assert(state.screen == .Setup, "expected setup mode to continue")
 	assert(state.setupStep == .API_Key, "expected setup to advance to API key")
 	assert(state.setupEndpoint == "http://localhost:11434", "expected setup endpoint capture")
 	assert(

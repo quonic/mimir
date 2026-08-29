@@ -8,6 +8,7 @@ import "core:os"
 import "core:strings"
 import "settings"
 import "text_input"
+import "widgets"
 
 headless_json_flag_present :: proc(args: []string) -> bool {
 	for arg in args[1:] {
@@ -306,7 +307,7 @@ headless_write_status :: proc(kind: string, request: ^Headless_Request, state: ^
 	headless_object_set(
 		&object,
 		"mode",
-		headless_string_value(headless_mode_name(state.mode), context.temp_allocator),
+		headless_string_value(headless_mode_name(state), context.temp_allocator),
 		context.temp_allocator,
 	)
 	headless_object_set(
@@ -633,16 +634,27 @@ headless_write_json_object :: proc(object: json.Object) {
 	}
 }
 
-headless_mode_name :: proc(mode: App_Mode) -> string {
-	switch mode {
+// headless_mode_name reports the top-most overlay if one is active,
+// otherwise the current full-screen App_Screen. Breaking change from the
+// old App_Mode names is acceptable per this alpha-stage project.
+headless_mode_name :: proc(state: ^App_State) -> string {
+	if top := app_top_overlay(state); top != nil {
+		switch _ in top^ {
+		case Config_Overlay:
+			return "config"
+		case Approval_Overlay:
+			return "approval"
+		case widgets.Context_Menu:
+			return "context_menu"
+		case widgets.Dropdown_List:
+			return "dropdown_list"
+		}
+	}
+	switch state.screen {
 	case .Chat:
 		return "chat"
-	case .Config:
-		return "config"
 	case .Setup:
 		return "setup"
-	case .Approval:
-		return "approval"
 	}
 	return "unknown"
 }

@@ -124,10 +124,21 @@ render_app_frame_sequence :: proc(
 		state,
 	)
 	render_input(&batch, console.panel_interior(console.Panel{region = layout.inputPanel}), state)
-	if state.mode == .Config {
-		render_config_modal(&batch, layout.historyPanel, state)
-	} else if state.mode == .Approval {
-		render_approval_modal(&batch, layout.historyPanel, state)
+	for i := 0; i < len(state.overlayStack); i += 1 {
+		switch v in state.overlayStack[i] {
+		case Config_Overlay:
+			render_config_modal(&batch, layout.historyPanel, state)
+		case Approval_Overlay:
+			render_approval_modal(&batch, layout.historyPanel, state)
+		case widgets.Context_Menu:
+			menu := v
+			widgets.dropdown_core_render(&batch, &menu.core)
+			state.overlayStack[i] = menu
+		case widgets.Dropdown_List:
+			list := v
+			widgets.dropdown_core_render(&batch, &list.core)
+			state.overlayStack[i] = list
+		}
 	}
 	render_status(&batch, layout.statusBar, state)
 
@@ -332,7 +343,7 @@ render_app_history_panel_sequence :: proc(
 }
 
 render_history :: proc(batch: ^console.Batch, region: console.Region, state: ^App_State) {
-	if state.mode == .Setup {
+	if state.screen == .Setup {
 		render_setup(batch, region, state)
 		return
 	}
@@ -1115,7 +1126,7 @@ render_input :: proc(batch: ^console.Batch, region: console.Region, state: ^App_
 		batch,
 		region,
 		&state.input,
-		(state.mode == .Chat || state.mode == .Setup) && state.cursorBlinkOn,
+		len(state.overlayStack) == 0 && state.cursorBlinkOn,
 	)
 }
 
