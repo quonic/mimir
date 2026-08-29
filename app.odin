@@ -7,6 +7,7 @@ import "approval_safety"
 import "code_index"
 import "commands"
 import "console"
+import term_input "console/input"
 import "core:c"
 import "core:fmt"
 import "core:mem"
@@ -40,13 +41,6 @@ Approval_Choice :: enum int {
 	Deny,
 }
 
-Approval_Input_State :: enum int {
-	Ready = 0,
-	Escape,
-	CSI,
-	CSI_Mouse,
-}
-
 Approval_State :: struct {
 	call:           tool_policy.Tool_Call,
 	callOwned:      bool,
@@ -57,7 +51,6 @@ Approval_State :: struct {
 	agentRequestID: string,
 	safety:         approval_safety.State,
 	choice:         Approval_Choice,
-	input:          Approval_Input_State,
 }
 
 App_Setup_Step :: enum int {
@@ -116,12 +109,6 @@ Config_Focus :: enum int {
 	Settings,
 }
 
-Config_Input_State :: enum int {
-	Ready = 0,
-	Escape,
-	CSI,
-}
-
 Config_Setting_Kind :: enum int {
 	Checkbox = 0,
 	Single_Select,
@@ -163,28 +150,11 @@ Config_Setting :: struct {
 	skillIndex:    int,
 }
 
-Input_Escape_State :: enum int {
-	Ready = 0,
-	Escape,
-	CSI,
-	CSI_Parameter,
-	CSI_Modifier,
-	CSI_Mouse,
-	Paste,
-}
-
 App_State :: struct {
 	allocator:              mem.Allocator,
 	mode:                   App_Mode,
 	input:                  text_input.Input_Buffer,
-	inputEscape:            Input_Escape_State,
-	inputEscapeParameter:   int,
-	inputEscapeModifier:    int,
-	inputMouseSequence:     [256]byte,
-	inputMouseSequenceLen:  int,
-	inputPaste:             [dynamic]byte,
-	inputUTF8Pending:       [utf8.UTF_MAX]byte,
-	inputUTF8PendingLen:    int,
+	inputState:             term_input.Input_State,
 	inputHistory:           [dynamic]string,
 	inputHistoryCursor:     int,
 	inputHistoryDraft:      string,
@@ -221,7 +191,6 @@ App_State :: struct {
 	safetyModelOwned:       bool,
 	configCategory:         Config_Category,
 	configFocus:            Config_Focus,
-	configInput:            Config_Input_State,
 	configSettings:         [dynamic]Config_Setting,
 	configSettingCursor:    int,
 	configProviderIndex:    int,
@@ -246,7 +215,6 @@ app_init_with_home :: proc(
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
 	state.input = text_input.input_buffer_init(allocator)
-	state.inputPaste = make([dynamic]byte, 0, 0, allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
 	state.cursorBlinkOn = true
@@ -412,7 +380,7 @@ app_destroy :: proc(state: ^App_State) {
 	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
 	text_input.input_buffer_destroy(&state.input)
-	delete(state.inputPaste)
+	delete(state.inputState.paste_buf)
 	for entry in state.inputHistory {
 		delete(entry, state.allocator)
 	}
@@ -511,6 +479,7 @@ run_app :: proc() {
 	defer console.set_mouse_tracking_sgr(.Drag, false)
 	_, _ = console.set_bracketed_paste_mode(true)
 	defer console.set_bracketed_paste_mode(false)
+	_, _ = console.write(term_input.input_begin_protocol_detection(&state.inputState))
 
 	app_refresh_terminal_size(&state)
 	render_app(&state)
@@ -629,19 +598,13 @@ app_wait_for_input :: proc(timeout_ms: int) -> (ready, ok: bool) {
 }
 
 app_flush_pending_input :: proc(state: ^App_State) -> bool {
-	if state.inputEscape == .Paste {
-		app_reset_input_paste(state)
-		return true
+	event, ok := term_input.input_flush(&state.inputState)
+	if !ok {
+		return false
 	}
-	if state.inputEscape != .Ready {
-		app_reset_input_escape(state)
-		return true
-	}
-	if state.inputUTF8PendingLen > 0 {
-		app_reset_input_utf8_pending(state)
-		return true
-	}
-	return false
+	defer app_free_input_event(event)
+	_ = app_dispatch_input_event(state, event)
+	return true
 }
 
 append_history :: proc(state: ^App_State, role: History_Role, content: string) {
@@ -945,12 +908,7 @@ app_scroll_history_page :: proc(state: ^App_State, direction: int) -> bool {
 	return app_scroll_history(state, direction * console.region_height(app_history_panel(state)))
 }
 
-app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
-	event, event_err := console.parse_sgr_mouse_event_response(sequence)
-	if event_err != .None {
-		return false
-	}
-
+app_handle_mouse_sequence :: proc(state: ^App_State, event: console.Mouse_Event) -> bool {
 	input_width := state.terminal.columns - 2
 	if input_width < 1 {
 		input_width = 1
@@ -1066,76 +1024,162 @@ app_handle_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
 	return false
 }
 
-app_handle_input_byte :: proc(state: ^App_State, input: byte) -> bool {
+app_handle_input_byte :: proc(state: ^App_State, b: byte) -> bool {
+	if state.mode == .Config && state.configEditing {
+		return app_handle_config_edit_input(state, b)
+	}
+	event, ok := term_input.input_push_byte(&state.inputState, b)
+	if !ok {
+		return false
+	}
+	defer app_free_input_event(event)
+	return app_dispatch_input_event(state, event)
+}
+
+// app_free_input_event releases memory owned by events that carry a heap
+// allocation (Paste_Event.text, Unknown_Event.raw); Key_Event and
+// console.Mouse_Event are plain values with nothing to free.
+app_free_input_event :: proc(event: term_input.Input_Event) {
+	switch e in event {
+	case term_input.Paste_Event:
+		delete(e.text, context.allocator)
+	case term_input.Unknown_Event:
+		delete(e.raw, context.allocator)
+	case term_input.Key_Event, console.Mouse_Event:
+	}
+}
+
+app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Event) -> bool {
 	if state.mode == .Approval {
-		return app_handle_approval_input(state, input)
+		return app_handle_approval_event_with_safety_ready(
+			state,
+			event,
+			app_approval_safety_ready(state),
+		)
 	}
 	if state.mode == .Config {
-		return app_handle_config_input(state, input)
+		return app_handle_config_event(state, event)
 	}
+	return app_handle_chat_event(state, event)
+}
 
-	if state.inputEscape != .Ready {
-		return app_handle_input_escape_byte(state, input)
+// app_key_code_cursor_byte maps a unified Key_Code back to the legacy
+// C/D/H/F letters app_handle_cursor_escape already knows how to interpret.
+app_key_code_cursor_byte :: proc(code: term_input.Key_Code) -> byte {
+	#partial switch code {
+	case .Arrow_Right:
+		return 'C'
+	case .Arrow_Left:
+		return 'D'
+	case .Home:
+		return 'H'
+	case .End:
+		return 'F'
 	}
+	return 0
+}
 
-	switch input {
-	case 1:
-		app_reset_input_utf8_pending(state)
-		text_input.input_buffer_select_all(&state.input)
-		return true
-	case 3:
-		app_reset_input_utf8_pending(state)
-		return app_copy_active_selection(state)
-	case 4:
-		app_reset_input_utf8_pending(state)
-		state.shouldQuit = true
-		state.status = "Exiting"
-		return true
-	case 5:
-		app_reset_input_utf8_pending(state)
-		text_input.input_buffer_move_cursor_end(&state.input)
-		return true
-	case 24:
-		app_reset_input_utf8_pending(state)
-		if text_input.input_buffer_has_selection(&state.input) {
-			_, _ = console.osc52_copy_to_clipboard(
-				text_input.input_buffer_selection_text(&state.input),
-			)
+app_handle_chat_key_event :: proc(state: ^App_State, key: term_input.Key_Event) -> bool {
+	if .Ctrl in key.modifiers && key.modifiers - {.Ctrl} == {} && key.code == .Char {
+		switch key.char {
+		case 'a':
+			text_input.input_buffer_select_all(&state.input)
+			return true
+		case 'c':
+			return app_copy_active_selection(state)
+		case 'd':
+			state.shouldQuit = true
+			state.status = "Exiting"
+			return true
+		case 'e':
+			text_input.input_buffer_move_cursor_end(&state.input)
+			return true
+		case 'j':
 			app_reset_input_history_browse(state)
-			text_input.input_buffer_delete_selection(&state.input)
-			state.status = "Cut input selection"
+			text_input.input_buffer_push_byte(&state.input, '\n')
+			return true
+		case 'x':
+			if text_input.input_buffer_has_selection(&state.input) {
+				_, _ = console.osc52_copy_to_clipboard(
+					text_input.input_buffer_selection_text(&state.input),
+				)
+				app_reset_input_history_browse(state)
+				text_input.input_buffer_delete_selection(&state.input)
+				state.status = "Cut input selection"
+				return true
+			}
+			if app_has_history_selection(state) {
+				selected := app_history_selection_text(state, context.allocator)
+				_, _ = console.osc52_copy_to_clipboard(selected)
+				delete(selected, context.allocator)
+				state.status = "Copied history selection"
+				return true
+			}
+		}
+		return false
+	}
+
+	#partial switch key.code {
+	case .Char:
+		if .Alt in key.modifiers {
 			return true
 		}
-		if app_has_history_selection(state) {
-			selected := app_history_selection_text(state, context.allocator)
-			_, _ = console.osc52_copy_to_clipboard(selected)
-			delete(selected, context.allocator)
-			state.status = "Copied history selection"
-			return true
-		}
-	case 8, 127:
-		app_reset_input_utf8_pending(state)
 		app_reset_input_history_browse(state)
-		return text_input.input_buffer_backspace(&state.input)
-	case '\r':
-		app_reset_input_utf8_pending(state)
+		charBytes, charLen := utf8.encode_rune(key.char)
+		text_input.input_buffer_push_text(&state.input, string(charBytes[:charLen]))
+		return true
+	case .Tab:
+		app_reset_input_history_browse(state)
+		text_input.input_buffer_push_byte(&state.input, '\t')
+		return true
+	case .Enter:
 		app_submit_input(state)
 		return true
-	case '\n':
-		app_reset_input_utf8_pending(state)
+	case .Backspace:
 		app_reset_input_history_browse(state)
-		text_input.input_buffer_push_byte(&state.input, '\n')
+		return text_input.input_buffer_backspace(&state.input)
+	case .Escape:
 		return true
-	case 0x1b:
-		app_reset_input_utf8_pending(state)
-		state.inputEscapeParameter = 0
-		state.inputEscape = .Escape
-		return false
-	case:
-		if input >= 32 || input == '\t' {
-			app_reset_input_history_browse(state)
-			return app_handle_text_input_byte(state, input)
+	case .Arrow_Up:
+		if key.modifiers == {} {
+			return app_input_history_previous(state)
 		}
+		return true
+	case .Arrow_Down:
+		if key.modifiers == {} {
+			return app_input_history_next(state)
+		}
+		return true
+	case .Arrow_Right, .Arrow_Left, .Home, .End:
+		extend := key.modifiers == {.Shift}
+		return app_handle_cursor_escape(state, app_key_code_cursor_byte(key.code), extend)
+	case .Page_Up:
+		return app_scroll_history_page(state, 1)
+	case .Page_Down:
+		return app_scroll_history_page(state, -1)
+	case .Delete:
+		return text_input.input_buffer_delete_at_cursor(&state.input)
+	case .Insert:
+		if .Ctrl in key.modifiers {
+			return app_copy_active_selection(state)
+		}
+		return true
+	case:
+	}
+	return false
+}
+
+app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) -> bool {
+	switch e in event {
+	case term_input.Key_Event:
+		return app_handle_chat_key_event(state, e)
+	case console.Mouse_Event:
+		return app_handle_mouse_sequence(state, e)
+	case term_input.Paste_Event:
+		app_reset_input_history_browse(state)
+		text_input.input_buffer_push_text(&state.input, e.text)
+		return true
+	case term_input.Unknown_Event:
 	}
 	return false
 }
@@ -1160,7 +1204,6 @@ app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> boo
 	state.approval.preparedOwned = true
 	state.approval.historyIndex = -1
 	state.approval.choice = .Allow_Once
-	state.approval.input = .Ready
 	if state.config.approvalMethod == .Approve_Safe ||
 	   (state.config.approvalMethod == .Always_Ask && prepared.action.effect == .Execute) {
 		app_start_approval_safety(state)
@@ -1226,84 +1269,91 @@ app_move_approval_choice :: proc(state: ^App_State, delta: int) {
 	state.approval.choice = Approval_Choice(choice)
 }
 
-app_handle_approval_input :: proc(state: ^App_State, input: byte) -> bool {
-	return app_handle_approval_input_with_safety_ready(
-		state,
-		input,
-		app_approval_safety_ready(state),
-	)
+app_handle_approval_input :: proc(state: ^App_State, b: byte) -> bool {
+	return app_handle_approval_input_with_safety_ready(state, b, app_approval_safety_ready(state))
 }
 
+// app_handle_approval_input_with_safety_ready is a byte-based wrapper kept for
+// tests that need to force a specific safetyReady value; it pushes the byte
+// through the same unified parser used by the real input loop.
 app_handle_approval_input_with_safety_ready :: proc(
 	state: ^App_State,
-	input: byte,
+	b: byte,
+	safetyReady: bool,
+) -> bool {
+	event, ok := term_input.input_push_byte(&state.inputState, b)
+	if !ok {
+		return false
+	}
+	defer app_free_input_event(event)
+	return app_handle_approval_event_with_safety_ready(state, event, safetyReady)
+}
+
+app_handle_approval_event_with_safety_ready :: proc(
+	state: ^App_State,
+	event: term_input.Input_Event,
 	safetyReady: bool,
 ) -> bool {
 	if !safetyReady {
 		return false
 	}
 
-	switch state.approval.input {
-	case .Escape:
-		if input == '[' {
-			state.approval.input = .CSI
-			return false
-		}
-		app_apply_approval_choice(state, .Deny)
-		return true
-	case .CSI:
-		if input == '<' {
-			state.approval.input = .CSI_Mouse
-			return false
-		}
-		state.approval.input = .Ready
-		switch input {
-		case 'A':
-			app_move_approval_choice(state, -1)
-			return true
-		case 'B':
-			app_move_approval_choice(state, 1)
-			return true
-		}
+	key, is_key := event.(term_input.Key_Event)
+	if !is_key {
+		// Mouse motion, paste, and unrecognized sequences are swallowed while
+		// the approval modal is open, matching the previous CSI_Mouse no-op.
 		return false
-	case .CSI_Mouse:
-		if input == 'M' || input == 'm' {
-			state.approval.input = .Ready
-		}
-		return false
-	case .Ready:
 	}
 
-	switch input {
-	case 0x1b:
-		state.approval.input = .Escape
-		return false
-	case 'j', 'J':
-		app_move_approval_choice(state, 1)
+	if .Alt in key.modifiers {
+		// An unexpected Alt-modified/garbled escape during an approval prompt
+		// denies rather than risk an accidental approval.
+		app_apply_approval_choice(state, .Deny)
 		return true
-	case 'k', 'K':
-		app_move_approval_choice(state, -1)
-		return true
-	case '1':
-		state.approval.choice = .Allow_Once
-		return true
-	case '2':
-		state.approval.choice = .Allow_Session
-		return true
-	case '3':
-		state.approval.choice = .Allow_Always
-		return true
-	case '4':
-		state.approval.choice = .Deny
-		return true
-	case '\r':
-		app_apply_approval_choice(state, state.approval.choice)
-		return true
-	case 3, 4:
+	}
+
+	if .Ctrl in key.modifiers && key.code == .Char && (key.char == 'c' || key.char == 'd') {
 		app_apply_approval_choice(state, .Deny)
 		state.shouldQuit = true
 		state.status = "Exiting"
 		return true
+	}
+
+	#partial switch key.code {
+	case .Escape:
+		app_apply_approval_choice(state, .Deny)
+		return true
+	case .Arrow_Down:
+		app_move_approval_choice(state, 1)
+		return true
+	case .Arrow_Up:
+		app_move_approval_choice(state, -1)
+		return true
+	case .Enter:
+		app_apply_approval_choice(state, state.approval.choice)
+		return true
+	case .Char:
+		switch key.char {
+		case 'j', 'J':
+			app_move_approval_choice(state, 1)
+			return true
+		case 'k', 'K':
+			app_move_approval_choice(state, -1)
+			return true
+		case '1':
+			state.approval.choice = .Allow_Once
+			return true
+		case '2':
+			state.approval.choice = .Allow_Session
+			return true
+		case '3':
+			state.approval.choice = .Allow_Always
+			return true
+		case '4':
+			state.approval.choice = .Deny
+			return true
+		}
+	case:
 	}
 	return false
 }
@@ -1401,83 +1451,6 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 	}
 }
 
-app_handle_text_input_byte :: proc(state: ^App_State, input: byte) -> bool {
-	if input < utf8.RUNE_SELF {
-		app_reset_input_utf8_pending(state)
-		text_input.input_buffer_push_byte(&state.input, input)
-		return true
-	}
-
-	if state.inputUTF8PendingLen == 0 {
-		if app_utf8_sequence_length(input) == 0 {
-			return false
-		}
-		state.inputUTF8Pending[0] = input
-		state.inputUTF8PendingLen = 1
-	} else {
-		if input < utf8.LOCB ||
-		   input > utf8.HICB ||
-		   state.inputUTF8PendingLen >= len(state.inputUTF8Pending) {
-			app_reset_input_utf8_pending(state)
-			return false
-		}
-		state.inputUTF8Pending[state.inputUTF8PendingLen] = input
-		state.inputUTF8PendingLen += 1
-	}
-
-	expectedLength := app_utf8_sequence_length(state.inputUTF8Pending[0])
-	if expectedLength == 0 {
-		app_reset_input_utf8_pending(state)
-		return false
-	}
-	if state.inputUTF8PendingLen < expectedLength {
-		return false
-	}
-
-	_, width := utf8.decode_rune(state.inputUTF8Pending[:expectedLength])
-	if width != expectedLength {
-		app_reset_input_utf8_pending(state)
-		return false
-	}
-
-	text_input.input_buffer_push_text(
-		&state.input,
-		string(state.inputUTF8Pending[:expectedLength]),
-	)
-	app_reset_input_utf8_pending(state)
-	return true
-}
-
-app_reset_input_utf8_pending :: proc(state: ^App_State) {
-	state.inputUTF8PendingLen = 0
-}
-
-app_utf8_sequence_length :: proc(input: byte) -> int {
-	switch {
-	case input < utf8.RUNE_SELF:
-		return 1
-	case input >= 0xc2 && input <= 0xdf:
-		return 2
-	case input >= 0xe0 && input <= 0xef:
-		return 3
-	case input >= 0xf0 && input <= 0xf4:
-		return 4
-	}
-	return 0
-}
-
-app_reset_input_escape :: proc(state: ^App_State) {
-	state.inputEscape = .Ready
-	state.inputEscapeParameter = 0
-	state.inputEscapeModifier = 0
-	state.inputMouseSequenceLen = 0
-}
-
-app_reset_input_paste :: proc(state: ^App_State) {
-	clear(&state.inputPaste)
-	app_reset_input_escape(state)
-}
-
 app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -> bool {
 	if extend {
 		cursor := text_input.input_buffer_cursor_position(&state.input)
@@ -1531,154 +1504,6 @@ app_copy_active_selection :: proc(state: ^App_State) -> bool {
 	}
 	state.status = "No selection to copy"
 	return true
-}
-
-app_input_paste_ends :: proc(state: ^App_State) -> bool {
-	terminator := "\x1b[201~"
-	if len(state.inputPaste) < len(terminator) {
-		return false
-	}
-	start := len(state.inputPaste) - len(terminator)
-	return string(state.inputPaste[start:]) == terminator
-}
-
-app_finish_input_paste :: proc(state: ^App_State) {
-	terminator_length := len("\x1b[201~")
-	text := string(state.inputPaste[:len(state.inputPaste) - terminator_length])
-	app_reset_input_history_browse(state)
-	text_input.input_buffer_push_text(&state.input, text)
-	app_reset_input_paste(state)
-}
-
-app_handle_input_escape_byte :: proc(state: ^App_State, input: byte) -> bool {
-	switch state.inputEscape {
-	case .Escape:
-		if input == '[' {
-			state.inputEscape = .CSI
-			return false
-		}
-		app_reset_input_escape(state)
-		return true
-	case .CSI:
-		switch input {
-		case 'A':
-			app_reset_input_escape(state)
-			return app_input_history_previous(state)
-		case 'B':
-			app_reset_input_escape(state)
-			return app_input_history_next(state)
-		case 'C', 'D', 'H', 'F':
-			app_reset_input_escape(state)
-			return app_handle_cursor_escape(state, input, false)
-		case '0' ..= '9':
-			state.inputEscapeParameter = int(input - '0')
-			state.inputEscape = .CSI_Parameter
-			return false
-		case '<':
-			state.inputMouseSequence[0] = 0x1b
-			state.inputMouseSequence[1] = '['
-			state.inputMouseSequence[2] = '<'
-			state.inputMouseSequenceLen = 3
-			state.inputEscape = .CSI_Mouse
-			return false
-		case:
-			app_reset_input_escape(state)
-			return true
-		}
-	case .CSI_Parameter:
-		switch input {
-		case '0' ..= '9':
-			if state.inputEscapeParameter > 999 {
-				app_reset_input_escape(state)
-				return true
-			}
-			state.inputEscapeParameter = state.inputEscapeParameter * 10 + int(input - '0')
-			return false
-		case '~':
-			parameter := state.inputEscapeParameter
-			app_reset_input_escape(state)
-			switch parameter {
-			case 200:
-				clear(&state.inputPaste)
-				state.inputEscape = .Paste
-				return false
-			case 5:
-				return app_scroll_history_page(state, 1)
-			case 6:
-				return app_scroll_history_page(state, -1)
-			case 1, 7:
-				text_input.input_buffer_move_cursor_start(&state.input)
-				return true
-			case 3:
-				return text_input.input_buffer_delete_at_cursor(&state.input)
-			case 4, 8:
-				text_input.input_buffer_move_cursor_end(&state.input)
-				return true
-			case:
-				return true
-			}
-		case ';':
-			state.inputEscapeModifier = 0
-			state.inputEscape = .CSI_Modifier
-			return false
-		case:
-			app_reset_input_escape(state)
-			return true
-		}
-	case .CSI_Modifier:
-		switch input {
-		case '0' ..= '9':
-			state.inputEscapeModifier = state.inputEscapeModifier * 10 + int(input - '0')
-			return false
-		case '~':
-			parameter := state.inputEscapeParameter
-			modifier := state.inputEscapeModifier
-			app_reset_input_escape(state)
-			if parameter == 2 && modifier == 5 {
-				return app_copy_active_selection(state)
-			}
-			if parameter == 2 && modifier == 2 {
-				return true
-			}
-			return true
-		case 'C', 'D', 'H', 'F':
-			extend := state.inputEscapeModifier == 2
-			app_reset_input_escape(state)
-			return app_handle_cursor_escape(state, input, extend)
-		case:
-			app_reset_input_escape(state)
-			return true
-		}
-	case .CSI_Mouse:
-		if state.inputMouseSequenceLen >= len(state.inputMouseSequence) {
-			app_reset_input_escape(state)
-			return false
-		}
-		switch {
-		case input >= '0' && input <= '9', input == ';':
-			state.inputMouseSequence[state.inputMouseSequenceLen] = input
-			state.inputMouseSequenceLen += 1
-			return false
-		case input == 'M' || input == 'm':
-			state.inputMouseSequence[state.inputMouseSequenceLen] = input
-			state.inputMouseSequenceLen += 1
-			sequence := string(state.inputMouseSequence[:state.inputMouseSequenceLen])
-			app_reset_input_escape(state)
-			return app_handle_mouse_sequence(state, sequence)
-		case:
-			app_reset_input_escape(state)
-			return false
-		}
-	case .Paste:
-		append(&state.inputPaste, input)
-		if !app_input_paste_ends(state) {
-			return false
-		}
-		app_finish_input_paste(state)
-		return true
-	case .Ready:
-	}
-	return false
 }
 
 app_record_input_history :: proc(state: ^App_State, text: string) {
@@ -1921,7 +1746,6 @@ app_show_config :: proc(state: ^App_State) {
 
 	state.configCategory = .Providers
 	state.configFocus = .Categories
-	state.configInput = .Ready
 	state.configSettingCursor = 0
 	state.configProviderIndex = app_config_active_provider_index(state)
 	state.configEditing = false
@@ -2089,50 +1913,37 @@ app_config_active_provider_index :: proc(state: ^App_State) -> int {
 	return -1
 }
 
-app_handle_config_input :: proc(state: ^App_State, input: byte) -> bool {
-	if state.configEditing {
-		return app_handle_config_edit_input(state, input)
+app_handle_config_event :: proc(state: ^App_State, event: term_input.Input_Event) -> bool {
+	key, is_key := event.(term_input.Key_Event)
+	if !is_key {
+		return false
 	}
 
-	switch state.configInput {
-	case .Escape:
-		if input == '[' {
-			state.configInput = .CSI
-			return false
-		}
-		state.configInput = .Ready
-		app_cancel_config(state)
-		return true
-	case .CSI:
-		state.configInput = .Ready
-		switch input {
-		case 'A':
-			app_move_config_cursor(state, -1)
-			return true
-		case 'B':
-			app_move_config_cursor(state, 1)
-			return true
-		case 'C', 'D':
-			app_toggle_config_focus(state)
-			return true
-		}
-		return false
-	case .Ready:
-	}
-
-	switch input {
-	case 0x1b:
-		state.configInput = .Escape
-		return false
-	case '\t':
-		app_toggle_config_focus(state)
-		return true
-	case '\r':
-		return app_activate_config_setting(state)
-	case 3, 4:
+	if .Ctrl in key.modifiers && key.code == .Char && (key.char == 'c' || key.char == 'd') {
 		state.shouldQuit = true
 		state.status = "Exiting"
 		return true
+	}
+
+	#partial switch key.code {
+	case .Escape:
+		app_cancel_config(state)
+		return true
+	case .Tab:
+		app_toggle_config_focus(state)
+		return true
+	case .Enter:
+		return app_activate_config_setting(state)
+	case .Arrow_Up:
+		app_move_config_cursor(state, -1)
+		return true
+	case .Arrow_Down:
+		app_move_config_cursor(state, 1)
+		return true
+	case .Arrow_Right, .Arrow_Left:
+		app_toggle_config_focus(state)
+		return true
+	case:
 	}
 	return false
 }
@@ -2259,7 +2070,6 @@ app_refresh_skills :: proc(state: ^App_State) {
 
 app_cancel_config :: proc(state: ^App_State) {
 	state.mode = .Chat
-	state.configInput = .Ready
 	state.status = "Config closed"
 }
 

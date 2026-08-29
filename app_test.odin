@@ -14,6 +14,17 @@ import "text_input"
 import "tool_policy"
 import "widgets"
 
+// _send_mouse_sequence feeds a raw SGR mouse escape sequence through the same
+// byte-by-byte pipeline the app's read loop uses, returning the result of the
+// final (sequence-completing) byte.
+_send_mouse_sequence :: proc(state: ^App_State, sequence: string) -> bool {
+	handled := false
+	for i := 0; i < len(sequence); i += 1 {
+		handled = app_handle_input_byte(state, sequence[i])
+	}
+	return handled
+}
+
 @(test)
 test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
@@ -778,12 +789,12 @@ test_history_scrolls_with_page_keys_and_mouse_wheel :: proc(t: ^testing.T) {
 	assert(state.historyScrollOffset > 0, "expected wheel-up to move above the history bottom")
 
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<65;2;2M"),
+		_send_mouse_sequence(&state, "\x1b[<65;2;2M"),
 		"expected in-panel wheel-down to scroll history",
 	)
 	assert(state.historyScrollOffset == 0, "expected wheel-down to return to the history bottom")
 	assert(
-		!app_handle_mouse_sequence(&state, "\x1b[<64;2;7M"),
+		!_send_mouse_sequence(&state, "\x1b[<64;2;7M"),
 		"expected wheel input outside the history panel to be ignored",
 	)
 	assert(state.historyScrollOffset == 0, "expected ignored wheel input to retain the viewport")
@@ -801,15 +812,15 @@ test_input_panel_mouse_drag_selects_graphemes :: proc(t: ^testing.T) {
 	text_input.input_buffer_push_text(&state.input, "abcdef")
 
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<0;2;10M"),
+		_send_mouse_sequence(&state, "\x1b[<0;2;10M"),
 		"expected input press to start selection",
 	)
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<32;4;10M"),
+		_send_mouse_sequence(&state, "\x1b[<32;4;10M"),
 		"expected input drag to extend selection",
 	)
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<0;4;10m"),
+		_send_mouse_sequence(&state, "\x1b[<0;4;10m"),
 		"expected input release to finish selection",
 	)
 	assert(
@@ -829,15 +840,15 @@ test_history_panel_mouse_drag_copies_literal_display_text :: proc(t: ^testing.T)
 	}
 
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<0;2;2M"),
+		_send_mouse_sequence(&state, "\x1b[<0;2;2M"),
 		"expected history press to start selection",
 	)
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<32;7;2M"),
+		_send_mouse_sequence(&state, "\x1b[<32;7;2M"),
 		"expected history drag to extend selection",
 	)
 	assert(
-		app_handle_mouse_sequence(&state, "\x1b[<0;7;2m"),
+		_send_mouse_sequence(&state, "\x1b[<0;7;2m"),
 		"expected history release to finish selection",
 	)
 	assert(app_has_history_selection(&state), "expected active history selection")
@@ -1097,9 +1108,7 @@ test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^test
 }
 
 @(test)
-test_app_append_model_entry_infers_openai_embedding_capability_by_name :: proc(
-	t: ^testing.T,
-) {
+test_app_append_model_entry_infers_openai_embedding_capability_by_name :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	provider := settings.Provider_Config {
@@ -1118,10 +1127,7 @@ test_app_append_model_entry_infers_openai_embedding_capability_by_name :: proc(
 	assert(len(state.models) == 2, "expected two appended model entries")
 	assert(state.models[0].supportsChat, "expected chat model name to support chat")
 	assert(!state.models[0].supportsEmbeddings, "expected chat model name to reject embeddings")
-	assert(
-		!state.models[1].supportsChat,
-		"expected embedding-named model to reject chat",
-	)
+	assert(!state.models[1].supportsChat, "expected embedding-named model to reject chat")
 	assert(
 		state.models[1].supportsEmbeddings,
 		"expected embedding-named model to support embeddings",
