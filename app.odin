@@ -1067,6 +1067,12 @@ app_free_input_event :: proc(event: term_input.Input_Event) {
 }
 
 app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Event) -> bool {
+	// Kitty-protocol terminals report key release as a separate event once
+	// event-type reporting is negotiated; acting on it too would double every
+	// keystroke (e.g. Arrow_Up moving two rows per physical press).
+	if key, isKey := event.(term_input.Key_Event); isKey && key.event_type == .Release {
+		return false
+	}
 	if state.mode == .Approval {
 		return app_handle_approval_event_with_safety_ready(
 			state,

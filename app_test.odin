@@ -1131,6 +1131,39 @@ test_multiline_input_up_down_move_cursor_before_history :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_kitty_key_release_does_not_repeat_action :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	text_input.input_buffer_push_text(&state.input, "line one\nline two\nline three")
+	// Cursor sits on the middle line, at the 't' of "two".
+	text_input.input_buffer_move_cursor_to(&state.input, len("line one\nline "))
+
+	// Kitty CSI-u encoding for arrow-up: field 1 sub-value 1 = press.
+	press := "\x1b[1;1:1A"
+	for i := 0; i < len(press); i += 1 {
+		_ = app_handle_input_byte(&state, press[i])
+	}
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == len("line "),
+		"expected the press event to move the cursor up one row",
+	)
+
+	// Same key, sub-value 3 = release; must not act again.
+	release := "\x1b[1;1:3A"
+	handled := false
+	for i := 0; i < len(release); i += 1 {
+		handled = app_handle_input_byte(&state, release[i])
+	}
+	assert(!handled, "expected key release to be ignored")
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == len("line "),
+		"expected the release event not to move the cursor again",
+	)
+	_ = t
+}
+
+@(test)
 test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
