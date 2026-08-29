@@ -125,6 +125,11 @@ Rendering helper notes:
 - `Panel` is intentionally draw-only. It helps with frames, titles, and
   interior fill, but does not manage focus, input, layout negotiation, or
   retained widget state.
+- `Panel.edges` selects which borders are drawn. The zero value draws all
+  borders; any non-zero value draws only the named edges, and
+  `Frame_Edges_Explicit` alone draws none. `panel_interior` shrinks only the
+  visible borders, so content can fill the space of hidden ones. The title is
+  suppressed when the top border is hidden.
 
 Example:
 
@@ -162,6 +167,7 @@ Rendering example:
       fill_interior = true,
       interior_fill = ' ',
       frame_glyphs  = console.ASCII_Frame_Glyphs,
+      // edges = console.Frame_Edge_Top | console.Frame_Edge_Left,
     }
 
     console.batch_draw_panel(&batch, panel)

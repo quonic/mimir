@@ -487,6 +487,7 @@ test_render_sequences :: proc(t: ^testing.T) {
 		draw_frame_sequence(
 			Region{top_row = 2, left_column = 4, bottom_row = 4, right_column = 8},
 			ASCII_Frame_Glyphs,
+			Frame_Edges_All,
 		),
 		"\x1b[2;4H┌───┐\x1b[3;4H│   │\x1b[4;4H└───┘",
 		"expected draw_frame_sequence to render a Unicode frame with a clear interior",
@@ -496,16 +497,142 @@ test_render_sequences :: proc(t: ^testing.T) {
 		draw_frame_sequence(
 			Region{top_row = 3, left_column = 5, bottom_row = 3, right_column = 5},
 			ASCII_Frame_Glyphs,
+			Frame_Edges_All,
 		),
 		"\x1b[3;5H┌",
 		"expected draw_frame_sequence to collapse a 1x1 region to a single corner glyph",
 	)
 	assert_written_sequence(
 		t,
-		draw_frame_sequence(region, ASCII_Frame_Glyphs),
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, 0),
 		"\x1b[2;3H┌──┐\x1b[3;3H│  │\x1b[4;3H└──┘",
 		"expected draw_frame_sequence write to succeed",
 		"expected draw_frame_sequence output to be preserved by write",
+	)
+
+	// Edge visibility: zero value means all edges, matching the legacy output.
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, 0),
+		"\x1b[2;3H┌──┐\x1b[3;3H│  │\x1b[4;3H└──┘",
+		"expected the zero Frame_Edges value to draw every edge",
+	)
+
+	// No edges: nothing is drawn.
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, Frame_Edges_Explicit),
+		"",
+		"expected a frame with no visible edges to produce an empty sequence",
+	)
+
+	// Top and left only: the motivating borderless-corner case.
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, Frame_Edge_Top | Frame_Edge_Left),
+		"\x1b[2;3H┌──\x1b[3;3H│\x1b[4;3H│",
+		"expected a top+left frame to terminate the top edge and omit the bottom and right edges",
+	)
+
+	// Top only.
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, Frame_Edge_Top),
+		"\x1b[2;3H────────",
+		"expected a top-only frame to draw a single horizontal line",
+	)
+
+	// Left only.
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, ASCII_Frame_Glyphs, Frame_Edge_Left),
+		"\x1b[2;3H│\x1b[3;3H│\x1b[4;3H│",
+		"expected a left-only frame to draw a single vertical line",
+	)
+
+	// line_end glyph is honored when set.
+	end_glyphs := Frame_Glyphs {
+		top_left     = "┌",
+		top_right    = "┐",
+		bottom_left  = "└",
+		bottom_right = "┘",
+		horizontal   = "─",
+		vertical     = "│",
+		fill         = " ",
+		line_end     = "┐",
+	}
+	assert_sequence(
+		t,
+		draw_frame_sequence(region, end_glyphs, Frame_Edge_Top | Frame_Edge_Left),
+		"\x1b[2;3H┌──┐\x1b[3;3H│\x1b[4;3H│",
+		"expected a configured line_end glyph to terminate the top edge",
+	)
+
+	// Degenerate regions with partial edges.
+	assert_sequence(
+		t,
+		draw_frame_sequence(
+			Region{top_row = 3, left_column = 5, bottom_row = 3, right_column = 5},
+			ASCII_Frame_Glyphs,
+			Frame_Edge_Top,
+		),
+		"",
+		"expected a 1x1 region without the left edge to draw nothing",
+	)
+	assert_sequence(
+		t,
+		draw_frame_sequence(
+			Region{top_row = 2, left_column = 5, bottom_row = 4, right_column = 5},
+			ASCII_Frame_Glyphs,
+			Frame_Edge_Left,
+		),
+		"\x1b[2;5H│\x1b[3;5H│\x1b[4;5H│",
+		"expected a width-1 region to draw the left edge as a plain column",
+	)
+	assert_sequence(
+		t,
+		draw_frame_sequence(
+			Region{top_row = 2, left_column = 5, bottom_row = 4, right_column = 5},
+			ASCII_Frame_Glyphs,
+			Frame_Edge_Left | Frame_Edge_Top,
+		),
+		"\x1b[2;5H┌\x1b[3;5H│\x1b[4;5H│",
+		"expected a width-1 region to use the corner glyph when the top edge is visible",
+	)
+	assert_sequence(
+		t,
+		draw_frame_sequence(
+			Region{top_row = 3, left_column = 5, bottom_row = 3, right_column = 8},
+			ASCII_Frame_Glyphs,
+			Frame_Edge_Top | Frame_Edge_Left,
+		),
+		"\x1b[3;5H┌──",
+		"expected a height-1 region to draw the top edge as a single row",
+	)
+
+	// Edge-aware interior: only visible edges consume space.
+	edge_interior := region_interior_edges(region, Frame_Edge_Top | Frame_Edge_Left)
+	assert(
+		edge_interior.top_row == 3,
+		"expected edge interior to start below the visible top edge",
+	)
+	assert(
+		edge_interior.left_column == 4,
+		"expected edge interior to start inside the visible left edge",
+	)
+	assert(
+		edge_interior.bottom_row == 4,
+		"expected edge interior to reach the bottom when the bottom edge is hidden",
+	)
+	assert(
+		edge_interior.right_column == 6,
+		"expected edge interior to reach the right when the right edge is hidden",
+	)
+
+	all_interior := region_interior_edges(region, Frame_Edges_All)
+	assert(
+		all_interior == region_interior(region),
+		"expected all-edge interior to match region_interior",
 	)
 	_ = t
 }
@@ -656,6 +783,67 @@ test_panel_sequences :: proc(t: ^testing.T) {
 		draw_panel_sequence(truncated_panel),
 		"\x1b[1;1H┌──┐\x1b[2;1H│  │\x1b[3;1H└──┘\x1b[1;3HA",
 		"expected panel titles to stay single-line and truncate to the available title width",
+	)
+
+	// Top and left borders only: content fills the hidden border space.
+	open_panel := Panel {
+		region = Region{top_row = 2, left_column = 2, bottom_row = 4, right_column = 10},
+		title = "Open",
+		frame_glyphs = ASCII_Frame_Glyphs,
+		edges = Frame_Edge_Top | Frame_Edge_Left,
+	}
+	open_interior := panel_interior(open_panel)
+	assert(
+		open_interior.top_row == 3,
+		"expected open panel interior to start below the visible top border",
+	)
+	assert(
+		open_interior.left_column == 3,
+		"expected open panel interior to start inside the visible left border",
+	)
+	assert(open_interior.bottom_row == 4, "expected open panel interior to reach the bottom row")
+	assert(
+		open_interior.right_column == 10,
+		"expected open panel interior to reach the right column",
+	)
+	assert_sequence(
+		t,
+		draw_panel_sequence(open_panel),
+		"\x1b[2;2H┌───────\x1b[3;2H│\x1b[4;2H│\x1b[2;4HOpen",
+		"expected a top+left panel to draw an open frame and keep its title",
+	)
+
+	// Borderless panel: no frame, no title, interior is the whole region.
+	borderless_panel := Panel {
+		region = Region{top_row = 2, left_column = 2, bottom_row = 4, right_column = 10},
+		title = "Hidden",
+		frame_glyphs = ASCII_Frame_Glyphs,
+		edges = Frame_Edges_Explicit,
+	}
+	borderless_interior := panel_interior(borderless_panel)
+	assert(
+		borderless_interior == borderless_panel.region,
+		"expected a borderless panel interior to equal its region",
+	)
+	assert_sequence(
+		t,
+		draw_panel_sequence(borderless_panel),
+		"",
+		"expected a borderless panel to draw nothing, including its title",
+	)
+
+	// Title is suppressed when the top edge is hidden.
+	no_top_panel := Panel {
+		region = Region{top_row = 2, left_column = 2, bottom_row = 4, right_column = 10},
+		title = "NoTop",
+		frame_glyphs = ASCII_Frame_Glyphs,
+		edges = Frame_Edge_Left | Frame_Edge_Bottom | Frame_Edge_Right,
+	}
+	assert_sequence(
+		t,
+		draw_panel_sequence(no_top_panel),
+		"\x1b[3;2H│       │\x1b[4;2H└───────┘",
+		"expected a panel without a top edge to omit its title",
 	)
 	assert_written_sequence(
 		t,

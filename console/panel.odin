@@ -12,14 +12,24 @@ Panel :: struct {
 	fill_interior:    bool,
 	interior_fill:    byte,
 	frame_glyphs:     Frame_Glyphs,
+	// edges selects which borders are drawn. The zero value draws all borders.
+	edges:            Frame_Edges,
 }
 
 panel_interior :: proc(panel: Panel) -> Region {
-	return region_interior(panel.region)
+	return region_interior_edges(panel.region, panel.edges)
 }
 
 panel_title_region :: proc(panel: Panel) -> Region {
 	normalized := region_normalized(panel.region)
+	if !frame_edge_visible(panel.edges, Frame_Edge_Top) {
+		return Region {
+			top_row = normalized.top_row,
+			left_column = normalized.left_column,
+			bottom_row = normalized.top_row,
+			right_column = normalized.left_column,
+		}
+	}
 	start := normalized.left_column + 2
 	finish := normalized.right_column - 1
 	if finish < start {
@@ -52,7 +62,7 @@ draw_panel :: proc(panel: Panel) -> (int, io.Error) {
 
 batch_draw_panel :: proc(batch: ^Batch, panel: Panel) {
 	normalized := region_normalized(panel.region)
-	frame_sequence := draw_frame_sequence(normalized, panel.frame_glyphs)
+	frame_sequence := draw_frame_sequence(normalized, panel.frame_glyphs, panel.edges)
 	if panel.use_border_style {
 		batch_write_sequence(batch, styled_text_sequence(panel.border_style, frame_sequence))
 	} else {
@@ -65,6 +75,10 @@ batch_draw_panel :: proc(batch: ^Batch, panel: Panel) {
 			fill = ' '
 		}
 		batch_fill_region(batch, panel_interior(panel), fill)
+	}
+
+	if !frame_edge_visible(panel.edges, Frame_Edge_Top) {
+		return
 	}
 
 	title := _panel_title_text(panel)
