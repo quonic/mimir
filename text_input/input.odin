@@ -206,6 +206,14 @@ input_buffer_move_cursor_right :: proc(buffer: ^Input_Buffer) -> bool {
 	return true
 }
 
+input_buffer_move_cursor_to :: proc(buffer: ^Input_Buffer, graphemeIndex: int) {
+	buffer.cursorGraphemeIndex = unicode_clamp_grapheme_index(
+		input_buffer_string(buffer),
+		graphemeIndex,
+	)
+	input_buffer_clear_selection(buffer)
+}
+
 input_buffer_move_cursor_start :: proc(buffer: ^Input_Buffer) {
 	if input_buffer_has_selection(buffer) {
 		buffer.cursorGraphemeIndex = input_buffer_selection_start(buffer)

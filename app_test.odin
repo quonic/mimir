@@ -1070,6 +1070,67 @@ test_chat_input_history_uses_up_down_arrows :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_shift_enter_inserts_newline_without_submitting :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	text_input.input_buffer_push_text(&state.input, "line one")
+	// CSI-u encoding for shift+enter (functional code 13, modifier value 2 = shift).
+	sequence := "\x1b[13;2u"
+	handled := false
+	for i := 0; i < len(sequence); i += 1 {
+		handled = app_handle_input_byte(&state, sequence[i])
+	}
+	assert(handled, "expected shift+enter sequence to be handled")
+	assert(
+		text_input.input_buffer_string(&state.input) == "line one\n",
+		"expected shift+enter to insert a newline instead of submitting",
+	)
+	assert(len(state.inputHistory) == 0, "expected shift+enter not to submit input")
+	_ = t
+}
+
+@(test)
+test_multiline_input_up_down_move_cursor_before_history :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	text_input.input_buffer_push_text(&state.input, "older entry")
+	app_submit_input(&state)
+	text_input.input_buffer_push_text(&state.input, "newer entry")
+	app_submit_input(&state)
+
+	text_input.input_buffer_push_text(&state.input, "line one\nline two\nline three")
+	// Cursor sits on the middle line, at the 't' of "two".
+	text_input.input_buffer_move_cursor_to(&state.input, len("line one\nline "))
+
+	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
+	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
+	assert(app_handle_input_byte(&state, 'A'), "expected up arrow to move the cursor")
+	assert(
+		text_input.input_buffer_string(&state.input) == "line one\nline two\nline three",
+		"expected up arrow off the first line to leave the buffer untouched",
+	)
+	assert(
+		text_input.input_buffer_cursor_position(&state.input) == len("line "),
+		"expected up arrow to preserve the column on the line above",
+	)
+	assert(state.inputHistoryCursor == -1, "expected history browsing to stay untouched")
+
+	assert(!app_handle_input_byte(&state, 0x1b), "expected escape prefix to wait")
+	assert(!app_handle_input_byte(&state, '['), "expected CSI prefix to wait")
+	assert(
+		app_handle_input_byte(&state, 'A'),
+		"expected up arrow on the first line to fall back to history",
+	)
+	assert(
+		text_input.input_buffer_string(&state.input) == "newer entry",
+		"expected up arrow on the edge line to recall history",
+	)
+	_ = t
+}
+
+@(test)
 test_capability_incompatible_config_model_selection_is_rejected :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)

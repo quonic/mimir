@@ -10,6 +10,7 @@ import "widgets"
 
 MIN_HISTORY_PANEL_HEIGHT :: 3
 MIN_INPUT_PANEL_HEIGHT :: 3
+MAX_INPUT_PANEL_VISIBLE_LINES :: 5
 
 App_Layout :: struct {
 	historyPanel: console.Region,
@@ -47,6 +48,9 @@ compute_app_layout :: proc(rows, columns, inputLines: int) -> App_Layout {
 	if max_input_height < MIN_INPUT_PANEL_HEIGHT {
 		max_input_height = MIN_INPUT_PANEL_HEIGHT
 	}
+	if max_input_height > MAX_INPUT_PANEL_VISIBLE_LINES + 2 {
+		max_input_height = MAX_INPUT_PANEL_VISIBLE_LINES + 2
+	}
 	if input_height > max_input_height {
 		input_height = max_input_height
 	}
@@ -83,10 +87,7 @@ render_app_frame_sequence :: proc(
 	rows, columns: int,
 	allocator := context.allocator,
 ) -> string {
-	input_width := columns - 2
-	if input_width < 1 {
-		input_width = 1
-	}
+	input_width := input_content_width(columns)
 	input_lines := wrapped_text_line_count(
 		text_input.input_buffer_string(&state.input),
 		input_width,
@@ -273,10 +274,7 @@ render_app_input_panel_sequence :: proc(
 	rows, columns: int,
 	allocator := context.allocator,
 ) -> string {
-	input_width := columns - 2
-	if input_width < 1 {
-		input_width = 1
-	}
+	input_width := input_content_width(columns)
 	input_lines := wrapped_text_line_count(
 		text_input.input_buffer_string(&state.input),
 		input_width,
@@ -299,10 +297,7 @@ render_app_history_panel_sequence :: proc(
 	rows, columns: int,
 	allocator := context.allocator,
 ) -> string {
-	input_width := columns - 2
-	if input_width < 1 {
-		input_width = 1
-	}
+	input_width := input_content_width(columns)
 	input_lines := wrapped_text_line_count(
 		text_input.input_buffer_string(&state.input),
 		input_width,
@@ -1128,10 +1123,17 @@ render_editable_input_buffer :: proc(
 	cursorVisible: bool,
 ) {
 	text := text_input.input_buffer_string(buffer)
+	realCursorPosition := text_input.input_buffer_cursor_position(buffer)
 	cursorPosition := -1
 	if cursorVisible {
-		cursorPosition = text_input.input_buffer_cursor_position(buffer)
+		cursorPosition = realCursorPosition
 	}
+	skipRows := input_scroll_offset_for_cursor(
+		text,
+		realCursorPosition,
+		console.region_width(region),
+		console.region_height(region),
+	)
 	render_input_with_cursor(
 		batch,
 		region,
@@ -1139,7 +1141,31 @@ render_editable_input_buffer :: proc(
 		cursorPosition,
 		text_input.input_buffer_selection_start(buffer),
 		text_input.input_buffer_selection_end(buffer),
+		skipRows,
 	)
+}
+
+// input_scroll_offset_for_cursor picks how many leading wrapped rows to skip
+// so the cursor's row stays inside a viewport of `visibleRows` height,
+// auto-scrolling to follow the cursor. Derived fresh from the cursor
+// position and content on every render; no persisted scroll state.
+input_scroll_offset_for_cursor :: proc(text: string, cursorGraphemeIndex, width, visibleRows: int) -> int {
+	if visibleRows <= 0 {
+		return 0
+	}
+	row, _, totalRows := input_wrapped_cursor_row_column(text, cursorGraphemeIndex, width)
+	maxOffset := totalRows - visibleRows
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	offset := row - visibleRows + 1
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	return offset
 }
 
 render_input_with_cursor :: proc(
@@ -1147,17 +1173,20 @@ render_input_with_cursor :: proc(
 	region: console.Region,
 	text: string,
 	cursorPosition: int,
-	selectionStart, selectionEnd: int,
+	selectionStart, selectionEnd, skipRows: int,
 ) {
 	width := console.region_width(region)
 	if width <= 0 {
 		return
 	}
 
-	row := region.top_row
+	visibleRows := console.region_height(region)
+	visualRow := 0
 	start := 0
 	lineStartGrapheme := 0
-	for index := 0; index <= len(text) && row <= region.bottom_row; index += 1 {
+	for index := 0;
+	    index <= len(text) && visualRow - skipRows <= visibleRows;
+	    index += 1 {
 		if index == len(text) || text[index] == '\n' || text[index] == '\r' {
 			lineGraphemes := text_input.unicode_grapheme_count(text[start:index])
 			cursorInLine := -1
@@ -1165,10 +1194,11 @@ render_input_with_cursor :: proc(
 			   cursorPosition <= lineStartGrapheme + lineGraphemes {
 				cursorInLine = cursorPosition - lineStartGrapheme
 			}
-			row += render_wrapped_input_line(
+			visualRow += render_wrapped_input_line(
 				batch,
 				region,
-				row,
+				visualRow,
+				skipRows,
 				text[start:index],
 				cursorInLine,
 				selectionStart - lineStartGrapheme,
@@ -1183,29 +1213,32 @@ render_input_with_cursor :: proc(
 render_wrapped_input_line :: proc(
 	batch: ^console.Batch,
 	region: console.Region,
-	startRow: int,
+	visualRowStart, skipRows: int,
 	text: string,
 	cursorInLine: int,
 	selectionStart, selectionEnd: int,
 ) -> int {
 	width := console.region_width(region)
-	if width <= 0 || startRow > region.bottom_row {
+	if width <= 0 {
 		return 0
 	}
 
 	if len(text) == 0 {
-		console.batch_move_to(batch, startRow, region.left_column)
-		if cursorInLine == 0 {
-			render_input_cursor_cell(batch, " ")
+		screenRow := region.top_row + (visualRowStart - skipRows)
+		if visualRowStart >= skipRows && screenRow <= region.bottom_row {
+			console.batch_move_to(batch, screenRow, region.left_column)
+			if cursorInLine == 0 {
+				render_input_cursor_cell(batch, " ")
+			}
 		}
 		return 1
 	}
 
-	row := startRow
+	visualRow := visualRowStart
 	rows_written := 0
 	start := 0
 	startGrapheme := 0
-	for start < len(text) && row <= region.bottom_row {
+	for start < len(text) {
 		finish, next := wrapped_text_slice(text, start, width)
 		sliceGraphemes := text_input.unicode_grapheme_count(text[start:finish])
 		nextGraphemes := text_input.unicode_grapheme_count(text[start:next])
@@ -1216,28 +1249,32 @@ render_wrapped_input_line :: proc(
 				cursorInSlice = sliceGraphemes
 			}
 		}
-		render_input_slice(
-			batch,
-			region,
-			row,
-			text,
-			start,
-			finish,
-			next,
-			cursorInSlice,
-			selectionStart - startGrapheme,
-			selectionEnd - startGrapheme,
-		)
-		row += 1
+		screenRow := region.top_row + (visualRow - skipRows)
+		if visualRow >= skipRows && screenRow <= region.bottom_row {
+			render_input_slice(
+				batch,
+				region,
+				screenRow,
+				text,
+				start,
+				finish,
+				next,
+				cursorInSlice,
+				selectionStart - startGrapheme,
+				selectionEnd - startGrapheme,
+			)
+		}
+		visualRow += 1
 		rows_written += 1
 		if next <= start {
 			break
 		}
-		startGrapheme += text_input.unicode_grapheme_count(text[start:next])
+		startGrapheme += nextGraphemes
 		start = next
 	}
 	return rows_written
 }
+
 
 render_input_slice :: proc(
 	batch: ^console.Batch,
@@ -1618,6 +1655,163 @@ wrapped_text_slice :: proc(text: string, start, width: int) -> (finish, next: in
 	finish = len(text)
 	next = len(text)
 	return
+}
+
+// input_wrapped_cursor_row_column walks the buffer text the same way
+// render_input_with_cursor/render_wrapped_input_line do, returning the
+// 0-based wrapped (word-wrapped) row and grapheme column the cursor sits on,
+// plus the total number of wrapped rows in the buffer.
+input_wrapped_cursor_row_column :: proc(
+	text: string,
+	cursorGraphemeIndex, width: int,
+) -> (row, column, totalRows: int) {
+	if width <= 0 {
+		return 0, 0, 1
+	}
+
+	lineStartGrapheme := 0
+	start := 0
+	for index := 0; index <= len(text); index += 1 {
+		if index != len(text) && text[index] != '\n' && text[index] != '\r' {
+			continue
+		}
+		logicalLine := text[start:index]
+		lineGraphemes := text_input.unicode_grapheme_count(logicalLine)
+		cursorInLine := -1
+		if cursorGraphemeIndex >= lineStartGrapheme &&
+		   cursorGraphemeIndex <= lineStartGrapheme + lineGraphemes {
+			cursorInLine = cursorGraphemeIndex - lineStartGrapheme
+		}
+
+		if len(logicalLine) == 0 {
+			if cursorInLine == 0 {
+				row = totalRows
+				column = 0
+			}
+			totalRows += 1
+		} else {
+			wrappedStart := 0
+			segmentStartGrapheme := 0
+			for wrappedStart < len(logicalLine) {
+				finish, next := wrapped_text_slice(logicalLine, wrappedStart, width)
+				segmentGraphemes := text_input.unicode_grapheme_count(
+					logicalLine[wrappedStart:finish],
+				)
+				nextGraphemes := text_input.unicode_grapheme_count(logicalLine[wrappedStart:next])
+				if cursorInLine >= segmentStartGrapheme &&
+				   cursorInLine <= segmentStartGrapheme + nextGraphemes {
+					row = totalRows
+					column = cursorInLine - segmentStartGrapheme
+					if column > segmentGraphemes {
+						column = segmentGraphemes
+					}
+				}
+				totalRows += 1
+				if next <= wrappedStart {
+					break
+				}
+				segmentStartGrapheme += nextGraphemes
+				wrappedStart = next
+			}
+		}
+
+		start = index + 1
+		lineStartGrapheme += lineGraphemes + 1
+	}
+	if totalRows == 0 {
+		totalRows = 1
+	}
+	return
+}
+
+// input_wrapped_grapheme_index_for_row_column is the inverse of
+// input_wrapped_cursor_row_column: it finds the grapheme index at the given
+// wrapped row, clamping column to that row's length.
+input_wrapped_grapheme_index_for_row_column :: proc(text: string, targetRow, column, width: int) -> int {
+	if width <= 0 {
+		return 0
+	}
+
+	lineStartGrapheme := 0
+	start := 0
+	row := 0
+	for index := 0; index <= len(text); index += 1 {
+		if index != len(text) && text[index] != '\n' && text[index] != '\r' {
+			continue
+		}
+		logicalLine := text[start:index]
+		lineGraphemes := text_input.unicode_grapheme_count(logicalLine)
+
+		if len(logicalLine) == 0 {
+			if row == targetRow {
+				return lineStartGrapheme
+			}
+			row += 1
+		} else {
+			wrappedStart := 0
+			segmentStartGrapheme := 0
+			for wrappedStart < len(logicalLine) {
+				finish, next := wrapped_text_slice(logicalLine, wrappedStart, width)
+				segmentGraphemes := text_input.unicode_grapheme_count(
+					logicalLine[wrappedStart:finish],
+				)
+				if row == targetRow {
+					rowColumn := column
+					if rowColumn > segmentGraphemes {
+						rowColumn = segmentGraphemes
+					}
+					return lineStartGrapheme + segmentStartGrapheme + rowColumn
+				}
+				row += 1
+				if next <= wrappedStart {
+					break
+				}
+				segmentStartGrapheme += text_input.unicode_grapheme_count(
+					logicalLine[wrappedStart:next],
+				)
+				wrappedStart = next
+			}
+		}
+
+		start = index + 1
+		lineStartGrapheme += lineGraphemes + 1
+	}
+	return lineStartGrapheme
+}
+
+// input_wrapped_move_cursor_vertical moves the buffer's cursor to the same
+// column on the previous (direction -1) or next (direction 1) wrapped row,
+// clamped to that row's length. Returns false when the cursor is already on
+// the first/last wrapped row, so callers can fall back to other behavior
+// (e.g. input history navigation).
+input_wrapped_move_cursor_vertical :: proc(
+	buffer: ^text_input.Input_Buffer,
+	width, direction: int,
+) -> bool {
+	text := text_input.input_buffer_string(buffer)
+	row, column, totalRows := input_wrapped_cursor_row_column(
+		text,
+		text_input.input_buffer_cursor_position(buffer),
+		width,
+	)
+	targetRow := row + direction
+	if targetRow < 0 || targetRow >= totalRows {
+		return false
+	}
+	newIndex := input_wrapped_grapheme_index_for_row_column(text, targetRow, column, width)
+	text_input.input_buffer_move_cursor_to(buffer, newIndex)
+	return true
+}
+
+// input_content_width returns the wrap width used for the input panel's
+// interior, shared by rendering and by cursor-movement key handling so both
+// agree on where lines wrap.
+input_content_width :: proc(columns: int) -> int {
+	width := columns - 2
+	if width < 1 {
+		width = 1
+	}
+	return width
 }
 
 skip_wrap_spaces :: proc(text: string, start: int) -> int {

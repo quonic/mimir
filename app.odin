@@ -159,6 +159,7 @@ App_State :: struct {
 	inputHistoryCursor:     int,
 	inputHistoryDraft:      string,
 	cursorBlinkOn:          bool,
+	shownShiftEnterHint:    bool,
 	status:                 string,
 	shouldQuit:             bool,
 	terminal:               console.Terminal_Size,
@@ -599,8 +600,9 @@ app_wait_for_input :: proc(timeout_ms: int) -> (ready, ok: bool) {
 
 app_flush_pending_input :: proc(state: ^App_State) -> bool {
 	event, ok := term_input.input_flush(&state.inputState)
+	hintShown := app_maybe_show_shift_enter_hint(state)
 	if !ok {
-		return false
+		return hintShown
 	}
 	defer app_free_input_event(event)
 	_ = app_dispatch_input_event(state, event)
@@ -1029,11 +1031,26 @@ app_handle_input_byte :: proc(state: ^App_State, b: byte) -> bool {
 		return app_handle_config_edit_input(state, b)
 	}
 	event, ok := term_input.input_push_byte(&state.inputState, b)
+	hintShown := app_maybe_show_shift_enter_hint(state)
 	if !ok {
-		return false
+		return hintShown
 	}
 	defer app_free_input_event(event)
 	return app_dispatch_input_event(state, event)
+}
+
+// app_maybe_show_shift_enter_hint surfaces once, after protocol negotiation
+// settles, that this terminal can't distinguish Shift+Enter from plain Enter.
+app_maybe_show_shift_enter_hint :: proc(state: ^App_State) -> bool {
+	if state.shownShiftEnterHint || state.inputState.protocol == .Unknown {
+		return false
+	}
+	state.shownShiftEnterHint = true
+	if state.inputState.protocol == .Kitty {
+		return false
+	}
+	state.status = "Shift+Enter isn't supported by this terminal; use Ctrl+J for a newline"
+	return true
 }
 
 // app_free_input_event releases memory owned by events that carry a heap
@@ -1133,6 +1150,11 @@ app_handle_chat_key_event :: proc(state: ^App_State, key: term_input.Key_Event) 
 		text_input.input_buffer_push_byte(&state.input, '\t')
 		return true
 	case .Enter:
+		if .Shift in key.modifiers {
+			app_reset_input_history_browse(state)
+			text_input.input_buffer_push_byte(&state.input, '\n')
+			return true
+		}
 		app_submit_input(state)
 		return true
 	case .Backspace:
@@ -1142,11 +1164,19 @@ app_handle_chat_key_event :: proc(state: ^App_State, key: term_input.Key_Event) 
 		return true
 	case .Arrow_Up:
 		if key.modifiers == {} {
+			width := input_content_width(state.terminal.columns)
+			if input_wrapped_move_cursor_vertical(&state.input, width, -1) {
+				return true
+			}
 			return app_input_history_previous(state)
 		}
 		return true
 	case .Arrow_Down:
 		if key.modifiers == {} {
+			width := input_content_width(state.terminal.columns)
+			if input_wrapped_move_cursor_vertical(&state.input, width, 1) {
+				return true
+			}
 			return app_input_history_next(state)
 		}
 		return true
