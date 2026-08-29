@@ -103,7 +103,7 @@ clear_region :: proc(region: Region) -> (int, io.Error) {
 	return write(clear_region_sequence(region))
 }
 
-draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs = ASCII_Frame_Glyphs) -> string {
+draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs) -> string {
 	normalized := region_normalized(region)
 	width := region_width(normalized)
 	height := region_height(normalized)

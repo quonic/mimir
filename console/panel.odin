@@ -11,6 +11,7 @@ Panel :: struct {
 	use_title_style:  bool,
 	fill_interior:    bool,
 	interior_fill:    byte,
+	frame_glyphs:     Frame_Glyphs,
 }
 
 panel_interior :: proc(panel: Panel) -> Region {
@@ -51,7 +52,7 @@ draw_panel :: proc(panel: Panel) -> (int, io.Error) {
 
 batch_draw_panel :: proc(batch: ^Batch, panel: Panel) {
 	normalized := region_normalized(panel.region)
-	frame_sequence := draw_frame_sequence(normalized)
+	frame_sequence := draw_frame_sequence(normalized, panel.frame_glyphs)
 	if panel.use_border_style {
 		batch_write_sequence(batch, styled_text_sequence(panel.border_style, frame_sequence))
 	} else {

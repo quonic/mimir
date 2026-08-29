@@ -96,11 +96,21 @@ render_app_frame_sequence :: proc(
 	console.batch_write_sequence(&batch, console.clear_screen_home_sequence())
 	console.batch_draw_panel(
 		&batch,
-		console.Panel{region = layout.historyPanel, title = HISTORY_TITLE, fill_interior = true},
+		console.Panel {
+			region = layout.historyPanel,
+			title = HISTORY_TITLE,
+			fill_interior = true,
+			frame_glyphs = console.ASCII_Frame_Glyphs,
+		},
 	)
 	console.batch_draw_panel(
 		&batch,
-		console.Panel{region = layout.inputPanel, title = INPUT_TITLE, fill_interior = true},
+		console.Panel {
+			region = layout.inputPanel,
+			title = INPUT_TITLE,
+			fill_interior = true,
+			frame_glyphs = console.ASCII_Frame_Glyphs,
+		},
 	)
 
 	render_history(
@@ -125,6 +135,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 		region        = modal,
 		title         = " Tool Permission ",
 		fill_interior = true,
+		frame_glyphs  = console.ASCII_Frame_Glyphs,
 	}
 	console.batch_draw_panel(batch, panel)
 	interior := console.panel_interior(panel)
@@ -485,6 +496,7 @@ render_config_modal :: proc(batch: ^console.Batch, parent: console.Region, state
 		region        = modal,
 		title         = " Configuration ",
 		fill_interior = true,
+		frame_glyphs  = console.ASCII_Frame_Glyphs,
 	}
 	console.batch_draw_panel(batch, panel)
 

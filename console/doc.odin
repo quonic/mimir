@@ -161,6 +161,7 @@ Rendering example:
       title         = "Status",
       fill_interior = true,
       interior_fill = ' ',
+      frame_glyphs  = console.ASCII_Frame_Glyphs,
     }
 
     console.batch_draw_panel(&batch, panel)

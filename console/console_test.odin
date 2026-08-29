@@ -486,6 +486,7 @@ test_render_sequences :: proc(t: ^testing.T) {
 		t,
 		draw_frame_sequence(
 			Region{top_row = 2, left_column = 4, bottom_row = 4, right_column = 8},
+			ASCII_Frame_Glyphs,
 		),
 		"\x1b[2;4H┌───┐\x1b[3;4H│   │\x1b[4;4H└───┘",
 		"expected draw_frame_sequence to render a Unicode frame with a clear interior",
@@ -494,13 +495,14 @@ test_render_sequences :: proc(t: ^testing.T) {
 		t,
 		draw_frame_sequence(
 			Region{top_row = 3, left_column = 5, bottom_row = 3, right_column = 5},
+			ASCII_Frame_Glyphs,
 		),
 		"\x1b[3;5H┌",
 		"expected draw_frame_sequence to collapse a 1x1 region to a single corner glyph",
 	)
 	assert_written_sequence(
 		t,
-		draw_frame_sequence(region),
+		draw_frame_sequence(region, ASCII_Frame_Glyphs),
 		"\x1b[2;3H┌──┐\x1b[3;3H│  │\x1b[4;3H└──┘",
 		"expected draw_frame_sequence write to succeed",
 		"expected draw_frame_sequence output to be preserved by write",
@@ -588,6 +590,7 @@ test_panel_sequences :: proc(t: ^testing.T) {
 	panel := Panel {
 		region = Region{top_row = 2, left_column = 2, bottom_row = 4, right_column = 10},
 		title = "Status",
+		frame_glyphs = ASCII_Frame_Glyphs,
 	}
 
 	interior := panel_interior(panel)
@@ -618,6 +621,7 @@ test_panel_sequences :: proc(t: ^testing.T) {
 		region = Region{top_row = 2, left_column = 3, bottom_row = 4, right_column = 7},
 		fill_interior = true,
 		interior_fill = '.',
+		frame_glyphs = ASCII_Frame_Glyphs,
 	}
 	assert_sequence(
 		t,
@@ -633,6 +637,7 @@ test_panel_sequences :: proc(t: ^testing.T) {
 		title_style = Style{foreground = .Cyan, use_foreground = true},
 		use_border_style = true,
 		use_title_style = true,
+		frame_glyphs = ASCII_Frame_Glyphs,
 	}
 	assert_sequence(
 		t,
@@ -644,6 +649,7 @@ test_panel_sequences :: proc(t: ^testing.T) {
 	truncated_panel := Panel {
 		region = Region{top_row = 1, left_column = 1, bottom_row = 3, right_column = 4},
 		title = "AB\nCD",
+		frame_glyphs = ASCII_Frame_Glyphs,
 	}
 	assert_sequence(
 		t,
