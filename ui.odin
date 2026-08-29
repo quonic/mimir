@@ -20,7 +20,7 @@ App_Layout :: struct {
 frame_glyphs := console.ASCII_Frame_Glyphs
 
 HISTORY_TITLE :: " History "
-INPUT_TITLE :: " Input "
+INPUT_TITLE :: ""
 
 compute_app_layout :: proc(rows, columns, inputLines: int) -> App_Layout {
 	row_count := rows
@@ -103,6 +103,7 @@ render_app_frame_sequence :: proc(
 			title = HISTORY_TITLE,
 			fill_interior = true,
 			frame_glyphs = frame_glyphs,
+			edges = console.Frame_Edges_Explicit,
 		},
 	)
 	console.batch_draw_panel(
@@ -112,6 +113,7 @@ render_app_frame_sequence :: proc(
 			title = INPUT_TITLE,
 			fill_interior = true,
 			frame_glyphs = frame_glyphs,
+			edges = console.Frame_Edge_Top,
 		},
 	)
 
