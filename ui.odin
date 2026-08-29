@@ -17,6 +17,8 @@ App_Layout :: struct {
 	statusBar:    console.Region,
 }
 
+frame_glyphs := console.ASCII_Frame_Glyphs
+
 HISTORY_TITLE :: " History "
 INPUT_TITLE :: " Input "
 
@@ -100,7 +102,7 @@ render_app_frame_sequence :: proc(
 			region = layout.historyPanel,
 			title = HISTORY_TITLE,
 			fill_interior = true,
-			frame_glyphs = console.ASCII_Frame_Glyphs,
+			frame_glyphs = frame_glyphs,
 		},
 	)
 	console.batch_draw_panel(
@@ -109,7 +111,7 @@ render_app_frame_sequence :: proc(
 			region = layout.inputPanel,
 			title = INPUT_TITLE,
 			fill_interior = true,
-			frame_glyphs = console.ASCII_Frame_Glyphs,
+			frame_glyphs = frame_glyphs,
 		},
 	)
 
@@ -135,7 +137,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 		region        = modal,
 		title         = " Tool Permission ",
 		fill_interior = true,
-		frame_glyphs  = console.ASCII_Frame_Glyphs,
+		frame_glyphs  = frame_glyphs,
 	}
 	console.batch_draw_panel(batch, panel)
 	interior := console.panel_interior(panel)
@@ -496,7 +498,7 @@ render_config_modal :: proc(batch: ^console.Batch, parent: console.Region, state
 		region        = modal,
 		title         = " Configuration ",
 		fill_interior = true,
-		frame_glyphs  = console.ASCII_Frame_Glyphs,
+		frame_glyphs  = frame_glyphs,
 	}
 	console.batch_draw_panel(batch, panel)
 
