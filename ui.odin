@@ -285,7 +285,13 @@ render_app_input_panel_sequence :: proc(
 
 	console.batch_draw_panel(
 		&batch,
-		console.Panel{region = layout.inputPanel, title = INPUT_TITLE, fill_interior = true},
+		console.Panel {
+			region = layout.inputPanel,
+			title = INPUT_TITLE,
+			fill_interior = true,
+			frame_glyphs = frame_glyphs,
+			edges = console.Frame_Edge_Top,
+		},
 	)
 	render_input(&batch, console.panel_interior(console.Panel{region = layout.inputPanel}), state)
 
@@ -308,7 +314,13 @@ render_app_history_panel_sequence :: proc(
 
 	console.batch_draw_panel(
 		&batch,
-		console.Panel{region = layout.historyPanel, title = HISTORY_TITLE, fill_interior = true},
+		console.Panel {
+			region = layout.historyPanel,
+			title = HISTORY_TITLE,
+			fill_interior = true,
+			frame_glyphs = frame_glyphs,
+			edges = console.Frame_Edges_Explicit,
+		},
 	)
 	render_history(
 		&batch,
@@ -1149,7 +1161,10 @@ render_editable_input_buffer :: proc(
 // so the cursor's row stays inside a viewport of `visibleRows` height,
 // auto-scrolling to follow the cursor. Derived fresh from the cursor
 // position and content on every render; no persisted scroll state.
-input_scroll_offset_for_cursor :: proc(text: string, cursorGraphemeIndex, width, visibleRows: int) -> int {
+input_scroll_offset_for_cursor :: proc(
+	text: string,
+	cursorGraphemeIndex, width, visibleRows: int,
+) -> int {
 	if visibleRows <= 0 {
 		return 0
 	}
@@ -1184,9 +1199,7 @@ render_input_with_cursor :: proc(
 	visualRow := 0
 	start := 0
 	lineStartGrapheme := 0
-	for index := 0;
-	    index <= len(text) && visualRow - skipRows <= visibleRows;
-	    index += 1 {
+	for index := 0; index <= len(text) && visualRow - skipRows <= visibleRows; index += 1 {
 		if index == len(text) || text[index] == '\n' || text[index] == '\r' {
 			lineGraphemes := text_input.unicode_grapheme_count(text[start:index])
 			cursorInLine := -1
@@ -1664,7 +1677,9 @@ wrapped_text_slice :: proc(text: string, start, width: int) -> (finish, next: in
 input_wrapped_cursor_row_column :: proc(
 	text: string,
 	cursorGraphemeIndex, width: int,
-) -> (row, column, totalRows: int) {
+) -> (
+	row, column, totalRows: int,
+) {
 	if width <= 0 {
 		return 0, 0, 1
 	}
@@ -1727,7 +1742,10 @@ input_wrapped_cursor_row_column :: proc(
 // input_wrapped_grapheme_index_for_row_column is the inverse of
 // input_wrapped_cursor_row_column: it finds the grapheme index at the given
 // wrapped row, clamping column to that row's length.
-input_wrapped_grapheme_index_for_row_column :: proc(text: string, targetRow, column, width: int) -> int {
+input_wrapped_grapheme_index_for_row_column :: proc(
+	text: string,
+	targetRow, column, width: int,
+) -> int {
 	if width <= 0 {
 		return 0
 	}

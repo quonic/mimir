@@ -1689,8 +1689,10 @@ test_render_app_frame_contains_panels_and_status :: proc(t: ^testing.T) {
 		contains_string(sequence, console.clear_screen_home_sequence()),
 		"expected full frame render to clear the screen",
 	)
-	assert(contains_string(sequence, HISTORY_TITLE), "expected history panel title")
-	assert(contains_string(sequence, INPUT_TITLE), "expected input panel title")
+	assert(
+		contains_string(sequence, INPUT_PANEL_TOP_RULE_AT_ROW_8),
+		"expected input panel top rule",
+	)
 	assert(
 		contains_string(sequence, "Mimir the terminal harness is ready."),
 		"expected history text",
@@ -1788,9 +1790,15 @@ test_render_app_input_panel_skips_screen_clear :: proc(t: ^testing.T) {
 		!contains_string(sequence, console.clear_screen_sequence()),
 		"expected input-only render to avoid full screen clear",
 	)
-	assert(contains_string(sequence, INPUT_TITLE), "expected input panel title")
+	assert(
+		contains_string(sequence, INPUT_PANEL_TOP_RULE_AT_ROW_9),
+		"expected input panel top rule",
+	)
 	assert(contains_string(sequence, "hello"), "expected input text")
-	assert(!contains_string(sequence, HISTORY_TITLE), "expected history panel to be untouched")
+	assert(
+		!contains_string(sequence, HISTORY_PANEL_FIRST_ROW),
+		"expected history panel to be untouched",
+	)
 	assert(!contains_string(sequence, "Testing"), "expected status bar to be untouched")
 	_ = t
 }
@@ -1809,11 +1817,11 @@ test_render_app_history_panel_skips_screen_clear :: proc(t: ^testing.T) {
 		"expected history-only render to avoid full screen clear",
 	)
 	assert(
-		contains_string(sequence, HISTORY_TITLE),
+		contains_string(sequence, HISTORY_PANEL_FIRST_ROW),
 		"expected history-only render to draw history",
 	)
 	assert(
-		!contains_string(sequence, INPUT_TITLE),
+		!contains_string(sequence, INPUT_PANEL_TOP_RULE_AT_ROW_9),
 		"expected history-only render to leave input untouched",
 	)
 	assert(
@@ -1945,7 +1953,7 @@ test_render_app_frame_wraps_and_sizes_input_panel :: proc(t: ^testing.T) {
 
 	sequence := render_app_frame_sequence(&state, 10, 12, context.temp_allocator)
 
-	assert(contains_string(sequence, "\x1b[6;1H┌"), "expected wrapped input to grow panel")
+	assert(contains_string(sequence, "\x1b[6;1H─"), "expected wrapped input to grow panel")
 	assert(contains_string(sequence, "alpha beta"), "expected first wrapped input row")
 	assert(contains_string(sequence, "gamma"), "expected second wrapped input row")
 	_ = t
@@ -2105,6 +2113,12 @@ test_app_set_terminal_size_reports_changes :: proc(t: ^testing.T) {
 	assert(state.terminal.columns == 120, "expected terminal columns to update")
 	_ = t
 }
+
+// The history panel is borderless and the input panel draws only a top rule,
+// so renders are identified by those cursor-positioned glyphs instead of titles.
+HISTORY_PANEL_FIRST_ROW :: "\x1b[1;1H"
+INPUT_PANEL_TOP_RULE_AT_ROW_8 :: "\x1b[8;1H─"
+INPUT_PANEL_TOP_RULE_AT_ROW_9 :: "\x1b[9;1H─"
 
 contains_string :: proc(haystack, needle: string) -> bool {
 	if len(needle) == 0 {
