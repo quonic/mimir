@@ -20,102 +20,173 @@ Mimir takes its name from Mímir, the Norse figure associated with wisdom and co
 ## Preview
 
 ```text
-┌─ History ──────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                │
-│  ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐  │
-│  │Categories          | Providers                                                       │  │
-│  │                    |                                                                 │  │
-│  │* Providers         |   Provider: < Ollama Internal Test Server >                     │  │
-│  │  Chat Model        |   Name: Ollama Internal Test Server                             │  │
-│  │  Embedding Model   |   Type: < ollama >                                              │  │
-│  │  Safety Model      | > Endpoint: http://ollama-test.local:11434                      │  │
-│  │  Advanced          |   API key: ********                                             │  │
-│  │                    |   Configured model: qwen3.6:35b                                 │  │
-│  │                    |   Context window tokens: 262144                                 │  │
-│  │                    |   [x] Enabled                                                   │  │
-│  │                    |   [ Refresh models ]                                            │  │
-│  │                    |   [ Add provider ]                                              │  │
-│  │                    |   [ Remove provider ]                                           │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │Arrows move  Tab change pane  Enter select/edit  Esc close                            │  │
-│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
+
+ system: Mimir the terminal harness is ready.
+   ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐
+   │Categories          | Providers                                                       │
+   │                    |                                                                 │
+   │* Providers         | > Provider: < ollama >                                          │
+   │  Chat Model        |   Name: ollama                                                  │
+   │  Embedding Model   |   Type: < ollama >                                              │
+   │  Safety Model      |   Endpoint: http://localhost:11434                              │
+   │  Advanced          |   API key: ********                                             │
+   │  Skills            |   Configured model: qwen3.8:27b-mtp-q8_0                        │
+   │                    |   Context window tokens: 262144                                 │
+   │                    |   [x] Enabled                                                   │
+   │                    |   [ Refresh models ]                                            │
+   │                    |   [ Add provider ]                                              │
+   │                    |   [ Remove provider ]                                           │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │Arrows move  Tab change pane  Enter select/edit  Esc close                            │
+   └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+
 Config: arrows/Tab, Enter, Esc
 ```
 
 ```text
-┌─ History ──────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                │
-│  ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐  │
-│  │Categories          | Chat Model                                                      │  │
-│  │                    |                                                                 │  │
-│  │  Providers         |     Ollama Internal Test Server / granite4.1-guardian:8b        │  │
-│  │> Chat Model        |     Ollama Internal Test Server / qwen3-coder:30b               │  │
-│  │  Embedding Model   |     Ollama Internal Test Server / gpt-oss:120b                  │  │
-│  │  Safety Model      |   * Ollama Internal Test Server / qwen3.6:35b                   │  │
-│  │  Advanced          |     Ollama Internal Test Server / gemma4:31b                    │  │
-│  │                    |     Ollama Internal Test Server / ornith:35b                    │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │Arrows move  Tab change pane  Enter select/edit  Esc close                            │  │
-│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
+
+ system: Mimir the terminal harness is ready.
+   ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐
+   │Categories          | Providers                                                       │
+   │                    |                                                                 │
+   │* Providers         | > Provider: < GoModel >                                         │
+   │  Chat Model        |   Name: GoModel                                                 │
+   │  Embedding Model   |   Type: < openai >                                              │
+   │  Safety Model      |   Endpoint: http://localhost:8080/v1                            │
+   │  Advanced          |   API key: ********                                             │
+   │  Skills            |   Configured model: qwen3.8                                     │
+   │                    |   Context window tokens: 0                                      │
+   │                    |   [x] Enabled                                                   │
+   │                    |   [ Refresh models ]                                            │
+   │                    |   [ Add provider ]                                              │
+   │                    |   [ Remove provider ]                                           │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │Arrows move  Tab change pane  Enter select/edit  Esc close                            │
+   └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+
+Provider selected for editing
+```
+
+```text
+
+ system: Mimir the terminal harness is ready.
+   ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐
+   │Categories          | Chat Model                                                      │
+   │                    |                                                                 │
+   │  Providers         | > * ollama / qwen3.8:27b-mtp-q8_0                               │
+   │* Chat Model        |     ollama / muse-glimmer:latest                                │
+   │  Embedding Model   |     ollama / laguna-xs-2.1:q8_0                                 │
+   │  Safety Model      |     ollama / laguna-s-2.1:latest                                │
+   │  Advanced          |     ollama / gpt-oss:120b                                       │
+   │  Skills            |     GoModel / qwen3.8                                           │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │Arrows move  Tab change pane  Enter select/edit  Esc close                            │
+   └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+
+Model selected and saved
+```
+
+```text
+
+ system: Mimir the terminal harness is ready.
+   ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐
+   │Categories          | Advanced                                                        │
+   │                    |                                                                 │
+   │  Providers         |   Approval method: < Approve SAFE >                             │
+   │  Chat Model        |   Tool continuation limit: 1000                                 │
+   │  Embedding Model   |   System prompt mode: < Append >                                │
+   │  Safety Model      |   System prompt: Default                                        │
+   │> Advanced          |   [ Reset system prompt ]                                       │
+   │  Skills            |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │                    |                                                                 │
+   │Arrows move  Tab change pane  Enter select/edit  Esc close                            │
+   └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+
 Config: arrows/Tab, Enter, Esc
 ```
 
 ```text
-┌─ History ──────────────────────────────────────────────────────────────────────────────────┐
-│system: Mimir the terminal harness is ready.                                                │
-│  ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐  │
-│  │Categories          | Advanced                                                        │  │
-│  │                    |                                                                 │  │
-│  │  Providers         |   Approval method: < Approve SAFE >                             │  │
-│  │  Chat Model        |   Tool continuation limit: 1000                                 │  │
-│  │  Embedding Model   |                                                                 │  │
-│  │  Safety Model      |                                                                 │  │
-│  │> Advanced          |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │                    |                                                                 │  │
-│  │Arrows move  Tab change pane  Enter select/edit  Esc close                            │  │
-│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
-┌─ Input ────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
-Config: arrows/Tab, Enter, Esc
+
+ system: Mimir the terminal harness is ready.
+   ┌─ Configuration ──────────────────────────────────────────────────────────────────────┐
+   │Categories          | Skills                                                          │
+   │                    |                                                                 │
+   │  Providers         | > [ Refresh skills ]                                            │
+   │  Chat Model        |   [x] find-skills                                               │
+   │  Embedding Model   |   [x] ste-writing                                               │
+   │  Safety Model      |   [x] gem-design-md-guidelines                                  │
+   │  Advanced          |   [x] gem-devops-guidelines                                     │
+   │* Skills            |   [x] setup-matt-pocock-skills                                  │
+   │                    |   [x] tdd                                                       │
+   │                    |   [x] wait-what                                                 │
+   │                    |   [x] wizard                                                    │
+   │                    |   [x] writing-for-agents                                        │
+   │                    |   [x] wayfinder                                                 │
+   │                    |   [x] triage                                                    │
+   │                    |   [x] to-tickets                                                │
+   │                    |   [x] to-spec                                                   │
+   │                    |   [x] to-questionnaire                                          │
+   │                    |   [x] resolving-merge-conflicts                                 │
+   │                    |   [x] research                                                  │
+   │Arrows move  Tab change pane  Enter select/edit  Esc close                            │
+   └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+
+Skills refreshed
 ```
 
 ## Prerequisites
