@@ -9,7 +9,13 @@ RAW_HTTP_LOG_FILE :: "/last_session.log"
 rawHTTPLogHome: string
 
 set_raw_http_log_home :: proc(home: string) {
-	rawHTTPLogHome = home
+	if rawHTTPLogHome != "" {
+		delete(rawHTTPLogHome)
+		rawHTTPLogHome = ""
+	}
+	if home != "" {
+		rawHTTPLogHome = strings.clone(home)
+	}
 }
 
 raw_http_log_dir_with_home :: proc(home: string, allocator := context.allocator) -> string {
@@ -29,6 +35,7 @@ raw_http_log_path_with_home :: proc(home: string, allocator := context.allocator
 	if dir == "" {
 		return ""
 	}
+	defer delete(dir, allocator)
 
 	builder: strings.Builder
 	strings.builder_init(&builder, allocator)
@@ -47,7 +54,8 @@ raw_http_log_home :: proc() -> (string, bool) {
 }
 
 raw_http_log_ensure_dir :: proc(home: string) -> bool {
-	dir := raw_http_log_dir_with_home(home, context.temp_allocator)
+	dir := raw_http_log_dir_with_home(home, context.allocator)
+	defer delete(dir)
 	if dir == "" {
 		return false
 	}
@@ -72,7 +80,8 @@ raw_http_log_begin_with_home :: proc(home: string, target: string) -> bool {
 		return false
 	}
 
-	path := raw_http_log_path_with_home(home, context.temp_allocator)
+	path := raw_http_log_path_with_home(home, context.allocator)
+	defer delete(path)
 	if path == "" {
 		return false
 	}
@@ -103,7 +112,8 @@ raw_http_log_append_with_home :: proc(home: string, text: string) -> bool {
 		return false
 	}
 
-	path := raw_http_log_path_with_home(home, context.temp_allocator)
+	path := raw_http_log_path_with_home(home, context.allocator)
+	defer delete(path)
 	if path == "" {
 		return false
 	}

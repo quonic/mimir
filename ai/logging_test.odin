@@ -1,6 +1,7 @@
 package ai
 
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 @(test)
@@ -10,6 +11,20 @@ test_raw_http_log_path_with_home :: proc(t: ^testing.T) {
 		path == "/tmp/mimir-home/.cache/mimir/last_session.log",
 		"expected raw HTTP log path under home cache directory",
 	)
+	_ = t
+}
+
+@(test)
+test_set_raw_http_log_home_owns_configured_home :: proc(t: ^testing.T) {
+	set_raw_http_log_home("")
+	home := strings.clone("/tmp/mimir-owned-home", context.temp_allocator)
+	defer delete(home, context.temp_allocator)
+
+	set_raw_http_log_home(home)
+	defer set_raw_http_log_home("")
+
+	assert(rawHTTPLogHome == home, "expected configured raw HTTP log home")
+	assert(raw_data(rawHTTPLogHome) != raw_data(home), "expected raw HTTP log home to be owned")
 	_ = t
 }
 
