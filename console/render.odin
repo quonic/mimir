@@ -103,7 +103,7 @@ clear_region :: proc(region: Region) -> (int, io.Error) {
 	return write(clear_region_sequence(region))
 }
 
-draw_frame_sequence_with_glyphs :: proc(region: Region, glyphs: Frame_Glyphs) -> string {
+draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs = ASCII_Frame_Glyphs) -> string {
 	normalized := region_normalized(region)
 	width := region_width(normalized)
 	height := region_height(normalized)
@@ -161,14 +161,16 @@ draw_frame_sequence_with_glyphs :: proc(region: Region, glyphs: Frame_Glyphs) ->
 	return strings.to_string(builder)
 }
 
-draw_frame_sequence :: proc(region: Region) -> string {
-	return draw_frame_sequence_with_glyphs(region, ASCII_Frame_Glyphs)
+draw_frame_with_glyphs :: proc(
+	region: Region,
+	glyphs: Frame_Glyphs = ASCII_Frame_Glyphs,
+) -> (
+	int,
+	io.Error,
+) {
+	return write(draw_frame_sequence(region, glyphs))
 }
 
-draw_frame_with_glyphs :: proc(region: Region, glyphs: Frame_Glyphs) -> (int, io.Error) {
-	return write(draw_frame_sequence_with_glyphs(region, glyphs))
-}
-
-draw_frame :: proc(region: Region) -> (int, io.Error) {
-	return write(draw_frame_sequence(region))
+draw_frame :: proc(region: Region, glyphs: Frame_Glyphs = ASCII_Frame_Glyphs) -> (int, io.Error) {
+	return write(draw_frame_sequence(region, glyphs))
 }
