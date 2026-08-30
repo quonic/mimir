@@ -5,9 +5,12 @@ import "core:bytes"
 import "core:fmt"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
 
 import http "../http"
 import httpClient "../http/client"
+
+MIMIR_USER_AGENT :: "Mimir/alpha (odin-http)"
 
 OLLAMA_CHAT_PATH :: "/api/chat"
 OLLAMA_EMBED_PATH :: "/api/embed"
@@ -17,6 +20,17 @@ OLLAMA_SHOW_PATH :: "/api/show"
 OPENAI_CHAT_PATH :: "/chat/completions"
 OPENAI_EMBED_PATH :: "/embeddings"
 OPENAI_MODELS_PATH :: "/models"
+
+AI_Request_Purpose :: enum {
+	Chat,
+	Chat_Stream,
+	Embedding,
+	Models,
+	Model_Metadata,
+}
+
+requestIDMutex: sync.Mutex
+requestIDCounter: u64
 
 send_chat_completion :: proc(client: Client, request: Chat_Request) -> (Chat_Response, AI_Error) {
 	if request.model == "" || len(request.messages) == 0 {
@@ -226,6 +240,7 @@ send_ollama_chat_completion :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Chat)
 	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
@@ -259,6 +274,7 @@ send_ollama_embeddings :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Embedding)
 	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(target, wire, extraHeaders[:])
@@ -289,6 +305,7 @@ send_ollama_chat_completion_stream :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Chat_Stream)
 	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 	toolState: Ollama_Stream_Tool_State
 	streamCallbackState := callbackState
@@ -330,6 +347,7 @@ list_ollama_models :: proc(
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
 
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Models)
 	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_get(target, extraHeaders[:])
@@ -370,8 +388,65 @@ append_api_key_auth_headers :: proc(extraHeaders: ^[dynamic][2]string, apiKey: s
 	}
 
 	authorization := strings.concatenate({"Bearer ", apiKey}, context.temp_allocator)
-	append(extraHeaders, [2]string{"Authorization", authorization})
-	append(extraHeaders, [2]string{"X-API-Key", apiKey})
+	append(extraHeaders, [2]string{"authorization", authorization})
+	append(extraHeaders, [2]string{"x-api-key", apiKey})
+}
+
+append_standard_ai_headers :: proc(
+	extraHeaders: ^[dynamic][2]string,
+	providerType: Interface_Type,
+	purpose: AI_Request_Purpose,
+) {
+	append(extraHeaders, [2]string{"user-agent", MIMIR_USER_AGENT})
+	append(extraHeaders, [2]string{"accept", ai_request_accept_header(purpose)})
+	append(extraHeaders, [2]string{"x-request-id", next_ai_request_id()})
+	append(extraHeaders, [2]string{"x-initiator", "user"})
+	append(extraHeaders, [2]string{"x-interaction-type", ai_request_interaction_type(purpose)})
+
+	if providerType == .OpenAI && (purpose == .Chat || purpose == .Chat_Stream) {
+		append(extraHeaders, [2]string{"openai-intent", "conversation-other"})
+	}
+}
+
+ai_request_accept_header :: proc(purpose: AI_Request_Purpose) -> string {
+	switch purpose {
+	case .Chat_Stream:
+		return "text/event-stream, application/json"
+	case .Chat, .Embedding, .Models, .Model_Metadata:
+		return "application/json"
+	}
+	return "application/json"
+}
+
+ai_request_interaction_type :: proc(purpose: AI_Request_Purpose) -> string {
+	switch purpose {
+	case .Chat:
+		return "conversation"
+	case .Chat_Stream:
+		return "conversation-stream"
+	case .Embedding:
+		return "embedding"
+	case .Models:
+		return "model-list"
+	case .Model_Metadata:
+		return "model-metadata"
+	}
+	return "conversation"
+}
+
+next_ai_request_id :: proc() -> string {
+	sync.mutex_lock(&requestIDMutex)
+	requestIDCounter += 1
+	id := requestIDCounter
+	sync.mutex_unlock(&requestIDMutex)
+
+	return fmt.tprintf("mimir-%d", id)
+}
+
+apply_extra_headers :: proc(headers: ^http.Headers, extraHeaders: [][2]string) {
+	for header in extraHeaders {
+		http.headers_set_unsafe(headers, header[0], header[1])
+	}
 }
 
 do_json_post :: proc(
@@ -387,9 +462,7 @@ do_json_post :: proc(
 	httpClient.request_init(&req, .Post)
 	defer httpClient.request_destroy(&req)
 
-	for header in extraHeaders {
-		http.headers_set_unsafe(&req.headers, header[0], header[1])
-	}
+	apply_extra_headers(&req.headers, extraHeaders)
 
 	jsonErr := httpClient.with_json(&req, payload)
 	if jsonErr != nil {
@@ -455,9 +528,7 @@ do_json_post_stream :: proc(
 	httpClient.request_init(&req, .Post)
 	defer httpClient.request_destroy(&req)
 
-	for header in extraHeaders {
-		http.headers_set_unsafe(&req.headers, header[0], header[1])
-	}
+	apply_extra_headers(&req.headers, extraHeaders)
 
 	jsonErr := httpClient.with_json(&req, payload)
 	if jsonErr != nil {
@@ -724,9 +795,7 @@ do_json_get :: proc(
 	httpClient.request_init(&req, .Get)
 	defer httpClient.request_destroy(&req)
 
-	for header in extraHeaders {
-		http.headers_set_unsafe(&req.headers, header[0], header[1])
-	}
+	apply_extra_headers(&req.headers, extraHeaders)
 
 	_ = raw_http_log_begin(target)
 

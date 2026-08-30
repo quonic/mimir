@@ -413,6 +413,7 @@ get_ollama_model_context_window :: proc(client: Client, model: string) -> (int, 
 
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Model_Metadata)
 	append_api_key_auth_headers(&extraHeaders, client.apiKey)
 
 	body, status, errKind := do_json_post(

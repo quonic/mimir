@@ -436,6 +436,7 @@ send_openai_chat_completion :: proc(
 	}
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Chat)
 	append_openai_auth_headers(&extraHeaders, client.apiKey)
 	body, status, err := do_json_post(target, build_openai_chat_request(request), extraHeaders[:])
 	if err != .None {
@@ -462,6 +463,7 @@ send_openai_embeddings :: proc(
 	}
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Embedding)
 	append_openai_auth_headers(&extraHeaders, client.apiKey)
 	body, status, err := do_json_post(
 		target,
@@ -489,6 +491,7 @@ send_openai_chat_completion_stream :: proc(
 	}
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Chat_Stream)
 	append_openai_auth_headers(&extraHeaders, client.apiKey)
 	toolState: OpenAI_Stream_Tool_State
 	defer destroy_openai_stream_tool_state(&toolState)
@@ -525,8 +528,9 @@ list_openai_models :: proc(
 	}
 	extraHeaders: [dynamic][2]string
 	defer delete(extraHeaders)
+	append_standard_ai_headers(&extraHeaders, client.iface.type, .Models)
 	append_openai_auth_headers(&extraHeaders, client.apiKey)
-	append(&extraHeaders, [2]string{"Content-Type", "application/json"})
+	append(&extraHeaders, [2]string{"content-type", "application/json"})
 	body, status, err := do_json_get(target, extraHeaders[:])
 	if err != .None {
 		return [dynamic]Model{}, err
@@ -556,5 +560,5 @@ append_openai_auth_headers :: proc(extraHeaders: ^[dynamic][2]string, apiKey: st
 		return
 	}
 	authorization := strings.concatenate({"Bearer ", apiKey}, context.temp_allocator)
-	append(extraHeaders, [2]string{"Authorization", authorization})
+	append(extraHeaders, [2]string{"authorization", authorization})
 }
