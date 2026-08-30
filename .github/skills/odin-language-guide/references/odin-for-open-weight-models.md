@@ -57,6 +57,16 @@ name :: "Odin"
 
 Constants are compile-time values and must be evaluable at compile time.
 
+### Type aliases and typed constants
+
+```odin
+Flags :: u8
+READABLE :: Flags(0b0001)
+```
+
+- Type aliases use `Name :: Type`; do not write `type Name = Type`.
+- Typed constants put the cast on the value side, such as `Flag :: Flags(1)`.
+
 ## 4. Basic types
 
 Common built-in types include:
@@ -75,6 +85,7 @@ rune
 ### Notes
 
 - Use `int` for general integer work unless a specific width is needed.
+- Use Odin's fixed-width names such as `u8`, `i32`, and `u64`; C-style names such as `uint8` are not built-in type names.
 - `string` is a UTF-8 string type.
 - `cstring` is for C interop.
 - `rune` represents a Unicode code point.
@@ -98,6 +109,10 @@ swap :: proc(x, y: int) -> (int, int) {
 
 a, b := swap(1, 2)
 ```
+
+### No closure capture
+
+Nested procedures cannot capture variables from an outer procedure. Pass needed values explicitly, move the procedure to a wider scope, or inline the logic.
 
 ### Named return values
 
@@ -210,6 +225,8 @@ Value :: union {
 }
 ```
 
+When switching over a union stored by value, the case binding is a copy of the variant value. Mutating that binding does not update the original union; write the changed value back explicitly.
+
 ## 9. Pointers and references
 
 Odin uses `^T` for pointers.
@@ -261,12 +278,24 @@ Or for a single file:
 odin run file.odin -file
 ```
 
+Useful validation commands:
+
+```bash
+odin check .
+odin test .
+odin check path/to/package -no-entry-point
+```
+
+Use `-no-entry-point` when checking a package that intentionally has no `main` procedure.
+
 ## 13. Common model mistakes to avoid
 
 - Do not write C-style function syntax like `int foo()`. Use `proc`.
 - Do not use `*` for pointer types; use `^`.
 - Do not assume `return` syntax matches other languages; Odin uses `return` and supports multiple results.
 - Do not assume automatic memory management; use explicit allocation patterns when needed.
+- Do not write closure-style nested procedures that capture outer variables.
+- Do not use C-style fixed-width names such as `uint8`; use Odin names such as `u8`.
 - Prefer explicit declarations over overly clever abstractions.
 
 ## 14. Recommended generation pattern for models

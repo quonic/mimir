@@ -36,6 +36,7 @@ Use this skill when:
    - prefer explicit declarations
    - use `^` for pointers and `context` for allocator-aware code
    - avoid C-style assumptions and implicit garbage collection
+   - check the reference guide's common mistakes before accepting generated syntax
 4. Keep the response focused on the user's ask and include a minimal working example when helpful.
 5. Validate the result:
    - the syntax is idiomatic Odin
