@@ -208,6 +208,11 @@ test_skill_registry_catalog_excludes_disabled_skills :: proc(t: ^testing.T) {
 
 @(test)
 test_skill_registry_rejects_symlink_resource :: proc(t: ^testing.T) {
+	// core:os's `_symlink` is unconditionally `.Unsupported` on Windows, so symlinks can't be
+	// created there to exercise this rejection.
+	when ODIN_OS == .Windows {
+		return
+	}
 	project, projectErr := os.make_directory_temp("", "skill_symlink_", context.temp_allocator)
 	assert(projectErr == nil, "expected temporary directory")
 	defer os.remove_all(project)
@@ -265,6 +270,11 @@ test_skill_registry_body_uses_exact_frontmatter_delimiter :: proc(t: ^testing.T)
 
 @(test)
 test_skill_registry_skips_symlinked_skill_root :: proc(t: ^testing.T) {
+	// core:os's `_symlink` is unconditionally `.Unsupported` on Windows, so symlinks can't be
+	// created there to exercise this rejection.
+	when ODIN_OS == .Windows {
+		return
+	}
 	project, projectErr := os.make_directory_temp("", "skill_root_link_", context.temp_allocator)
 	assert(projectErr == nil, "expected temporary directory")
 	defer os.remove_all(project)
