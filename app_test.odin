@@ -540,6 +540,134 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tab_completion_single_match_auto_completes :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/ex")
+	app_handle_input_byte(&state, '\t')
+	assert(
+		text_input.input_buffer_string(&state.input) == "/exit",
+		"expected sole match to auto-complete",
+	)
+	assert(!state.commandCompletionActive, "expected no dropdown for a single match")
+	_ = t
+}
+
+@(test)
+test_tab_completion_multi_match_opens_dropdown_and_narrows :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/c")
+	app_handle_input_byte(&state, '\t')
+	assert(state.commandCompletionActive, "expected multiple matches to open a dropdown")
+	assert(app_has_overlay(&state, widgets.Dropdown_List), "expected Dropdown_List overlay")
+
+	app_handle_input_byte(&state, 'o')
+	assert(
+		text_input.input_buffer_string(&state.input) == "/config",
+		"expected narrowing to a single match to auto-complete",
+	)
+	assert(!state.commandCompletionActive, "expected dropdown to close on auto-complete")
+	_ = t
+}
+
+@(test)
+test_tab_completion_no_matches_reports_status :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/zzz")
+	app_handle_input_byte(&state, '\t')
+	assert(state.status == "No completions", "expected status for an unmatched prefix")
+	assert(!state.commandCompletionActive, "expected no dropdown opened")
+	_ = t
+}
+
+@(test)
+test_tab_completion_args_region_reports_status_without_literal_tab :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/stop ")
+	app_handle_input_byte(&state, '\t')
+	assert(state.status == "No completions", "expected status once past the command token")
+	assert(
+		text_input.input_buffer_string(&state.input) == "/stop ",
+		"expected no literal tab inserted in the args region",
+	)
+	_ = t
+}
+
+@(test)
+test_tab_completion_alias_prefix_completes_to_alias :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/q")
+	app_handle_input_byte(&state, '\t')
+	assert(
+		text_input.input_buffer_string(&state.input) == "/quit",
+		"expected alias prefix to complete to its own alias, not the primary name",
+	)
+	_ = t
+}
+
+@(test)
+test_tab_completion_escape_keeps_typed_prefix :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/c")
+	app_handle_input_byte(&state, '\t')
+	assert(state.commandCompletionActive, "expected dropdown to open for multiple matches")
+
+	app_handle_input_byte(&state, 0x1b)
+	app_flush_pending_input(&state) // resolve the lone Escape byte, same as the real poll timeout
+	assert(!state.commandCompletionActive, "expected Escape to close the dropdown")
+	assert(
+		text_input.input_buffer_string(&state.input) == "/c",
+		"expected Escape to keep the typed prefix",
+	)
+	_ = t
+}
+
+@(test)
+test_tab_completion_tab_accepts_highlighted_item_like_enter :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/c")
+	app_handle_input_byte(&state, '\t')
+	assert(state.commandCompletionActive, "expected dropdown to open for multiple matches")
+
+	_send_mouse_sequence(&state, "\x1b[B") // Arrow_Down: highlight moves from "cancel" to "clear"
+	app_handle_input_byte(&state, '\t')
+	assert(
+		text_input.input_buffer_string(&state.input) == "/clear",
+		"expected Tab to accept the highlighted item, same as Enter",
+	)
+	assert(!state.commandCompletionActive, "expected Tab acceptance to close the dropdown")
+	_ = t
+}
+
+@(test)
+test_tab_completion_enter_fills_input_without_running_command :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+
+	_send_mouse_sequence(&state, "/c")
+	app_handle_input_byte(&state, '\t')
+	assert(state.commandCompletionActive, "expected dropdown to open for multiple matches")
+
+	app_handle_input_byte(&state, '\r')
+	assert(!state.commandCompletionActive, "expected Enter to close the dropdown")
+	assert(!state.shouldQuit, "expected Enter on a completion to not execute the command")
+	_ = t
+}
+
+@(test)
 test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
 	history := []History_Entry {
 		{role = .System, content = "system"},

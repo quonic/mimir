@@ -165,55 +165,56 @@ Config_Setting :: struct {
 }
 
 App_State :: struct {
-	allocator:              mem.Allocator,
-	screen:                 App_Screen,
-	overlayStack:           [dynamic]Overlay,
-	menuOnSelect:           proc(state: ^App_State, index: int),
-	input:                  text_input.Input_Buffer,
-	inputState:             term_input.Input_State,
-	inputHistory:           [dynamic]string,
-	inputHistoryCursor:     int,
-	inputHistoryDraft:      string,
-	cursorBlinkOn:          bool,
-	shownShiftEnterHint:    bool,
-	status:                 string,
-	shouldQuit:             bool,
-	terminal:               console.Terminal_Size,
-	history:                [dynamic]History_Entry,
-	historyScrollOffset:    int,
-	historyRenderOnly:      bool,
-	mouseSelectionPanel:    Mouse_Selection_Panel,
-	historySelection:       History_Selection,
-	config:                 settings.Mimir_Config,
-	configStringsOwned:     bool,
-	configHome:             string,
-	workingDirectory:       string,
-	setupStep:              App_Setup_Step,
-	setupEndpoint:          string,
-	setupAPIKey:            string,
-	dispatcher:             tool_policy.Tool_Dispatcher,
-	dispatcherReady:        bool,
-	approval:               Approval_State,
-	skills:                 settings.Skill_Registry,
-	codeIndex:              code_index.Code_Index,
-	codeIndexReady:         bool,
-	agentHost:              Agent_Host,
-	toolExecution:          Tool_Execution_State,
-	models:                 [dynamic]Model_Select_Entry,
-	modelProviderOwned:     bool,
-	modelNameOwned:         bool,
-	embeddingProviderOwned: bool,
-	embeddingModelOwned:    bool,
-	safetyProviderOwned:    bool,
-	safetyModelOwned:       bool,
-	configCategory:         Config_Category,
-	configFocus:            Config_Focus,
-	configSettings:         [dynamic]Config_Setting,
-	configSettingCursor:    int,
-	configProviderIndex:    int,
-	configEditor:           widgets.Text_Editor,
-	configEditing:          bool,
-	configEditingSetting:   Config_Setting,
+	allocator:               mem.Allocator,
+	screen:                  App_Screen,
+	overlayStack:            [dynamic]Overlay,
+	menuOnSelect:            proc(state: ^App_State, index: int),
+	commandCompletionActive: bool,
+	input:                   text_input.Input_Buffer,
+	inputState:              term_input.Input_State,
+	inputHistory:            [dynamic]string,
+	inputHistoryCursor:      int,
+	inputHistoryDraft:       string,
+	cursorBlinkOn:           bool,
+	shownShiftEnterHint:     bool,
+	status:                  string,
+	shouldQuit:              bool,
+	terminal:                console.Terminal_Size,
+	history:                 [dynamic]History_Entry,
+	historyScrollOffset:     int,
+	historyRenderOnly:       bool,
+	mouseSelectionPanel:     Mouse_Selection_Panel,
+	historySelection:        History_Selection,
+	config:                  settings.Mimir_Config,
+	configStringsOwned:      bool,
+	configHome:              string,
+	workingDirectory:        string,
+	setupStep:               App_Setup_Step,
+	setupEndpoint:           string,
+	setupAPIKey:             string,
+	dispatcher:              tool_policy.Tool_Dispatcher,
+	dispatcherReady:         bool,
+	approval:                Approval_State,
+	skills:                  settings.Skill_Registry,
+	codeIndex:               code_index.Code_Index,
+	codeIndexReady:          bool,
+	agentHost:               Agent_Host,
+	toolExecution:           Tool_Execution_State,
+	models:                  [dynamic]Model_Select_Entry,
+	modelProviderOwned:      bool,
+	modelNameOwned:          bool,
+	embeddingProviderOwned:  bool,
+	embeddingModelOwned:     bool,
+	safetyProviderOwned:     bool,
+	safetyModelOwned:        bool,
+	configCategory:          Config_Category,
+	configFocus:             Config_Focus,
+	configSettings:          [dynamic]Config_Setting,
+	configSettingCursor:     int,
+	configProviderIndex:     int,
+	configEditor:            widgets.Text_Editor,
+	configEditing:           bool,
+	configEditingSetting:    Config_Setting,
 }
 
 app_init :: proc(allocator := context.allocator) -> App_State {
@@ -1180,7 +1181,12 @@ app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Even
 			)
 		case Config_Overlay:
 			return app_handle_config_event(state, event)
-		case widgets.Context_Menu, widgets.Dropdown_List:
+		case widgets.Context_Menu:
+			return app_handle_menu_overlay_event(state, event)
+		case widgets.Dropdown_List:
+			if state.commandCompletionActive {
+				return app_handle_command_completion_event(state, event)
+			}
 			return app_handle_menu_overlay_event(state, event)
 		}
 	}
@@ -1391,6 +1397,11 @@ app_handle_chat_key_event :: proc(state: ^App_State, key: term_input.Key_Event) 
 		return true
 	case .Tab:
 		app_reset_input_history_browse(state)
+		text := text_input.input_buffer_string(&state.input)
+		if len(text) > 0 && text[0] == '/' {
+			app_try_command_completion(state)
+			return true
+		}
 		text_input.input_buffer_push_byte(&state.input, '\t')
 		return true
 	case .Enter:
@@ -1920,6 +1931,199 @@ app_input_history_next :: proc(state: ^App_State) -> bool {
 	return true
 }
 
+// app_command_completion_prefix returns the command-name text typed after
+// '/', or ok=false once the user has moved past it into the args region.
+app_command_completion_prefix :: proc(text: string) -> (prefix: string, ok: bool) {
+	if len(text) == 0 || text[0] != '/' {
+		return "", false
+	}
+	rest := text[1:]
+	if strings.index_any(rest, " \t") >= 0 {
+		return "", false
+	}
+	return rest, true
+}
+
+// app_try_command_completion runs on the first Tab press for a '/'-prefixed
+// input: auto-completes a single match, opens a dropdown for several, or
+// reports no completions. It never falls back to inserting a literal tab.
+app_try_command_completion :: proc(state: ^App_State) {
+	text := text_input.input_buffer_string(&state.input)
+	prefix, inNameToken := app_command_completion_prefix(text)
+	if !inNameToken {
+		state.status = "No completions"
+		return
+	}
+
+	candidates := commands.command_completion_candidates(prefix, context.allocator)
+	defer delete(candidates, context.allocator)
+	switch len(candidates) {
+	case 0:
+		state.status = "No completions"
+	case 1:
+		app_apply_command_completion(state, candidates[0])
+	case:
+		app_open_command_completion_menu(state, candidates)
+	}
+}
+
+// app_apply_command_completion replaces the whole input with the completed
+// command name and closes the completion dropdown if one is open.
+app_apply_command_completion :: proc(state: ^App_State, name: string) {
+	completed := strings.concatenate({"/", name}, context.temp_allocator)
+	text_input.input_buffer_set_text(&state.input, completed)
+	text_input.input_buffer_move_cursor_end(&state.input)
+	if state.commandCompletionActive {
+		app_pop_overlay(state)
+		state.commandCompletionActive = false
+	}
+}
+
+// app_position_command_completion_menu anchors the dropdown above the input
+// panel, unlike dropdown_list_open's default of opening below an anchor row.
+app_position_command_completion_menu :: proc(state: ^App_State, list: ^widgets.Dropdown_List) {
+	inputRegion := app_input_panel(state)
+	terminal := console.Region {
+		top_row      = 1,
+		left_column  = 1,
+		bottom_row   = state.terminal.rows,
+		right_column = state.terminal.columns,
+	}
+	list.core.region = widgets.dropdown_compute_region(
+		inputRegion.top_row,
+		inputRegion.left_column,
+		len(list.core.items),
+		console.region_width(inputRegion),
+		true,
+		terminal,
+	)
+	list.core.scrollOffset = 0
+}
+
+// app_open_command_completion_menu shows a Dropdown_List of `candidates`
+// anchored above the input panel; its items slice is freed by app_pop_overlay
+// on close, same as other menu overlays.
+app_open_command_completion_menu :: proc(state: ^App_State, candidates: []string) {
+	items := make([]widgets.Menu_Item, len(candidates), context.allocator)
+	for name, index in candidates {
+		items[index] = widgets.Menu_Item {
+			label = name,
+		}
+	}
+	list := widgets.dropdown_list_init(
+		items,
+		widgets.Menu_Style{normal = widgets.MENU_DEFAULT_NORMAL_STYLE},
+	)
+	app_position_command_completion_menu(state, &list)
+	app_push_overlay(state, list)
+	state.commandCompletionActive = true
+}
+
+// app_command_completion_refilter recomputes candidates for the current input
+// and either updates the open dropdown, auto-completes the sole remaining
+// match, or closes the dropdown with a status message.
+app_command_completion_refilter :: proc(state: ^App_State) {
+	text := text_input.input_buffer_string(&state.input)
+	prefix, inNameToken := app_command_completion_prefix(text)
+	if !inNameToken {
+		app_pop_overlay(state)
+		state.commandCompletionActive = false
+		state.status = "No completions"
+		return
+	}
+
+	candidates := commands.command_completion_candidates(prefix, context.allocator)
+	defer delete(candidates, context.allocator)
+	switch len(candidates) {
+	case 0:
+		app_pop_overlay(state)
+		state.commandCompletionActive = false
+		state.status = "No completions"
+	case 1:
+		app_apply_command_completion(state, candidates[0])
+	case:
+		top := app_top_overlay(state)
+		list, isList := top^.(widgets.Dropdown_List)
+		if !isList {
+			return
+		}
+		delete(list.core.items, context.allocator)
+		items := make([]widgets.Menu_Item, len(candidates), context.allocator)
+		for name, index in candidates {
+			items[index] = widgets.Menu_Item {
+				label = name,
+			}
+		}
+		list.core.items = items
+		list.core.highlightIndex = widgets.dropdown_first_selectable(items, 0, 1)
+		app_position_command_completion_menu(state, &list)
+		top^ = list
+	}
+}
+
+// app_handle_command_completion_event routes input while the command
+// completion dropdown is open: Char/Backspace mutate the input buffer and
+// live-refilter; Tab/Enter accept the highlighted item; Arrow/Escape behave
+// like a normal menu. Any other key closes the dropdown and forwards to chat input.
+app_handle_command_completion_event :: proc(
+	state: ^App_State,
+	event: term_input.Input_Event,
+) -> bool {
+	key, isKey := event.(term_input.Key_Event)
+	if !isKey {
+		return true // swallow mouse/paste/unknown while completing
+	}
+
+	#partial switch key.code {
+	case .Escape:
+		app_pop_overlay(state)
+		state.commandCompletionActive = false
+		return true
+	case .Tab, .Enter:
+		app_accept_highlighted_command_completion(state)
+		return true
+	case .Arrow_Up:
+		app_menu_overlay_move(state, -1)
+		return true
+	case .Arrow_Down:
+		app_menu_overlay_move(state, 1)
+		return true
+	case .Char:
+		if .Alt in key.modifiers {
+			return true
+		}
+		charBytes, charLen := utf8.encode_rune(key.char)
+		text_input.input_buffer_push_text(&state.input, string(charBytes[:charLen]))
+		app_command_completion_refilter(state)
+		return true
+	case .Backspace:
+		if text_input.input_buffer_backspace(&state.input) {
+			app_command_completion_refilter(state)
+		}
+		return true
+	}
+
+	app_pop_overlay(state)
+	state.commandCompletionActive = false
+	return app_handle_chat_event(state, event)
+}
+
+// app_accept_highlighted_command_completion completes the input with the
+// dropdown's currently-highlighted command name, same as pressing Enter.
+app_accept_highlighted_command_completion :: proc(state: ^App_State) {
+	top := app_top_overlay(state)
+	if top == nil {
+		return
+	}
+	list, isList := top^.(widgets.Dropdown_List)
+	if !isList ||
+	   list.core.highlightIndex < 0 ||
+	   list.core.highlightIndex >= len(list.core.items) {
+		return
+	}
+	app_apply_command_completion(state, list.core.items[list.core.highlightIndex].label)
+}
+
 app_submit_input :: proc(state: ^App_State) {
 	text := text_input.input_buffer_submit(&state.input, context.allocator)
 	defer delete(text, context.allocator)
@@ -1958,7 +2162,8 @@ app_run_command :: proc(state: ^App_State, command: commands.Parsed_Command) {
 	case commands.Slash_Command.Config:
 		app_show_config(state)
 	case commands.Slash_Command.Help:
-		append_history(state, .Note, "Commands: /exit, /config, /help, /stop, /clear")
+		helpText := commands.help_text(context.temp_allocator)
+		append_history(state, .Note, helpText)
 		state.status = "Help displayed"
 	case commands.Slash_Command.Stop:
 		app_cancel_agent_host_stream(state)
