@@ -44,50 +44,42 @@ jobs:
       - name: Check
         run: odin check .
 
-      - name: Main Test
-        run: odin test .
+      - name: Test
+        shell: bash
+        run: |
+          # Run every package's tests, collecting all failures instead of stopping at the first one.
+          declare -a packages=(
+            "."
+            "agent"
+            "ai"
+            "approval_safety"
+            "builtin_tools"
+            "code_index"
+            "commands"
+            "console"
+            "input_history"
+            "logs"
+            "settings"
+            "text_input"
+            "tool_policy"
+            "vdb"
+            "widgets"
+          )
 
-      - name: agent Test
-        run: odin test agent
+          failed=()
+          for pkg in "${packages[@]}"; do
+            echo "::group::odin test $pkg"
+            if ! odin test "$pkg"; then
+              failed+=("$pkg")
+            fi
+            echo "::endgroup::"
+          done
 
-      - name: ai Test
-        run: odin test ai
-
-      - name: approval_safety Test
-        run: odin test approval_safety
-
-      - name: builtin_tools Test
-        run: odin test builtin_tools
-
-      - name: code_index Test
-        run: odin test code_index
-
-      - name: commands Test
-        run: odin test commands
-
-      - name: console Test
-        run: odin test console
-
-      - name: input_history Test
-        run: odin test input_history
-
-      - name: logs Test
-        run: odin test logs
-
-      - name: settings Test
-        run: odin test settings
-
-      - name: text_input Test
-        run: odin test text_input
-
-      - name: tool_policy Test
-        run: odin test tool_policy
-
-      - name: vdb Test
-        run: odin test vdb
-
-      - name: widgets Test
-        run: odin test widgets
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "The following package tests failed:"
+            printf ' - %s\n' "${failed[@]}"
+            exit 1
+          fi
 
       - name: Build
         run: odin build . -out:mimir${{ runner.os == 'Windows' && '.exe' || '' }}
