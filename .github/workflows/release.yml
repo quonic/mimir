@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Verify tag is on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ github.ref_name }}
+      prerelease: ${{ steps.kind.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Tag pushes cannot be filtered by branch, so enforce main ancestry here.
+      - name: Require the tagged commit to be on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Releases must be tagged from main."
+            exit 1
+          fi
+
+      - name: Classify release
+        id: kind
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    # Windows is not supported yet: console/raw_input.odin is POSIX-only.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: windows-latest
+            target: windows-amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install OpenSSL development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Set up Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: nightly
+
+      - name: Report Odin version
+        run: odin version
+
+      - name: Create output directory
+        run: mkdir dist
+
+      - name: Build
+        run: odin build . -out:dist/mimir${{ runner.os == 'Windows' && '.exe' || '' }} -o:speed
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          cp README.md LICENSE dist/
+          ARCHIVE="mimir-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C dist mimir README.md LICENSE
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          Copy-Item README.md, LICENSE dist/
+          $archive = "mimir-$env:VERSION-${{ matrix.target }}.zip"
+          Compress-Archive -Path dist/* -DestinationPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -FilePath "$archive.sha256" -Encoding ascii -NoNewline
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            mimir-*.tar.gz
+            mimir-*.zip
+            mimir-*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Collect checksums
+        working-directory: dist
+        run: |
+          cat ./*.sha256 > SHA256SUMS
+          rm ./*.sha256
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*
+
+      # Immutable releases freeze assets at publish time, so create a draft with
+      # every asset attached, then flip it to published.
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+        run: |
+          args=(--draft --generate-notes --title "$VERSION")
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$VERSION" "${args[@]}" dist/*
+        shell: bash
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release edit "$VERSION" --draft=false
+          else
+            gh release edit "$VERSION" --draft=false --latest
+          fi
+        shell: bash

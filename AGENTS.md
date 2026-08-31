@@ -33,6 +33,11 @@ Making breaking changes to the project is currently allowed, but it is recommend
 
 - Checking for compile errors for the current project in the root directory: `odin check .`
 
+## Continuous Integration
+
+- `.github/workflows/ci.yml` runs `odin check .` and `odin test .` on pushes to `main` and on pull requests. The Windows job is `continue-on-error` because `console/` is POSIX-only.
+- `.github/workflows/release.yml` builds and publishes release assets for `v*` tags. See `docs/releases.md`.
+
 ## Testing
 
 - Test files: `*_test.odin` (e.g., `chat_test.odin`)

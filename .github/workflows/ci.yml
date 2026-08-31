@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows is not supported yet: console/raw_input.odin is POSIX-only.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install OpenSSL development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Set up Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: nightly
+
+      - name: Report Odin version
+        run: odin version
+
+      - name: Check
+        run: odin check .
+
+      - name: Test
+        run: odin test .
+
+      - name: Build
+        run: odin build . -out:mimir${{ runner.os == 'Windows' && '.exe' || '' }}

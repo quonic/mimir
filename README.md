@@ -1,5 +1,7 @@
 # Mimir
 
+[![CI](https://github.com/quonic/mimir/actions/workflows/ci.yml/badge.svg)](https://github.com/quonic/mimir/actions/workflows/ci.yml)
+
 A terminal-native, repository-aware AI coding agent for Ollama, written in Odin.
 
 Mimir lets you work with an AI assistant directly from a project directory. It
@@ -243,6 +245,10 @@ odin check .
 odin test .
 odin build .
 ```
+
+Prebuilt binaries are attached to each tagged release. See the
+[release documentation](docs/releases.md) for the asset layout and for how to
+verify a download.
 
 ## Documentation
 
