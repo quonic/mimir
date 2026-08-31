@@ -43,8 +43,6 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: guard
     runs-on: ${{ matrix.os }}
-    # Windows is not supported yet: console/raw_input.odin is POSIX-only.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     permissions:
       contents: read
     strategy:

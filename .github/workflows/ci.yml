@@ -18,8 +18,6 @@ jobs:
   check:
     name: Check & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows is not supported yet: console/raw_input.odin is POSIX-only.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

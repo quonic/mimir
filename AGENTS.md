@@ -35,7 +35,7 @@ Making breaking changes to the project is currently allowed, but it is recommend
 
 ## Continuous Integration
 
-- `.github/workflows/ci.yml` runs `odin check .` and `odin test .` on pushes to `main` and on pull requests. The Windows job is `continue-on-error` because `console/` is POSIX-only.
+- `.github/workflows/ci.yml` runs `odin check .` and `odin test .` on pushes to `main` and on pull requests, for both Linux and Windows.
 - `.github/workflows/release.yml` builds and publishes release assets for `v*` tags. See `docs/releases.md`.
 
 ## Testing

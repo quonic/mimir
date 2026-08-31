@@ -8,13 +8,11 @@ import "code_index"
 import "commands"
 import "console"
 import term_input "console/input"
-import "core:c"
 import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strconv"
 import "core:strings"
-import "core:sys/posix"
 import "core:time"
 import "core:unicode/utf8"
 import "input_history"
@@ -663,17 +661,7 @@ render_app_history_panel :: proc(state: ^App_State) {
 	_, _ = console.write(console.synchronized_output_sequence(sequence, context.temp_allocator))
 }
 
-app_wait_for_input :: proc(timeout_ms: int) -> (ready, ok: bool) {
-	fds := [1]posix.pollfd{{fd = posix.FD(os.fd(os.stdin)), events = posix.Poll_Event{.IN}}}
-	result := posix.poll(raw_data(fds[:]), posix.nfds_t(len(fds)), c.int(timeout_ms))
-	if result < 0 {
-		return false, false
-	}
-	if result == 0 {
-		return false, true
-	}
-	return .IN in fds[0].revents, true
-}
+// app_wait_for_input is implemented per-OS in app_wait_for_input_windows.odin / app_wait_for_input_other.odin.
 
 app_flush_pending_input :: proc(state: ^App_State) -> bool {
 	event, ok := term_input.input_flush(&state.inputState)

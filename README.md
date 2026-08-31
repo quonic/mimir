@@ -202,8 +202,10 @@ Skills refreshed
 ## Supported Platforms
 
 - Linux
+- Windows, in Windows Terminal. Plain `cmd.exe` (conhost) is best-effort and
+  may not support mouse tracking on older Windows builds.
 
-Windows and macOS are untested and may never be officially supported, as I do not have access to those platforms. You are more than welcome to try building and running Mimir on those platforms, but I cannot guarantee that it will work. Feel free to open issues or PRs if you find problems or have suggestions for improvements.
+macOS is untested and may never be officially supported, as I do not have access to that platform. You are more than welcome to try building and running Mimir there, but I cannot guarantee that it will work. Feel free to open issues or PRs if you find problems or have suggestions for improvements.
 
 ## Quick Start
 

@@ -22,9 +22,10 @@ blinking cell in the input panel.
 
 Mimir enters raw mode and the alternate buffer before it renders the panels. It
 restores the terminal on `/exit`, Ctrl-C, or Ctrl-D. On Linux, it reads terminal
-size with `ioctl(TIOCGWINSZ)`. It polls for input with a short timeout so it can
-redraw after a resize. If it cannot read the size, it uses `LINES` and `COLUMNS`.
-If those are unavailable, it uses 24 by 80.
+size with `ioctl(TIOCGWINSZ)`; on Windows, it reads `GetConsoleScreenBufferInfo`.
+It polls for input with a short timeout so it can redraw after a resize. If it
+cannot read the size, it uses `LINES` and `COLUMNS`. If those are unavailable,
+it uses 24 by 80.
 
 ## Chat Streaming and Cancellation
 

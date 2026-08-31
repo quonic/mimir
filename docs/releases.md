@@ -37,9 +37,8 @@ Each release carries:
 | `mimir-<tag>-windows-amd64.zip`  | `mimir.exe`, `README.md`, `LICENSE` |
 | `SHA256SUMS`                     | SHA-256 checksum of every archive   |
 
-The Windows build is expected to fail until `console/raw_input.odin` and
-`console/terminal_size.odin` get Windows support. Its job is marked
-`continue-on-error`, so the release still publishes with the Linux asset alone.
+Windows Terminal is the preferred way to run `mimir.exe`; plain `cmd.exe`
+(conhost) is supported best-effort.
 
 ## Verifying a download
 
