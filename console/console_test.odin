@@ -538,7 +538,7 @@ test_render_sequences :: proc(t: ^testing.T) {
 	assert_sequence(
 		t,
 		draw_frame_sequence(region, ASCII_Frame_Glyphs, Frame_Edge_Top),
-		"\x1b[2;3H────────",
+		"\x1b[2;3H────",
 		"expected a top-only frame to draw a single horizontal line",
 	)
 

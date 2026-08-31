@@ -52,12 +52,13 @@ frame_edge_visible :: proc(edges: Frame_Edges, edge: Frame_Edges) -> bool {
 }
 
 // frame_line_end returns the terminator glyph for a line segment that ends
-// without a corner, falling back to the plain line glyph.
+// without a corner.
 frame_line_end :: proc(glyphs: Frame_Glyphs, line: string) -> string {
 	if len(glyphs.line_end) > 0 {
 		return glyphs.line_end
 	}
-	return line
+	_ = line
+	return ""
 }
 
 region_normalized :: proc(region: Region) -> Region {
@@ -216,18 +217,24 @@ draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs, edges: Frame_E
 				&builder,
 				cursor_goto_sequence(normalized.top_row, normalized.left_column),
 			)
-			if left_visible {
+			if !left_visible && !right_visible {
+				for column := 0; column < width; column += 1 {
+					strings.write_string(&builder, glyphs.horizontal)
+				}
+			} else if left_visible {
 				strings.write_string(&builder, glyphs.top_left)
 			} else {
 				strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
 			}
-			for column := 0; column < width - 2; column += 1 {
-				strings.write_string(&builder, glyphs.horizontal)
-			}
-			if right_visible {
-				strings.write_string(&builder, glyphs.top_right)
-			} else {
-				strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+			if left_visible || right_visible {
+				for column := 0; column < width - 2; column += 1 {
+					strings.write_string(&builder, glyphs.horizontal)
+				}
+				if right_visible {
+					strings.write_string(&builder, glyphs.top_right)
+				} else {
+					strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+				}
 			}
 		}
 		return strings.to_string(builder)
@@ -238,30 +245,49 @@ draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs, edges: Frame_E
 			&builder,
 			cursor_goto_sequence(normalized.top_row, normalized.left_column),
 		)
-		if left_visible {
+		if !left_visible && !right_visible {
+			for column := 0; column < width; column += 1 {
+				strings.write_string(&builder, glyphs.horizontal)
+			}
+		} else if left_visible {
 			strings.write_string(&builder, glyphs.top_left)
 		} else {
 			strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
 		}
-		for column := 0; column < width - 2; column += 1 {
-			strings.write_string(&builder, glyphs.horizontal)
-		}
-		if right_visible {
-			strings.write_string(&builder, glyphs.top_right)
-		} else {
-			strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+		if left_visible || right_visible {
+			for column := 0; column < width - 2; column += 1 {
+				strings.write_string(&builder, glyphs.horizontal)
+			}
+			if right_visible {
+				strings.write_string(&builder, glyphs.top_right)
+			} else {
+				strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+			}
 		}
 	}
 
-	for row := normalized.top_row + 1; row < normalized.bottom_row; row += 1 {
-		strings.write_string(&builder, cursor_goto_sequence(row, normalized.left_column))
-		if left_visible {
+	vertical_top := normalized.top_row
+	if top_visible || bottom_visible {
+		vertical_top += 1
+	}
+	vertical_bottom := normalized.bottom_row
+	if bottom_visible {
+		vertical_bottom -= 1
+	}
+
+	for row := vertical_top; row <= vertical_bottom; row += 1 {
+		if left_visible && right_visible {
+			strings.write_string(&builder, cursor_goto_sequence(row, normalized.left_column))
 			strings.write_string(&builder, glyphs.vertical)
-		}
-		for column := 0; column < width - 2; column += 1 {
-			strings.write_string(&builder, glyphs.fill)
-		}
-		if right_visible {
+			for column := 0; column < width - 2; column += 1 {
+				strings.write_string(&builder, glyphs.fill)
+			}
+			strings.write_string(&builder, glyphs.vertical)
+		} else if left_visible {
+			strings.write_string(&builder, cursor_goto_sequence(row, normalized.left_column))
+			strings.write_string(&builder, glyphs.vertical)
+		} else if right_visible {
+			strings.write_string(&builder, cursor_goto_sequence(row, normalized.right_column))
 			strings.write_string(&builder, glyphs.vertical)
 		}
 	}
@@ -271,18 +297,24 @@ draw_frame_sequence :: proc(region: Region, glyphs: Frame_Glyphs, edges: Frame_E
 			&builder,
 			cursor_goto_sequence(normalized.bottom_row, normalized.left_column),
 		)
-		if left_visible {
+		if !left_visible && !right_visible {
+			for column := 0; column < width; column += 1 {
+				strings.write_string(&builder, glyphs.horizontal)
+			}
+		} else if left_visible {
 			strings.write_string(&builder, glyphs.bottom_left)
 		} else {
 			strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
 		}
-		for column := 0; column < width - 2; column += 1 {
-			strings.write_string(&builder, glyphs.horizontal)
-		}
-		if right_visible {
-			strings.write_string(&builder, glyphs.bottom_right)
-		} else {
-			strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+		if left_visible || right_visible {
+			for column := 0; column < width - 2; column += 1 {
+				strings.write_string(&builder, glyphs.horizontal)
+			}
+			if right_visible {
+				strings.write_string(&builder, glyphs.bottom_right)
+			} else {
+				strings.write_string(&builder, frame_line_end(glyphs, glyphs.horizontal))
+			}
 		}
 	}
 
