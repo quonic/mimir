@@ -3,6 +3,42 @@ package tool_policy
 import "core:testing"
 
 @(test)
+test_permission_normalize_windows_drive_path :: proc(t: ^testing.T) {
+	when ODIN_OS == .Windows {
+		path, ok := permission_normalize_absolute_path(`C:\Users\me\work\mimir`)
+		defer delete(path, context.allocator)
+		assert(ok, "expected drive-letter path to normalize")
+		assert(path == `C:\Users\me\work\mimir`, "expected round-trip drive-letter path")
+
+		mixed, mixedOK := permission_normalize_absolute_path("C:/Users/me/work/mimir")
+		defer delete(mixed, context.allocator)
+		assert(mixedOK, "expected forward-slash drive path to normalize")
+		assert(
+			mixed == `C:\Users\me\work\mimir`,
+			"expected forward slashes rewritten to backslashes",
+		)
+
+		root, rootOK := permission_normalize_absolute_path(`C:\`)
+		defer delete(root, context.allocator)
+		assert(rootOK, "expected drive root to normalize")
+		assert(root == `C:\`, "expected drive root to round-trip")
+
+		resolved, resolvedOK := permission_resolve_project_path(`C:\work\mimir`, "src/main.odin")
+		defer delete(resolved, context.allocator)
+		assert(resolvedOK, "expected project-relative path to resolve under a drive root")
+		assert(
+			resolved == `C:\work\mimir\src\main.odin`,
+			"expected resolved path to use backslashes",
+		)
+		assert(
+			permission_path_is_within_project(`C:\work\mimir`, resolved),
+			"expected resolved path to be within the drive-letter project root",
+		)
+	}
+	_ = t
+}
+
+@(test)
 test_permission_resolve_project_path_rejects_traversal :: proc(t: ^testing.T) {
 	path, ok := permission_resolve_project_path("/workspace/project", "src/main.odin")
 	defer delete(path, context.allocator)
