@@ -58,7 +58,6 @@ jobs:
             "commands"
             "console"
             "input_history"
-            "logs"
             "settings"
             "text_input"
             "tool_policy"
