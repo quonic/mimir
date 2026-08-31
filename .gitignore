@@ -1,3 +1,4 @@
 mimir
 *.bin
 .vscode/settings.json
+dist
