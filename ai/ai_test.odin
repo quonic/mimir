@@ -19,9 +19,6 @@ Test_Stream_State :: struct {
 	usage:        Chat_Usage,
 }
 
-testOllamaStreamState: Test_Stream_State
-testStopStreamState: Test_Stream_State
-
 reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	delete(state.parts)
 	delete(state.partThinking)
@@ -32,20 +29,16 @@ reset_test_stream_state :: proc(state: ^Test_Stream_State) {
 	state^ = Test_Stream_State{}
 }
 
-record_ollama_stream_delta :: proc(delta: Chat_Stream_Delta) -> bool {
-	record_stream_delta(&testOllamaStreamState, delta)
-	return true
-}
-
-stop_after_first_stream_delta :: proc(delta: Chat_Stream_Delta) -> bool {
-	record_stream_delta(&testStopStreamState, delta)
-	return false
-}
-
 record_context_stream_delta :: proc(delta: Chat_Stream_Delta, userData: rawptr) -> bool {
 	state := cast(^Test_Stream_State)userData
 	record_stream_delta(state, delta)
 	return true
+}
+
+stop_after_first_context_stream_delta :: proc(delta: Chat_Stream_Delta, userData: rawptr) -> bool {
+	state := cast(^Test_Stream_State)userData
+	record_stream_delta(state, delta)
+	return false
 }
 
 record_stream_delta :: proc(state: ^Test_Stream_State, delta: Chat_Stream_Delta) {
@@ -477,63 +470,66 @@ test_parse_ollama_chat_response :: proc(t: ^testing.T) {
 
 @(test)
 test_parse_ollama_stream_body :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOllamaStreamState)
-	defer reset_test_stream_state(&testOllamaStreamState)
+	streamState: Test_Stream_State
+	defer reset_test_stream_state(&streamState)
 
 	payload :=
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"o\"},\"done\":false}\n" +
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"k\"},\"done\":false}\n" +
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":10,\"eval_count\":2}\n"
-	err := parse_json_lines_stream_body(
+	err := parse_json_lines_stream_body_internal(
 		payload,
-		record_ollama_stream_delta,
+		Chat_Stream_Callback_State {
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&streamState),
+		},
 		parse_ollama_stream_event,
 	)
 
 	assert(err == .None, "expected Ollama stream body to parse")
-	assert(len(testOllamaStreamState.parts) == 2, "expected Ollama stream to emit text deltas")
-	assert(testOllamaStreamState.parts[0] == "o", "expected first Ollama delta to match")
-	assert(testOllamaStreamState.parts[1] == "k", "expected second Ollama delta to match")
+	assert(len(streamState.parts) == 2, "expected Ollama stream to emit text deltas")
+	assert(streamState.parts[0] == "o", "expected first Ollama delta to match")
+	assert(streamState.parts[1] == "k", "expected second Ollama delta to match")
 	assert(
-		!testOllamaStreamState.partThinking[0] && !testOllamaStreamState.partThinking[1],
+		!streamState.partThinking[0] && !streamState.partThinking[1],
 		"expected Ollama content deltas to not be marked as thinking",
 	)
-	assert(testOllamaStreamState.model == "llama3.2", "expected Ollama stream model")
-	assert(testOllamaStreamState.finishReason == "stop", "expected Ollama finish reason")
-	assert(testOllamaStreamState.done, "expected Ollama stream to mark done")
-	assert(testOllamaStreamState.usage.inputTokens == 10, "expected Ollama prompt tokens")
-	assert(testOllamaStreamState.usage.outputTokens == 2, "expected Ollama output tokens")
+	assert(streamState.model == "llama3.2", "expected Ollama stream model")
+	assert(streamState.finishReason == "stop", "expected Ollama finish reason")
+	assert(streamState.done, "expected Ollama stream to mark done")
+	assert(streamState.usage.inputTokens == 10, "expected Ollama prompt tokens")
+	assert(streamState.usage.outputTokens == 2, "expected Ollama output tokens")
 	_ = t
 }
 
 @(test)
 test_parse_ollama_stream_thinking_delta :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOllamaStreamState)
-	defer reset_test_stream_state(&testOllamaStreamState)
+	streamState: Test_Stream_State
+	defer reset_test_stream_state(&streamState)
 
 	payload :=
 		`{"model":"qwen3","message":{"role":"assistant","content":"","thinking":"Thinking"},"done":false}` +
 		"\n"
-	err := parse_json_lines_stream_body(
+	err := parse_json_lines_stream_body_internal(
 		payload,
-		record_ollama_stream_delta,
+		Chat_Stream_Callback_State {
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&streamState),
+		},
 		parse_ollama_stream_event,
 	)
 
 	assert(err == .None, "expected Ollama thinking stream body to parse")
-	assert(len(testOllamaStreamState.parts) == 1, "expected one Ollama thinking delta")
-	assert(testOllamaStreamState.parts[0] == "Thinking", "expected Ollama thinking text")
-	assert(
-		testOllamaStreamState.partThinking[0],
-		"expected Ollama thinking delta to be marked as thinking",
-	)
+	assert(len(streamState.parts) == 1, "expected one Ollama thinking delta")
+	assert(streamState.parts[0] == "Thinking", "expected Ollama thinking text")
+	assert(streamState.partThinking[0], "expected Ollama thinking delta to be marked as thinking")
 	_ = t
 }
 
 @(test)
 test_parse_ollama_stream_tool_calls :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOllamaStreamState)
-	defer reset_test_stream_state(&testOllamaStreamState)
+	streamState: Test_Stream_State
+	defer reset_test_stream_state(&streamState)
 
 	toolState: Ollama_Stream_Tool_State
 	payload :=
@@ -542,17 +538,18 @@ test_parse_ollama_stream_tool_calls :: proc(t: ^testing.T) {
 	err := parse_json_lines_stream_body_internal(
 		payload,
 		Chat_Stream_Callback_State {
-			callback = record_ollama_stream_delta,
+			callbackWithContext = record_context_stream_delta,
+			userData = rawptr(&streamState),
 			parserData = rawptr(&toolState),
 		},
 		parse_ollama_stream_event,
 	)
 
 	assert(err == .None, "expected Ollama tool-call stream to parse")
-	assert(len(testOllamaStreamState.toolCalls) == 1, "expected one streamed tool call")
-	assert(testOllamaStreamState.toolCalls[0].id == "ollama-0", "expected synthetic ID")
-	assert(testOllamaStreamState.toolCalls[0].name == "read_file", "expected tool name")
-	assert(testOllamaStreamState.done, "expected Ollama tool stream to finish")
+	assert(len(streamState.toolCalls) == 1, "expected one streamed tool call")
+	assert(streamState.toolCalls[0].id == "ollama-0", "expected synthetic ID")
+	assert(streamState.toolCalls[0].name == "read_file", "expected tool name")
+	assert(streamState.done, "expected Ollama tool stream to finish")
 	_ = t
 }
 
@@ -585,8 +582,13 @@ test_parse_stream_body_with_context_callback :: proc(t: ^testing.T) {
 
 @(test)
 test_parse_json_lines_stream_chunks :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testOllamaStreamState)
-	defer reset_test_stream_state(&testOllamaStreamState)
+	streamState: Test_Stream_State
+	defer reset_test_stream_state(&streamState)
+
+	callbackState := Chat_Stream_Callback_State {
+		callbackWithContext = record_context_stream_delta,
+		userData            = rawptr(&streamState),
+	}
 
 	state: Stream_Parse_State
 	defer destroy_stream_parse_state(&state)
@@ -594,32 +596,32 @@ test_parse_json_lines_stream_chunks :: proc(t: ^testing.T) {
 	stop, err := parse_json_lines_stream_chunk(
 		&state,
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"o",
-		Chat_Stream_Callback_State{callback = record_ollama_stream_delta},
+		callbackState,
 		parse_ollama_stream_event,
 	)
 	assert(err == .None, "expected partial JSONL chunk to parse without error")
 	assert(!stop, "expected partial JSONL chunk not to stop")
-	assert(len(testOllamaStreamState.parts) == 0, "expected partial JSONL chunk not to emit")
+	assert(len(streamState.parts) == 0, "expected partial JSONL chunk not to emit")
 
 	stop, err = parse_json_lines_stream_chunk(
 		&state,
 		"k\"},\"done\":false}\n{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\"}\n",
-		Chat_Stream_Callback_State{callback = record_ollama_stream_delta},
+		callbackState,
 		parse_ollama_stream_event,
 	)
 
 	assert(err == .None, "expected complete JSONL chunks to parse")
 	assert(!stop, "expected complete JSONL chunks not to stop")
-	assert(len(testOllamaStreamState.parts) == 1, "expected one JSONL content delta to emit")
-	assert(testOllamaStreamState.parts[0] == "ok", "expected split JSONL delta to match")
-	assert(testOllamaStreamState.done, "expected JSONL done event to emit")
+	assert(len(streamState.parts) == 1, "expected one JSONL content delta to emit")
+	assert(streamState.parts[0] == "ok", "expected split JSONL delta to match")
+	assert(streamState.done, "expected JSONL done event to emit")
 	_ = t
 }
 
 @(test)
 test_stream_chunk_callback_stop :: proc(t: ^testing.T) {
-	reset_test_stream_state(&testStopStreamState)
-	defer reset_test_stream_state(&testStopStreamState)
+	streamState: Test_Stream_State
+	defer reset_test_stream_state(&streamState)
 
 	state: Stream_Parse_State
 	defer destroy_stream_parse_state(&state)
@@ -628,15 +630,18 @@ test_stream_chunk_callback_stop :: proc(t: ^testing.T) {
 		&state,
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"a\"},\"done\":false}\n" +
 		"{\"model\":\"llama3.2\",\"message\":{\"role\":\"assistant\",\"content\":\"b\"},\"done\":false}\n",
-		Chat_Stream_Callback_State{callback = stop_after_first_stream_delta},
+		Chat_Stream_Callback_State {
+			callbackWithContext = stop_after_first_context_stream_delta,
+			userData = rawptr(&streamState),
+		},
 		parse_ollama_stream_event,
 	)
 
 	assert(err == .None, "expected callback stop to return without error")
 	assert(stop, "expected parser to report callback stop")
-	assert(testStopStreamState.calls == 1, "expected parser to stop after first callback")
-	assert(len(testStopStreamState.parts) == 1, "expected only one stopped delta")
-	assert(testStopStreamState.parts[0] == "a", "expected first stopped delta to match")
+	assert(streamState.calls == 1, "expected parser to stop after first callback")
+	assert(len(streamState.parts) == 1, "expected only one stopped delta")
+	assert(streamState.parts[0] == "a", "expected first stopped delta to match")
 	_ = t
 }
 
