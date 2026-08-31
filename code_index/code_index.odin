@@ -127,8 +127,14 @@ code_index_project_root :: proc(
 		return ""
 	}
 	candidate := strings.clone(normalized, allocator)
+	gitSuffix := "/.git"
+	when ODIN_OS == .Windows {
+		if len(candidate) >= 2 && candidate[1] == ':' {
+			gitSuffix = "\\.git"
+		}
+	}
 	for {
-		gitPath := strings.concatenate({candidate, "/.git"}, allocator)
+		gitPath := strings.concatenate({candidate, gitSuffix}, allocator)
 		isGitRoot := os.exists(gitPath)
 		delete(gitPath, allocator)
 		if isGitRoot {
@@ -148,11 +154,14 @@ code_index_project_root :: proc(
 }
 
 code_index_parent_path :: proc(path: string, allocator := context.allocator) -> string {
+	separator: u8 = '/'
+	when ODIN_OS == .Windows {
+		if len(path) >= 2 && path[1] == ':' {
+			separator = '\\'
+		}
+	}
 	for index := len(path) - 1; index > 0; index -= 1 {
-		if path[index] == '/' {
-			if index == 0 {
-				return "/"
-			}
+		if path[index] == separator {
 			return strings.clone(path[:index], allocator)
 		}
 	}
@@ -375,7 +384,17 @@ code_index_relative_path :: proc(
 	if !code_index_path_is_within_project(projectRoot, path) || len(path) <= len(projectRoot) {
 		return ""
 	}
-	return strings.clone(path[len(projectRoot) + 1:], allocator)
+	relative := strings.clone(path[len(projectRoot) + 1:], allocator)
+	when ODIN_OS == .Windows {
+		// Chunk identifiers and search results always use forward slashes, regardless of OS.
+		relativeBytes := transmute([]byte)relative
+		for index := 0; index < len(relativeBytes); index += 1 {
+			if relativeBytes[index] == '\\' {
+				relativeBytes[index] = '/'
+			}
+		}
+	}
+	return relative
 }
 
 code_index_sort_sources :: proc(sources: []Code_Source) {
@@ -931,23 +950,33 @@ code_index_save :: proc(index: ^Code_Index) -> Code_Index_Error {
 	return .None
 }
 
-code_index_normalize_absolute_path :: proc(
-	path: string,
+// Recognizes a `C:\`/`C:/` drive-letter root; UNC and relative-drive paths are not supported.
+@(private)
+code_index_windows_drive_prefix :: proc(path: string) -> (prefix: string, rest: string, ok: bool) {
+	if len(path) < 3 {
+		return "", "", false
+	}
+	letter := path[0]
+	if !((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) {
+		return "", "", false
+	}
+	if path[1] != ':' || (path[2] != '\\' && path[2] != '/') {
+		return "", "", false
+	}
+	return path[:2], path[3:], true
+}
+
+@(private)
+code_index_join_normalized_segments :: proc(
+	rest: string,
+	separator: string,
+	prefix: string,
 	allocator := context.allocator,
 ) -> (
 	string,
 	bool,
 ) {
-	if len(path) == 0 {
-		return "", false
-	}
-	when ODIN_OS != .Windows {
-		if path[0] != '/' {
-			return "", false
-		}
-	}
-
-	parts := strings.split(path, "/", allocator)
+	parts := strings.split(rest, separator, allocator)
 	defer delete(parts, allocator)
 	segments := make([dynamic]string, 0, len(parts), allocator)
 	defer delete(segments)
@@ -960,9 +989,39 @@ code_index_normalize_absolute_path :: proc(
 		}
 		append(&segments, part)
 	}
-	joined := strings.join(segments[:], "/", allocator)
+	joined := strings.join(segments[:], separator, allocator)
 	defer delete(joined, allocator)
-	return strings.concatenate({"/", joined}, allocator), true
+	return strings.concatenate({prefix, separator, joined}, allocator), true
+}
+
+code_index_normalize_absolute_path :: proc(
+	path: string,
+	allocator := context.allocator,
+) -> (
+	string,
+	bool,
+) {
+	if len(path) == 0 {
+		return "", false
+	}
+
+	when ODIN_OS == .Windows {
+		// Windows working directories use drive letters and backslashes (e.g. `C:\Users\me`);
+		// forward-slash-rooted paths (as used by project-relative test fixtures) still fall
+		// through to the POSIX-style branch below.
+		if prefix, rawRest, isWindowsPath := code_index_windows_drive_prefix(path); isWindowsPath {
+			rest, restAllocated := strings.replace_all(rawRest, "/", "\\", allocator)
+			defer if restAllocated {
+				delete(rest, allocator)
+			}
+			return code_index_join_normalized_segments(rest, "\\", prefix, allocator)
+		}
+	}
+
+	if path[0] != '/' {
+		return "", false
+	}
+	return code_index_join_normalized_segments(path[1:], "/", "", allocator)
 }
 
 code_index_resolve_project_path :: proc(
@@ -992,9 +1051,13 @@ code_index_path_is_within_project :: proc(projectRoot, resolvedPath: string) -> 
 	if resolvedPath == projectRoot {
 		return true
 	}
-	return(
-		len(resolvedPath) > len(projectRoot) &&
-		strings.starts_with(resolvedPath, projectRoot) &&
-		resolvedPath[len(projectRoot)] == '/' \
-	)
+	if len(resolvedPath) <= len(projectRoot) || !strings.starts_with(resolvedPath, projectRoot) {
+		return false
+	}
+	boundary := resolvedPath[len(projectRoot)]
+	when ODIN_OS == .Windows {
+		return boundary == '/' || boundary == '\\'
+	} else {
+		return boundary == '/'
+	}
 }
