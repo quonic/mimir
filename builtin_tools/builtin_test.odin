@@ -20,7 +20,7 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 	expected_tools := [9]string {
 		"read_file",
 		"write_file",
-		"run_command",
+		"run_in_terminal",
 		"list_available_shells",
 		"list_directory",
 		"get_file_info",

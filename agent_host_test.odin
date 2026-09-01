@@ -255,7 +255,7 @@ test_agent_host_records_invalid_tool_requests :: proc(t: ^testing.T) {
 		agent.runtime_request_tool(
 			&state.agentHost.runtime,
 			agentID,
-			agent.Tool_Request{id = "call-1", name = "run_command", arguments = ""},
+			agent.Tool_Request{id = "call-1", name = "run_in_terminal", arguments = ""},
 		) ==
 		.None,
 		"expected tool request",
@@ -263,7 +263,7 @@ test_agent_host_records_invalid_tool_requests :: proc(t: ^testing.T) {
 	assert(app_poll_agent_host(&state), "expected invalid tool request to be dispatched")
 	entry := state.history[len(state.history) - 1]
 	assert(entry.role == .Tool, "expected invalid tool history entry")
-	assert(entry.content == "run_command (failed)", "expected invalid tool history status")
+	assert(entry.content == "run_in_terminal (failed)", "expected invalid tool history status")
 	_ = t
 }
 
@@ -282,7 +282,7 @@ test_agent_allow_once_executes_and_resumes_runtime :: proc(t: ^testing.T) {
 			agentID,
 			agent.Tool_Request {
 				id = "call-1",
-				name = "run_command",
+				name = "run_in_terminal",
 				arguments = `{"command":"pwd"}`,
 			},
 		) ==
@@ -319,7 +319,7 @@ test_agent_deny_all_resolves_request_without_modal :: proc(t: ^testing.T) {
 			agentID,
 			agent.Tool_Request {
 				id = "call-1",
-				name = "run_command",
+				name = "run_in_terminal",
 				arguments = `{"command":"pwd"}`,
 			},
 		) ==
@@ -384,7 +384,7 @@ test_agent_approve_all_starts_tool_without_modal :: proc(t: ^testing.T) {
 			agentID,
 			agent.Tool_Request {
 				id = "call-1",
-				name = "run_command",
+				name = "run_in_terminal",
 				arguments = `{"command":"pwd"}`,
 			},
 		) ==
@@ -415,7 +415,7 @@ test_agent_tool_execution_projects_output_to_runtime :: proc(t: ^testing.T) {
 			agentID,
 			agent.Tool_Request {
 				id = "call-1",
-				name = "run_command",
+				name = "run_in_terminal",
 				arguments = `{"command":"pwd"}`,
 			},
 		) ==
@@ -453,7 +453,7 @@ test_agent_tool_completion_starts_queued_tool_request :: proc(t: ^testing.T) {
 				hasToolCall = true,
 				toolCall = ai.Tool_Call {
 					id = "call-1",
-					name = "run_command",
+					name = "run_in_terminal",
 					arguments = `{"command":"pwd"}`,
 				},
 			},
@@ -469,7 +469,7 @@ test_agent_tool_completion_starts_queued_tool_request :: proc(t: ^testing.T) {
 				hasToolCall = true,
 				toolCall = ai.Tool_Call {
 					id = "call-2",
-					name = "run_command",
+					name = "run_in_terminal",
 					arguments = `{"command":"pwd"}`,
 				},
 				done = true,
@@ -517,7 +517,7 @@ test_agent_continuation_text_starts_after_tool_history :: proc(t: ^testing.T) {
 				hasToolCall = true,
 				toolCall = ai.Tool_Call {
 					id = "call-1",
-					name = "run_command",
+					name = "run_in_terminal",
 					arguments = `{"command":"pwd"}`,
 				},
 				done = true,

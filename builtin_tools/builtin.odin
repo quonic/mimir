@@ -10,7 +10,7 @@ import "core:strings"
 // Tool IDs for builtins (excludes search_code and find_code which are app-provided)
 TOOL_READ_FILE :: "read_file"
 TOOL_WRITE_FILE :: "write_file"
-TOOL_RUN_COMMAND :: "run_command"
+TOOL_RUN_COMMAND :: "run_in_terminal"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
@@ -151,10 +151,14 @@ list_available_shells :: proc() -> string {
 	return joined_shells
 }
 
-run_command :: proc(command: string, working_directory: string = "", timeout: int = 0) -> string {
+run_in_terminal :: proc(
+	command: string,
+	working_directory: string = "",
+	timeout: int = 0,
+) -> string {
 	shell := get_default_shell()
 	if shell == "" {
-		return fmt.aprintf("run_command_tool: Unsupported OS: %s", ODIN_OS)
+		return fmt.aprintf("run_in_terminal_tool: Unsupported OS: %s", ODIN_OS)
 	}
 
 	proc_desc := os.Process_Desc {
@@ -167,7 +171,7 @@ run_command :: proc(command: string, working_directory: string = "", timeout: in
 			proc_desc.working_dir, gwd_err = os.get_working_directory(context.allocator)
 			if gwd_err != nil {
 				return fmt.aprintf(
-					"run_command_tool: Error getting working directory: %s",
+					"run_in_terminal_tool: Error getting working directory: %s",
 					gwd_err,
 				)
 			}
@@ -175,7 +179,7 @@ run_command :: proc(command: string, working_directory: string = "", timeout: in
 		}
 	} else if !os.is_directory(working_directory) {
 		return fmt.aprintf(
-			"run_command_tool: Working directory does not exist: %s",
+			"run_in_terminal_tool: Working directory does not exist: %s",
 			working_directory,
 		)
 	} else {
@@ -196,11 +200,11 @@ run_command :: proc(command: string, working_directory: string = "", timeout: in
 	defer delete(stdout, context.allocator)
 	defer delete(stderr, context.allocator)
 	if err != nil {
-		return fmt.aprintf("run_command_tool: Error executing command `%s`: %s", command, err)
+		return fmt.aprintf("run_in_terminal_tool: Error executing command `%s`: %s", command, err)
 	}
 	if state.exit_code != 0 {
 		return fmt.aprintf(
-			"run_command_tool: Command exited with code %d. Stderr: %s",
+			"run_in_terminal_tool: Command exited with code %d. Stderr: %s",
 			state.exit_code,
 			string(stderr),
 		)
@@ -381,7 +385,7 @@ execute_builtin_tool :: proc(
 			defer delete(resolvedDirectory, dispatcher.allocator)
 			workingDirectory = resolvedDirectory
 		}
-		return run_command(call.command, workingDirectory, call.timeout)
+		return run_in_terminal(call.command, workingDirectory, call.timeout)
 	case:
 		return fmt.aprintf("Unknown builtin tool: %s", call.id)
 	}

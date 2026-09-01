@@ -170,7 +170,7 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 	call, callOK := app_tool_call_from_ai(
 		ai.Tool_Call {
 			id = "call-1",
-			name = "run_command",
+			name = "run_in_terminal",
 			arguments = `{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
 		},
 		context.allocator,
@@ -298,7 +298,7 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 	assert(
 		app_show_approval(
 			&state,
-			tool_policy.Tool_Call{id = "run_command", command = "git status"},
+			tool_policy.Tool_Call{id = "run_in_terminal", command = "git status"},
 		),
 		"expected command call to open approval modal",
 	)
@@ -450,13 +450,13 @@ test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testin
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	app_run_command(&state, commands.parse_slash_command("/models"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/models"))
 	assert(state.status == "Unknown command", "expected /models to be unsupported")
 
-	app_run_command(&state, commands.parse_slash_command("/skills"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/skills"))
 	assert(state.status == "Unknown command", "expected /skills to be unsupported")
 
-	app_run_command(&state, commands.parse_slash_command("/help"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/help"))
 	assert(
 		state.history[len(state.history) - 1].content ==
 		"Commands: /exit, /config, /help, /stop, /clear",
@@ -754,7 +754,7 @@ test_stop_command_requests_stream_cancel :: proc(t: ^testing.T) {
 		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
 		"expected active agent to start",
 	)
-	app_run_command(&state, commands.parse_slash_command("/stop"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/stop"))
 	assert(state.status == "Canceling assistant stream", "expected /stop to update status")
 	agentState, agentOK := agent.runtime_state(
 		&state.agentHost.runtime,

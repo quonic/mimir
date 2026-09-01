@@ -188,7 +188,7 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Write
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "run_command":
+	case "run_in_terminal":
 		if call.command == "" {
 			return Permission_Action{}, false
 		}

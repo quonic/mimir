@@ -490,7 +490,7 @@ app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	     "list_directory",
 	     "get_file_info",
 	     "list_available_shells",
-	     "run_command":
+	     "run_in_terminal":
 		return true
 	case "search_code", "find_code":
 		return true

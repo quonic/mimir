@@ -87,8 +87,8 @@ headless_dispatch_request :: proc(state: ^App_State, request: ^Headless_Request)
 		state.shouldQuit = true
 		state.status = "Exiting"
 		headless_write_ack(request, state)
-	case "run_command":
-		headless_handle_run_command(state, request)
+	case "run_in_terminal":
+		headless_handle_run_in_terminal(state, request)
 	case "send_message":
 		headless_handle_send_message(state, request)
 	case "get_history":
@@ -113,7 +113,7 @@ headless_dispatch_request :: proc(state: ^App_State, request: ^Headless_Request)
 	}
 }
 
-headless_handle_run_command :: proc(state: ^App_State, request: ^Headless_Request) {
+headless_handle_run_in_terminal :: proc(state: ^App_State, request: ^Headless_Request) {
 	commandValue, hasCommand := request.object["command"]
 	if !hasCommand {
 		headless_write_error(request, "invalid_request", "missing command")
@@ -129,7 +129,7 @@ headless_handle_run_command :: proc(state: ^App_State, request: ^Headless_Reques
 		headless_write_error(request, "invalid_request", "command must be a slash command")
 		return
 	}
-	app_run_command(state, command)
+	app_run_in_terminal(state, command)
 	headless_poll_once(state)
 	headless_write_ack(request, state)
 }
