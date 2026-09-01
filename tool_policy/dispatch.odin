@@ -43,6 +43,8 @@ Tool_Call :: struct {
 	task:              string,
 	subagentToolsJSON: string,
 	subagentDepth:     int,
+	old:               string,
+	new:               string,
 }
 
 tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
@@ -63,6 +65,8 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		task              = strings.clone(call.task, allocator),
 		subagentToolsJSON = strings.clone(call.subagentToolsJSON, allocator),
 		subagentDepth     = call.subagentDepth,
+		old               = strings.clone(call.old, allocator),
+		new               = strings.clone(call.new, allocator),
 	}
 	return clone
 }
@@ -81,6 +85,8 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.query, allocator)
 	delete(call.task, allocator)
 	delete(call.subagentToolsJSON, allocator)
+	delete(call.old, allocator)
+	delete(call.new, allocator)
 }
 
 tool_dispatcher_init :: proc(
@@ -174,6 +180,21 @@ tool_dispatch_build_action :: proc(
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
 	case "write_file":
+		resolvedPath, pathOK := permission_resolve_project_path(
+			dispatcher.projectRoot,
+			call.filePath,
+			dispatcher.allocator,
+		)
+		if !pathOK || !permission_path_is_within_project(dispatcher.projectRoot, resolvedPath) {
+			if resolvedPath != "" {
+				delete(resolvedPath, dispatcher.allocator)
+			}
+			return Permission_Action{}, false
+		}
+		action.effect = .Write
+		action.targetPath = resolvedPath
+		action.targetPathOwned = true
+	case "replace_string_in_file":
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
 			call.filePath,

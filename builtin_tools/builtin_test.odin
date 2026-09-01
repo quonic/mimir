@@ -9,7 +9,7 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 	definitions := builtin_ai_tool_definitions(context.temp_allocator)
 	defer delete(definitions)
 
-	assert(len(definitions) == 10, "expected 10 builtin tool definitions")
+	assert(len(definitions) == 11, "expected 11 builtin tool definitions")
 
 	// Verify all expected tools are present
 	tool_names := make([]string, len(definitions), context.temp_allocator)
@@ -17,9 +17,10 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 		tool_names[i] = def.name
 	}
 
-	expected_tools := [9]string {
+	expected_tools := [10]string {
 		"read_file",
 		"write_file",
+		"replace_string_in_file",
 		"run_in_terminal",
 		"list_available_shells",
 		"list_directory",

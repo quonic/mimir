@@ -10,6 +10,7 @@ import "core:strings"
 // Tool IDs for builtins (excludes search_code and find_code which are app-provided)
 TOOL_READ_FILE :: "read_file"
 TOOL_WRITE_FILE :: "write_file"
+TOOL_REPLACE_STRING_IN_FILE :: "replace_string_in_file"
 TOOL_RUN_COMMAND :: "run_in_terminal"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
@@ -54,6 +55,17 @@ write_file :: proc(file_path: string, content: string, overwrite: string) -> str
 		return fmt.aprintf("Error writing file: %s", err)
 	}
 	return strings.clone("File written successfully", context.allocator)
+}
+
+replace_string_in_file :: proc(file_path: string, old: string, new: string) -> string {
+	content := read_file(file_path)
+	if strings.contains(content, old) {
+		content, _ = strings.replace(content, old, new, -1, context.allocator)
+		write_file(file_path, content, "true")
+		return strings.clone("String replaced successfully", context.allocator)
+	} else {
+		return strings.clone("String not found in file", context.allocator)
+	}
 }
 
 list_directory :: proc(directory_path: string) -> string {
@@ -248,6 +260,14 @@ builtin_ai_tool_definitions :: proc(
 	append(
 		&definitions,
 		ai.Tool_Definition {
+			name = TOOL_REPLACE_STRING_IN_FILE,
+			description = "Replace a string in a file in the active project",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["file_path","old","new"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
 			name = TOOL_RUN_COMMAND,
 			description = "Run a shell command in the active project",
 			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`,
@@ -386,6 +406,17 @@ execute_builtin_tool :: proc(
 			workingDirectory = resolvedDirectory
 		}
 		return run_in_terminal(call.command, workingDirectory, call.timeout)
+	case TOOL_REPLACE_STRING_IN_FILE:
+		path, pathOK := tool_policy.permission_resolve_project_path(
+			dispatcher.projectRoot,
+			call.filePath,
+			dispatcher.allocator,
+		)
+		if !pathOK {
+			return "Permission denied."
+		}
+		defer delete(path, dispatcher.allocator)
+		return replace_string_in_file(path, call.old, call.new)
 	case:
 		return fmt.aprintf("Unknown builtin tool: %s", call.id)
 	}
