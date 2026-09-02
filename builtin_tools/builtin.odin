@@ -11,7 +11,7 @@ import "core:strings"
 TOOL_READ_FILE :: "read_file"
 TOOL_WRITE_FILE :: "write_file"
 TOOL_REPLACE_STRING_IN_FILE :: "replace_string_in_file"
-TOOL_RUN_COMMAND :: "run_in_terminal"
+TOOL_IN_TERMINAL :: "run_in_terminal"
 TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
@@ -268,7 +268,7 @@ builtin_ai_tool_definitions :: proc(
 	append(
 		&definitions,
 		ai.Tool_Definition {
-			name = TOOL_RUN_COMMAND,
+			name = TOOL_IN_TERMINAL,
 			description = "Run a shell command in the active project",
 			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`,
 		},
@@ -391,7 +391,7 @@ execute_builtin_tool :: proc(
 		}
 		defer delete(path, dispatcher.allocator)
 		return get_file_info(path)
-	case TOOL_RUN_COMMAND:
+	case TOOL_IN_TERMINAL:
 		workingDirectory := dispatcher.projectRoot
 		if call.workingDirectory != "" {
 			resolvedDirectory, directoryOK := tool_policy.permission_resolve_project_path(
