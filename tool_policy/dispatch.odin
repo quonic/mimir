@@ -233,7 +233,7 @@ tool_dispatch_build_action :: proc(
 		}
 		action.workingDirectory = resolvedDirectory
 		action.workingDirectoryOwned = true
-	case "create_subagent":
+	case "run_subagent":
 		if call.task == "" {
 			return Permission_Action{}, false
 		}

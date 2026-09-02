@@ -16,7 +16,7 @@ TOOL_LIST_SHELLS :: "list_available_shells"
 TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
 TOOL_READ_SKILL :: "read_skill"
-TOOL_CREATE_SUBAGENT :: "create_subagent"
+TOOL_RUN_SUBAGENT :: "run_subagent"
 
 // ============================================================
 // Filesystem Operations
@@ -300,7 +300,7 @@ builtin_ai_tool_definitions :: proc(
 	append(
 		&definitions,
 		ai.Tool_Definition {
-			name = TOOL_CREATE_SUBAGENT,
+			name = TOOL_RUN_SUBAGENT,
 			description = "Delegate a self-contained task to a child agent and wait for its final answer",
 			parametersJSON = `{"type":"object","properties":{"task":{"type":"string","description":"The self-contained task for the subagent to complete"},"tools":{"type":"array","items":{"type":"string"},"description":"Names of tools the subagent is allowed to use"},"depth":{"type":"integer","description":"How many further levels of subagents this subagent may itself spawn"}},"required":["task","tools"]}`,
 		},

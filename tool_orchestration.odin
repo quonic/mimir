@@ -302,7 +302,7 @@ app_tool_call_from_ai :: proc(
 			call.maxResults = SEARCH_CODE_MAX_RESULTS
 		}
 	}
-	if call.id == "create_subagent" {
+	if call.id == "run_subagent" {
 		if call.task == "" || len(arguments.tools) == 0 {
 			tool_policy.tool_call_destroy(&call, allocator)
 			return tool_policy.Tool_Call{}, false

@@ -27,7 +27,7 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 		"get_file_info",
 		"search_code",
 		"find_code",
-		"create_subagent",
+		"run_subagent",
 	}
 
 	for expected in expected_tools {

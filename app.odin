@@ -695,7 +695,7 @@ app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) ->
 		target = call.command
 	case "search_code", "find_code":
 		target = call.query
-	case "create_subagent":
+	case "run_subagent":
 		target = call.task
 	}
 	if target == "" {

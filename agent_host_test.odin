@@ -562,10 +562,10 @@ test_agent_host_resolves_parent_tool_call_when_subagent_completes :: proc(t: ^te
 	)
 	parentID := state.agentHost.activeAgentID
 
-	// Drive the parent into Executing_Tool, mirroring a resolved create_subagent call.
+	// Drive the parent into Executing_Tool, mirroring a resolved run_subagent call.
 	request := agent.Tool_Request {
 		id        = "call-1",
-		name      = "create_subagent",
+		name      = "run_subagent",
 		arguments = `{}`,
 	}
 	assert(

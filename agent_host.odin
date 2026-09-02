@@ -22,7 +22,7 @@ Agent_Host :: struct {
 	spinnerLastFrame:    time.Tick,
 	usage:               ai.Chat_Usage,
 	contextWindowTokens: int,
-	// Suspended parent frames while a create_subagent tool call is awaiting its child's result.
+	// Suspended parent frames while a run_subagent tool call is awaiting its child's result.
 	agentStack:          [dynamic]Agent_Stack_Frame,
 	subagentSpawnCount:  int,
 	maxSubagents:        int,
@@ -151,7 +151,7 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 	return dirty
 }
 
-// Resolves the parent's pending create_subagent tool call with the finished child's result.
+// Resolves the parent's pending run_subagent tool call with the finished child's result.
 app_finish_subagent :: proc(
 	state: ^App_State,
 	childID: agent.Agent_ID,
@@ -357,7 +357,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		return true
 	}
 	historyIndex := app_append_tool_history(state, call, "running")
-	if call.id == "create_subagent" {
+	if call.id == "run_subagent" {
 		if !app_start_subagent(state, call, historyIndex, event.agentID, event.requestID) {
 			app_update_tool_history(state, historyIndex, call, "failed")
 			_ = agent.runtime_resolve_tool(
@@ -411,7 +411,7 @@ app_fail_subagent_tool :: proc(
 	return true
 }
 
-// Spawns a child agent for a create_subagent tool call and retargets the active agent to it.
+// Spawns a child agent for a run_subagent tool call and retargets the active agent to it.
 // Returns false only if the call could not be resolved at all (caller then finishes it as failed).
 app_start_subagent :: proc(
 	state: ^App_State,
@@ -467,7 +467,7 @@ app_start_subagent :: proc(
 
 	childTools := make([dynamic]ai.Tool_Definition, 0, len(requestedNames), context.temp_allocator)
 	for name in requestedNames {
-		if name == "create_subagent" && childDepth <= 0 {
+		if name == "run_subagent" && childDepth <= 0 {
 			continue
 		}
 		for definition in available {
