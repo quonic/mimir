@@ -135,7 +135,7 @@ system_prompt_effective :: proc(
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
 			"{{skills}}",
-			skills_list(state.config.skills, allocator),
+			skills_list(state.skills, allocator),
 			allocator,
 		)
 
