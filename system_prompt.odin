@@ -182,13 +182,7 @@ system_prompt_date :: proc(allocator := context.allocator) -> string {
 	return date_line
 }
 
-Skill :: struct {
-	name:        string,
-	description: string,
-	filePath:    string,
-}
-
-skills_list :: proc(skills: []Skill, allocator := context.allocator) -> string {
+skills_list :: proc(skills: []settings.Skill, allocator := context.allocator) -> string {
 	if len(skills) == 0 {
 		return ""
 	}
@@ -204,7 +198,7 @@ skills_list :: proc(skills: []Skill, allocator := context.allocator) -> string {
 				fmt.aprintf(
 					"\t<skill name=\"%s\" filePath=\"%s\">\n\t\t%s\n\t</skill>\n",
 					skill.name,
-					skill.filePath,
+					skill.path,
 					skill.description,
 					allocator = allocator,
 				),
