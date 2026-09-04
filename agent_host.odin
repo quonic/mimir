@@ -583,6 +583,7 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	}
 
 	systemPrompt := system_prompt_effective(
+		state^,
 		state.config.systemPrompt,
 		state.config.systemPromptMode,
 		context.temp_allocator,
