@@ -17,6 +17,8 @@ TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
 TOOL_READ_SKILL :: "read_skill"
 TOOL_RUN_SUBAGENT :: "run_subagent"
+TOOL_PATCH_FILE :: "patch_file" // TODO: Implement patch_file tool. Uses unidiff format to apply a patch to a file in the active project. Parameters: file_path, patch_content
+TOOL_GREP_SEARCH :: "grep_search" // TODO: Implement grep_search tool. Searches for a string in a file and returns the matching lines. Parameters: file_path, search_string, max_results
 
 // ============================================================
 // Filesystem Operations
