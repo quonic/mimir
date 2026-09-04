@@ -503,16 +503,15 @@ app_start_subagent :: proc(
 	if agent.runtime_begin(&state.agentHost.runtime, childID) != .None {
 		return app_fail_subagent_tool(state, parentID, "Could not start subagent.")
 	}
-	skillCatalog := settings.skill_registry_prompt_catalog(&state.skills, context.temp_allocator)
-	defer delete(skillCatalog, context.temp_allocator)
-	childSystemPrompt := SUBAGENT_SYSTEM_PROMPT
-	if skillCatalog != "" {
-		childSystemPrompt = strings.concatenate(
-			{SUBAGENT_SYSTEM_PROMPT, "\n\nAvailable skills:\n", skillCatalog},
-			context.temp_allocator,
-		)
-		defer delete(childSystemPrompt, context.temp_allocator)
-	}
+	childSystemPrompt := strings.concatenate(
+		{
+			SUBAGENT_SYSTEM_PROMPT,
+			"\n\n",
+			get_skills_list(state.skills.skills[:], context.temp_allocator),
+		},
+		context.temp_allocator,
+	)
+	defer delete(childSystemPrompt, context.temp_allocator)
 	messages := []ai.Message {
 		{role = .System, content = childSystemPrompt},
 		{role = .User, content = call.task},
@@ -589,16 +588,6 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		context.temp_allocator,
 	)
 	defer delete(systemPrompt, context.temp_allocator)
-	skillCatalog := settings.skill_registry_prompt_catalog(&state.skills, context.temp_allocator)
-	defer delete(skillCatalog, context.temp_allocator)
-	if skillCatalog != "" {
-		withSkills := strings.concatenate(
-			{systemPrompt, "\n\nAvailable skills:\n", skillCatalog},
-			context.temp_allocator,
-		)
-		delete(systemPrompt, context.temp_allocator)
-		systemPrompt = withSkills
-	}
 	messages := app_build_ai_messages(state.history[:], systemPrompt, context.temp_allocator)
 	defer agent_host_messages_destroy(&messages, context.temp_allocator)
 	if len(messages) == 0 {

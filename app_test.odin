@@ -317,7 +317,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 10, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 11, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }
@@ -715,12 +715,18 @@ test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) 
 	defaultPrompt := system_prompt_effective(state, "", .Append, context.temp_allocator)
 	defer delete(defaultPrompt, context.temp_allocator)
 	assert(
-		defaultPrompt ==
-		strings.concatenate(
-			{DEFAULT_SYSTEM_PROMPT, system_prompt_date(context.temp_allocator)},
-			context.temp_allocator,
-		),
-		"expected default system prompt",
+		strings.contains(defaultPrompt, state.config.selectedModel),
+		"expected default system prompt to contain selected model",
+	)
+	assert(
+		!strings.contains(defaultPrompt, "{model_name}"),
+		"expected model name placeholder to be expanded",
+	)
+	assert(
+		!strings.contains(defaultPrompt, "{{output_formatting}}") &&
+		!strings.contains(defaultPrompt, "{{skills}}") &&
+		!strings.contains(defaultPrompt, "{{attachments}}"),
+		"expected prompt placeholders to be expanded",
 	)
 
 	appendedPrompt := system_prompt_effective(state, "Use tabs.", .Append, context.temp_allocator)

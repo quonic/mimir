@@ -1,20 +1,25 @@
 package ai
 
+import "base:runtime"
 import "core:os"
 import "core:strings"
+import "core:sync"
 
 RAW_HTTP_LOG_DIR :: "/.cache/mimir"
 RAW_HTTP_LOG_FILE :: "/last_session.log"
 
 rawHTTPLogHome: string
+rawHTTPLogHomeMutex: sync.Mutex
 
 set_raw_http_log_home :: proc(home: string) {
+	sync.mutex_lock(&rawHTTPLogHomeMutex)
+	defer sync.mutex_unlock(&rawHTTPLogHomeMutex)
 	if rawHTTPLogHome != "" {
-		delete(rawHTTPLogHome)
+		delete(rawHTTPLogHome, runtime.heap_allocator())
 		rawHTTPLogHome = ""
 	}
 	if home != "" {
-		rawHTTPLogHome = strings.clone(home)
+		rawHTTPLogHome = strings.clone(home, runtime.heap_allocator())
 	}
 }
 
@@ -45,8 +50,10 @@ raw_http_log_path_with_home :: proc(home: string, allocator := context.allocator
 }
 
 raw_http_log_home :: proc() -> (string, bool) {
+	sync.mutex_lock(&rawHTTPLogHomeMutex)
+	defer sync.mutex_unlock(&rawHTTPLogHomeMutex)
 	if rawHTTPLogHome != "" {
-		return rawHTTPLogHome, true
+		return strings.clone(rawHTTPLogHome, context.temp_allocator), true
 	}
 
 	home, err := os.user_home_dir(context.temp_allocator)
@@ -72,6 +79,7 @@ raw_http_log_begin :: proc(target: string) -> bool {
 	if !ok {
 		return false
 	}
+	defer delete(home, context.temp_allocator)
 	return raw_http_log_begin_with_home(home, target)
 }
 
@@ -101,6 +109,7 @@ raw_http_log_append :: proc(text: string) -> bool {
 	if !ok {
 		return false
 	}
+	defer delete(home, context.temp_allocator)
 	return raw_http_log_append_with_home(home, text)
 }
 

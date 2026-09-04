@@ -119,7 +119,7 @@ system_prompt_effective :: proc(
 		// Insert the model name into the system prompt
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
-			"{{model_name}}",
+			"{model_name}",
 			state.config.selectedModel,
 			allocator,
 		)
@@ -135,7 +135,7 @@ system_prompt_effective :: proc(
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
 			"{{skills}}",
-			skills_list(state.skills.skills[:], allocator),
+			get_skills_list(state.skills.skills[:], allocator),
 			allocator,
 		)
 
@@ -151,14 +151,11 @@ system_prompt_effective :: proc(
 
 
 		if customPrompt == "" {
-			return strings.concatenate(
-				{DEFAULT_SYSTEM_PROMPT, system_prompt_date(allocator)},
-				allocator,
-			)
+			return strings.concatenate({result_prompt, system_prompt_date(allocator)}, allocator)
 		}
 		return strings.concatenate(
 			{
-				DEFAULT_SYSTEM_PROMPT,
+				result_prompt,
 				"\n\nAdditional user instructions:\n",
 				customPrompt,
 				system_prompt_date(allocator),
@@ -182,7 +179,7 @@ system_prompt_date :: proc(allocator := context.allocator) -> string {
 	return date_line
 }
 
-skills_list :: proc(skills: []settings.Skill, allocator := context.allocator) -> string {
+get_skills_list :: proc(skills: []settings.Skill, allocator := context.allocator) -> string {
 	if len(skills) == 0 {
 		return ""
 	}
