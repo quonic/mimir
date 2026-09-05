@@ -31,6 +31,41 @@ test_tool_dispatcher_requires_approval_for_write_without_grant :: proc(t: ^testi
 }
 
 @(test)
+test_tool_dispatcher_requires_approval_for_patch_file :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	result := tool_dispatch_prepare(
+		&dispatcher,
+		Tool_Call{id = "patch_file", filePath = "src/main.odin", patchContent = "patch"},
+	)
+	defer tool_dispatch_result_destroy(&result, context.allocator)
+	assert(result.decision == .Approval_Required, "expected patch write to require approval")
+	assert(result.actionOK, "expected patch write to resolve to an action")
+	assert(result.action.effect == .Write, "expected patch_file to use the Write effect")
+	assert(
+		result.action.targetPath == "/workspace/project/src/main.odin",
+		"expected patch target path to be resolved",
+	)
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_denies_patch_file_path_traversal :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	decision := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call{id = "patch_file", filePath = "../secret.txt", patchContent = "patch"},
+	)
+	assert(decision == .Denied, "expected traversal patch target to be denied")
+	_ = t
+}
+
+@(test)
 test_tool_dispatch_prepare_preserves_approval_action :: proc(t: ^testing.T) {
 	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
 	defer tool_dispatcher_destroy(&dispatcher)

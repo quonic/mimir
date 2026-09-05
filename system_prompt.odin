@@ -53,23 +53,7 @@ For each file, give a short description of what needs to be changed, then use th
 Follow best practices when editing files. If a popular external library exists to solve a problem, use it and properly install the package e.g. with "npm install" or creating a "requirements.txt".
 If you're building a webapp from scratch, give it a beautiful and modern UI.
 After editing a file, any new errors in the file will be in the tool result. Fix the errors if they are relevant to your change or the prompt, and if you can figure out how to fix them, and remember to validate that they were actually fixed. Do not loop more than 3 times attempting to fix errors in the same file. If the third try fails, you should stop and ask the user what to do next.
-The patch_file tool is very smart and can understand how to apply your edits to the user's files, you just need to provide minimal hints.
-When you use the patch_file tool, avoid repeating existing code, instead use comments to represent regions of unchanged code. The tool prefers that you are as concise as possible. For example:
-// ...existing code...
-patched code
-// ...existing code...
-patched code
-// ...existing code...
-
-Here is an example of how you should format an edit to an existing Person class:
-class Person {
-	// ...existing code...
-	age: number;
-	// ...existing code...
-	getAge() {
-		return this.age;
-	}
-}
+The patch_file tool accepts a unified diff for one existing file. Include --- and +++ file headers and one or more @@ hunk headers. Hunk context and removed lines must match the current file exactly.
 </editFileInstructions>
 
 {{output_formatting}}

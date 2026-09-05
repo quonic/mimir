@@ -188,6 +188,38 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 }
 
 @(test)
+test_patch_file_tool_call_decodes_owned_patch_content :: proc(t: ^testing.T) {
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-patch",
+			name = "patch_file",
+			arguments = `{"file_path":"src/main.odin","patch_content":"--- a/src/main.odin\n+++ b/src/main.odin\n@@ -1 +1 @@\n-old\n+new\n"}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
+	assert(callOK, "expected patch_file tool call to decode")
+	assert(call.filePath == "src/main.odin", "expected patch target path")
+	assert(strings.contains(call.patchContent, "@@ -1 +1 @@"), "expected owned patch content")
+	_ = t
+}
+
+@(test)
+test_patch_file_tool_call_requires_patch_arguments :: proc(t: ^testing.T) {
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-patch",
+			name = "patch_file",
+			arguments = `{"file_path":"src/main.odin"}`,
+		},
+		context.allocator,
+	)
+	assert(!callOK, "expected missing patch_content to be rejected")
+	assert(call.id == "", "expected rejected call to be empty")
+	_ = t
+}
+
+@(test)
 test_approval_safety_model_prefers_explicit_selection :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -317,7 +349,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 11, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 12, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }

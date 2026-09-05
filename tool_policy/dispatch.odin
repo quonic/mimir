@@ -34,6 +34,7 @@ Tool_Call :: struct {
 	startLine:         string,
 	endLine:           string,
 	content:           string,
+	patchContent:      string,
 	overwrite:         string,
 	command:           string,
 	workingDirectory:  string,
@@ -56,6 +57,7 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		startLine         = strings.clone(call.startLine, allocator),
 		endLine           = strings.clone(call.endLine, allocator),
 		content           = strings.clone(call.content, allocator),
+		patchContent      = strings.clone(call.patchContent, allocator),
 		overwrite         = strings.clone(call.overwrite, allocator),
 		command           = strings.clone(call.command, allocator),
 		workingDirectory  = strings.clone(call.workingDirectory, allocator),
@@ -79,6 +81,7 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.startLine, allocator)
 	delete(call.endLine, allocator)
 	delete(call.content, allocator)
+	delete(call.patchContent, allocator)
 	delete(call.overwrite, allocator)
 	delete(call.command, allocator)
 	delete(call.workingDirectory, allocator)
@@ -179,7 +182,7 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Read
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "write_file":
+	case "write_file", "patch_file":
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
 			call.filePath,

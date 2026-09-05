@@ -37,6 +37,7 @@ AI_Tool_Call_Arguments :: struct {
 	file_path:         string,
 	directory_path:    string,
 	content:           string,
+	patch_content:     string,
 	overwrite:         string,
 	command:           string,
 	working_directory: string,
@@ -272,6 +273,7 @@ app_tool_call_from_ai :: proc(
 		filePath         = strings.clone(arguments.file_path, allocator),
 		directoryPath    = strings.clone(arguments.directory_path, allocator),
 		content          = strings.clone(arguments.content, allocator),
+		patchContent     = strings.clone(arguments.patch_content, allocator),
 		overwrite        = strings.clone(arguments.overwrite, allocator),
 		command          = strings.clone(arguments.command, allocator),
 		workingDirectory = strings.clone(arguments.working_directory, allocator),
@@ -290,6 +292,11 @@ app_tool_call_from_ai :: proc(
 			tool_policy.tool_call_destroy(&call, allocator)
 			return tool_policy.Tool_Call{}, false
 		}
+	}
+	if call.id == builtin_tools.TOOL_PATCH_FILE &&
+	   (call.filePath == "" || call.patchContent == "") {
+		tool_policy.tool_call_destroy(&call, allocator)
+		return tool_policy.Tool_Call{}, false
 	}
 	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
@@ -487,6 +494,7 @@ app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	case "read_file",
 	     "read_skill",
 	     "write_file",
+	     "patch_file",
 	     "list_directory",
 	     "get_file_info",
 	     "list_available_shells",

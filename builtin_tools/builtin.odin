@@ -5,6 +5,7 @@ import tool_policy "../tool_policy"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:strconv"
 import "core:strings"
 
 // Tool IDs for builtins (excludes search_code and find_code which are app-provided)
@@ -17,7 +18,7 @@ TOOL_LIST_DIRECTORY :: "list_directory"
 TOOL_GET_FILE_INFO :: "get_file_info"
 TOOL_READ_SKILL :: "read_skill"
 TOOL_RUN_SUBAGENT :: "run_subagent"
-TOOL_PATCH_FILE :: "patch_file" // TODO: Implement patch_file tool. Uses unidiff format to apply a patch to a file in the active project. Parameters: file_path, patch_content
+TOOL_PATCH_FILE :: "patch_file"
 TOOL_GREP_SEARCH :: "grep_search" // TODO: Implement grep_search tool. Searches for a string in a file and returns the matching lines. Parameters: file_path, search_string, max_results
 
 // ============================================================
@@ -68,6 +69,289 @@ replace_string_in_file :: proc(file_path: string, old: string, new: string) -> s
 	} else {
 		return strings.clone("String not found in file", context.allocator)
 	}
+}
+
+Patch_Line :: struct {
+	text:       string,
+	hasNewline: bool,
+}
+
+patch_line_text :: proc(line: string) -> string {
+	if strings.ends_with(line, "\r") {
+		return line[:len(line) - 1]
+	}
+	return line
+}
+
+patch_parse_range :: proc(text: string, index: ^int, prefix: u8) -> (int, int, bool) {
+	if index^ >= len(text) || text[index^] != prefix {
+		return 0, 0, false
+	}
+	index^ += 1
+	startIndex := index^
+	for index^ < len(text) && text[index^] >= '0' && text[index^] <= '9' {
+		index^ += 1
+	}
+	if startIndex == index^ {
+		return 0, 0, false
+	}
+	start, startOK := strconv.parse_int(text[startIndex:index^])
+	if !startOK {
+		return 0, 0, false
+	}
+	count := 1
+	if index^ < len(text) && text[index^] == ',' {
+		index^ += 1
+		countIndex := index^
+		for index^ < len(text) && text[index^] >= '0' && text[index^] <= '9' {
+			index^ += 1
+		}
+		if countIndex == index^ {
+			return 0, 0, false
+		}
+		count, startOK = strconv.parse_int(text[countIndex:index^])
+		if !startOK {
+			return 0, 0, false
+		}
+	}
+	return start, count, true
+}
+
+patch_parse_hunk_header :: proc(
+	line: string,
+) -> (
+	oldStart, oldCount, newStart, newCount: int,
+	ok: bool,
+) {
+	if !strings.starts_with(line, "@@ ") {
+		return
+	}
+	index := 3
+	oldStart, oldCount, ok = patch_parse_range(line, &index, '-')
+	if !ok || index >= len(line) || line[index] != ' ' {
+		return 0, 0, 0, 0, false
+	}
+	index += 1
+	newStart, newCount, ok = patch_parse_range(line, &index, '+')
+	if !ok || index + 3 > len(line) || line[index:index + 3] != " @@" {
+		return 0, 0, 0, 0, false
+	}
+	return oldStart, oldCount, newStart, newCount, true
+}
+
+patch_range_index :: proc(start, count: int) -> (int, bool) {
+	if start < 0 || count < 0 || (start == 0 && count != 0) {
+		return 0, false
+	}
+	if count == 0 {
+		return start, true
+	}
+	return start - 1, true
+}
+
+patch_file :: proc(file_path: string, patch_content: string) -> string {
+	data, readErr := os.read_entire_file_from_path(file_path, context.allocator)
+	if readErr != nil {
+		return fmt.aprintf("Error applying patch: could not read file: %s", readErr)
+	}
+	defer delete(data, context.allocator)
+
+	source := string(data)
+	usesCRLF := strings.contains(source, "\r\n")
+	sourceParts := strings.split(source, "\n", context.allocator)
+	defer delete(sourceParts, context.allocator)
+	sourceCount := len(sourceParts)
+	if strings.ends_with(source, "\n") {
+		sourceCount -= 1
+	}
+	sourceLines := make([]Patch_Line, sourceCount, context.allocator)
+	defer delete(sourceLines, context.allocator)
+	for index in 0 ..< sourceCount {
+		sourceLines[index] = Patch_Line {
+			text       = patch_line_text(sourceParts[index]),
+			hasNewline = index < sourceCount - 1 || strings.ends_with(source, "\n"),
+		}
+	}
+
+	patchParts := strings.split(patch_content, "\n", context.allocator)
+	defer delete(patchParts, context.allocator)
+	patchCount := len(patchParts)
+	if patchCount > 0 && patchParts[patchCount - 1] == "" {
+		patchCount -= 1
+	}
+	headerIndex := -1
+	for index in 0 ..< patchCount {
+		line := patch_line_text(patchParts[index])
+		if strings.starts_with(line, "Binary files ") ||
+		   strings.starts_with(line, "rename from ") ||
+		   strings.starts_with(line, "rename to ") {
+			return strings.clone(
+				"Error applying patch: binary and rename patches are not supported.",
+				context.allocator,
+			)
+		}
+		if strings.starts_with(line, "--- ") {
+			headerIndex = index
+			break
+		}
+	}
+	if headerIndex < 0 || headerIndex + 1 >= patchCount {
+		return strings.clone(
+			"Error applying patch: missing unified diff file headers.",
+			context.allocator,
+		)
+	}
+	oldHeader := patch_line_text(patchParts[headerIndex])
+	newHeader := patch_line_text(patchParts[headerIndex + 1])
+	if !strings.starts_with(newHeader, "+++ ") {
+		return strings.clone(
+			"Error applying patch: expected new-file header after old-file header.",
+			context.allocator,
+		)
+	}
+	if strings.contains(oldHeader, "/dev/null") || strings.contains(newHeader, "/dev/null") {
+		return strings.clone(
+			"Error applying patch: creating and deleting files is not supported.",
+			context.allocator,
+		)
+	}
+
+	resultLines := make([dynamic]Patch_Line, 0, sourceCount, context.allocator)
+	defer delete(resultLines)
+	sourceIndex := 0
+	patchIndex := headerIndex + 2
+	hunkCount := 0
+	for patchIndex < patchCount {
+		header := patch_line_text(patchParts[patchIndex])
+		if strings.starts_with(header, "--- ") || strings.starts_with(header, "diff --git ") {
+			return strings.clone(
+				"Error applying patch: multiple file patches are not supported.",
+				context.allocator,
+			)
+		}
+		oldStart, oldCount, newStart, newCount, headerOK := patch_parse_hunk_header(header)
+		if !headerOK {
+			return fmt.aprintf("Error applying patch: invalid hunk header: %s", header)
+		}
+		oldTarget, oldTargetOK := patch_range_index(oldStart, oldCount)
+		newTarget, newTargetOK := patch_range_index(newStart, newCount)
+		if !oldTargetOK || !newTargetOK || oldTarget < sourceIndex || oldTarget > sourceCount {
+			return strings.clone(
+				"Error applying patch: hunk range is outside the target file.",
+				context.allocator,
+			)
+		}
+		for sourceIndex < oldTarget {
+			append(&resultLines, sourceLines[sourceIndex])
+			sourceIndex += 1
+		}
+		if newTarget != len(resultLines) {
+			return strings.clone(
+				"Error applying patch: new-file hunk position is inconsistent.",
+				context.allocator,
+			)
+		}
+
+		patchIndex += 1
+		seenOld, seenNew := 0, 0
+		previousOperation: u8
+		previousSourceIndex := -1
+		for patchIndex < patchCount {
+			line := patch_line_text(patchParts[patchIndex])
+			if strings.starts_with(line, "@@ ") ||
+			   strings.starts_with(line, "--- ") ||
+			   strings.starts_with(line, "diff --git ") {
+				break
+			}
+			if line == `\ No newline at end of file` {
+				if previousOperation == '+' {
+					resultLines[len(resultLines) - 1].hasNewline = false
+				} else if previousOperation == ' ' || previousOperation == '-' {
+					if previousSourceIndex < 0 || sourceLines[previousSourceIndex].hasNewline {
+						return strings.clone(
+							"Error applying patch: no-newline marker does not match target file.",
+							context.allocator,
+						)
+					}
+					if previousOperation == ' ' {
+						resultLines[len(resultLines) - 1].hasNewline = false
+					}
+				} else {
+					return strings.clone(
+						"Error applying patch: misplaced no-newline marker.",
+						context.allocator,
+					)
+				}
+				previousOperation = 0
+				patchIndex += 1
+				continue
+			}
+			if len(line) == 0 || (line[0] != ' ' && line[0] != '+' && line[0] != '-') {
+				return strings.clone("Error applying patch: invalid hunk line.", context.allocator)
+			}
+			operation := line[0]
+			text := line[1:]
+			switch operation {
+			case ' ', '-':
+				if sourceIndex >= sourceCount || sourceLines[sourceIndex].text != text {
+					return fmt.aprintf(
+						"Error applying patch: context mismatch at source line %d.",
+						sourceIndex + 1,
+					)
+				}
+				previousSourceIndex = sourceIndex
+				if operation == ' ' {
+					append(&resultLines, sourceLines[sourceIndex])
+					seenNew += 1
+				}
+				sourceIndex += 1
+				seenOld += 1
+			case '+':
+				append(&resultLines, Patch_Line{text = text, hasNewline = true})
+				previousSourceIndex = -1
+				seenNew += 1
+			}
+			previousOperation = operation
+			patchIndex += 1
+		}
+		if seenOld != oldCount || seenNew != newCount {
+			return fmt.aprintf(
+				"Error applying patch: hunk count mismatch (expected -%d/+%d, got -%d/+%d).",
+				oldCount,
+				newCount,
+				seenOld,
+				seenNew,
+			)
+		}
+		hunkCount += 1
+	}
+	if hunkCount == 0 {
+		return strings.clone("Error applying patch: patch contains no hunks.", context.allocator)
+	}
+	for sourceIndex < sourceCount {
+		append(&resultLines, sourceLines[sourceIndex])
+		sourceIndex += 1
+	}
+
+	builder: strings.Builder
+	strings.builder_init(&builder, context.allocator)
+	newline := "\n"
+	if usesCRLF {
+		newline = "\r\n"
+	}
+	for line in resultLines {
+		strings.write_string(&builder, line.text)
+		if line.hasNewline {
+			strings.write_string(&builder, newline)
+		}
+	}
+	result := strings.to_string(builder)
+	defer delete(result, context.allocator)
+	writeErr := os.write_entire_file_from_string(file_path, result)
+	if writeErr != nil {
+		return fmt.aprintf("Error applying patch: could not write file: %s", writeErr)
+	}
+	return strings.clone("Patch applied successfully", context.allocator)
 }
 
 list_directory :: proc(directory_path: string) -> string {
@@ -234,7 +518,7 @@ run_in_terminal :: proc(
 builtin_ai_tool_definitions :: proc(
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
-	definitions := make([dynamic]ai.Tool_Definition, 0, 10, allocator)
+	definitions := make([dynamic]ai.Tool_Definition, 0, 12, allocator)
 	append(
 		&definitions,
 		ai.Tool_Definition {
@@ -265,6 +549,14 @@ builtin_ai_tool_definitions :: proc(
 			name = TOOL_REPLACE_STRING_IN_FILE,
 			description = "Replace a string in a file in the active project",
 			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["file_path","old","new"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
+			name = TOOL_PATCH_FILE,
+			description = "Apply a unified diff to an existing file in the active project",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"patch_content":{"type":"string"}},"required":["file_path","patch_content"]}`,
 		},
 	)
 	append(
@@ -371,6 +663,17 @@ execute_builtin_tool :: proc(
 		}
 		defer delete(path, dispatcher.allocator)
 		return write_file(path, call.content, call.overwrite)
+	case TOOL_PATCH_FILE:
+		path, pathOK := tool_policy.permission_resolve_project_path(
+			dispatcher.projectRoot,
+			call.filePath,
+			dispatcher.allocator,
+		)
+		if !pathOK {
+			return "Permission denied."
+		}
+		defer delete(path, dispatcher.allocator)
+		return patch_file(path, call.patchContent)
 	case TOOL_LIST_DIRECTORY:
 		path, pathOK := tool_policy.permission_resolve_project_path(
 			dispatcher.projectRoot,
