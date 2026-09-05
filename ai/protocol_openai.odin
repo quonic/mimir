@@ -332,7 +332,7 @@ models_dev_model_has_output_modality :: proc(
 	modality: string,
 ) -> bool {
 	for candidate in metadata.modalities.output {
-		if strings.to_lower(candidate, context.temp_allocator) == modality {
+		if candidate == modality {
 			return true
 		}
 	}
