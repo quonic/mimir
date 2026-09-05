@@ -9,7 +9,7 @@ test_builtin_ai_tool_definitions_returns_all_tools :: proc(t: ^testing.T) {
 	definitions := builtin_ai_tool_definitions(context.temp_allocator)
 	defer delete(definitions)
 
-	assert(len(definitions) == 12, "expected 12 builtin tool definitions")
+	assert(len(definitions) == 13, "expected 13 builtin tool definitions")
 
 	// Verify all expected tools are present
 	tool_names := make([]string, len(definitions), context.temp_allocator)
@@ -17,7 +17,7 @@ test_builtin_ai_tool_definitions_returns_all_tools :: proc(t: ^testing.T) {
 		tool_names[i] = def.name
 	}
 
-	expected_tools := [12]string {
+	expected_tools := [13]string {
 		"read_file",
 		"read_skill",
 		"write_file",
@@ -27,6 +27,7 @@ test_builtin_ai_tool_definitions_returns_all_tools :: proc(t: ^testing.T) {
 		"list_available_shells",
 		"list_directory",
 		"get_file_info",
+		"grep_search",
 		"search_code",
 		"find_code",
 		"run_subagent",
@@ -42,6 +43,57 @@ test_builtin_ai_tool_definitions_returns_all_tools :: proc(t: ^testing.T) {
 		}
 		assert(found, "expected tool definition to be present")
 	}
+}
+
+@(test)
+test_grep_search_returns_matching_lines_as_json :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/search.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(
+		path,
+		"alpha 12\r\nbeta\r\nalpha 34\r\nalpha 56\r\n",
+	)
+	assert(writeErr == nil, "expected search fixture to be written")
+
+	result := grep_search(path, `^alpha [0-9]+$`, 2)
+	defer delete(result, context.allocator)
+	assert(
+		result ==
+		`{"results":[{"line_number":1,"text":"alpha 12"},{"line_number":3,"text":"alpha 34"}]}`,
+		"expected ordered, limited regex matches with normalized CRLF lines",
+	)
+	_ = t
+}
+
+@(test)
+test_grep_search_escapes_json_and_reports_errors :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/search.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(path, "say \"hello\"\\world\nother\n")
+	assert(writeErr == nil, "expected search fixture to be written")
+
+	matched := grep_search(path, "hello", 50)
+	defer delete(matched, context.allocator)
+	assert(
+		matched == `{"results":[{"line_number":1,"text":"say \"hello\"\\world"}]}`,
+		"expected matching text to be JSON escaped",
+	)
+
+	noMatch := grep_search(path, "missing", 50)
+	defer delete(noMatch, context.allocator)
+	assert(noMatch == `{"results":[]}`, "expected an empty JSON result list")
+
+	invalidPattern := grep_search(path, "[", 50)
+	defer delete(invalidPattern, context.allocator)
+	assert(
+		strings.starts_with(invalidPattern, "Error compiling regular expression:"),
+		"expected an invalid regex error",
+	)
+	_ = t
 }
 
 @(test)

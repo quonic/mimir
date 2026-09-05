@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
+import "core:text/regex"
 
 // Tool IDs for builtins (excludes search_code and find_code which are app-provided)
 TOOL_READ_FILE :: "read_file"
@@ -19,7 +20,18 @@ TOOL_GET_FILE_INFO :: "get_file_info"
 TOOL_READ_SKILL :: "read_skill"
 TOOL_RUN_SUBAGENT :: "run_subagent"
 TOOL_PATCH_FILE :: "patch_file"
-TOOL_GREP_SEARCH :: "grep_search" // TODO: Implement grep_search tool. Searches for a string in a file and returns the matching lines. Parameters: file_path, search_string, max_results
+TOOL_GREP_SEARCH :: "grep_search"
+GREP_SEARCH_DEFAULT_MAX_RESULTS :: 50
+GREP_SEARCH_MAX_RESULTS :: 200
+
+Grep_Search_Result :: struct {
+	line_number: int,
+	text:        string,
+}
+
+Grep_Search_Response :: struct {
+	results: []Grep_Search_Result,
+}
 
 // ============================================================
 // Filesystem Operations
@@ -32,6 +44,60 @@ read_file :: proc(file_path: string) -> string {
 	}
 	defer delete(data, context.allocator)
 	return strings.clone(string(data), context.allocator)
+}
+
+grep_search :: proc(file_path, search_string: string, max_results: int) -> string {
+	if max_results <= 0 {
+		return strings.clone(
+			"Error searching file: max_results must be positive.",
+			context.allocator,
+		)
+	}
+
+	pattern, patternErr := regex.create(
+		search_string,
+		{.No_Capture},
+		context.allocator,
+		context.temp_allocator,
+	)
+	if patternErr != nil {
+		return fmt.aprintf("Error compiling regular expression: %v", patternErr)
+	}
+	defer regex.destroy_regex(pattern, context.allocator)
+
+	data, readErr := os.read_entire_file_from_path(file_path, context.allocator)
+	if readErr != nil {
+		return fmt.aprintf("Error reading file: %s", readErr)
+	}
+	defer delete(data, context.allocator)
+
+	results := make([dynamic]Grep_Search_Result, 0, min(max_results, 16), context.allocator)
+	defer delete(results)
+	lines := strings.split(string(data), "\n", context.temp_allocator)
+	defer delete(lines, context.temp_allocator)
+	capture := regex.preallocate_capture(context.allocator)
+	defer regex.destroy_capture(capture, context.allocator)
+	for line, lineIndex in lines {
+		lineText := patch_line_text(line)
+		_, matched := regex.match(pattern, lineText, &capture, context.temp_allocator)
+		if !matched {
+			continue
+		}
+		append(&results, Grep_Search_Result{line_number = lineIndex + 1, text = lineText})
+		if len(results) == max_results {
+			break
+		}
+	}
+
+	response := Grep_Search_Response {
+		results = results[:],
+	}
+	jsonData, marshalErr := json.marshal(response, allocator = context.allocator)
+	if marshalErr != nil {
+		return fmt.aprintf("Error serializing grep search results: %s", marshalErr)
+	}
+	defer delete(jsonData, context.allocator)
+	return strings.clone(string(jsonData), context.allocator)
 }
 
 write_file :: proc(file_path: string, content: string, overwrite: string) -> string {
@@ -594,6 +660,14 @@ builtin_ai_tool_definitions :: proc(
 	append(
 		&definitions,
 		ai.Tool_Definition {
+			name = TOOL_GREP_SEARCH,
+			description = "Search one file with an Odin regular expression and return matching lines",
+			parametersJSON = `{"type":"object","properties":{"file_path":{"type":"string"},"search_string":{"type":"string","description":"Odin regular expression; case-sensitive unless specified by the pattern"},"max_results":{"type":"integer","description":"Maximum matching lines; defaults to 50 and is capped at 200"}},"required":["file_path","search_string"]}`,
+		},
+	)
+	append(
+		&definitions,
+		ai.Tool_Definition {
 			name = TOOL_RUN_SUBAGENT,
 			description = "Delegate a self-contained task to a child agent and wait for its final answer",
 			parametersJSON = `{"type":"object","properties":{"task":{"type":"string","description":"The self-contained task for the subagent to complete"},"tools":{"type":"array","items":{"type":"string"},"description":"Names of tools the subagent is allowed to use"},"depth":{"type":"integer","description":"How many further levels of subagents this subagent may itself spawn"}},"required":["task","tools"]}`,
@@ -696,6 +770,17 @@ execute_builtin_tool :: proc(
 		}
 		defer delete(path, dispatcher.allocator)
 		return get_file_info(path)
+	case TOOL_GREP_SEARCH:
+		path, pathOK := tool_policy.permission_resolve_project_path(
+			dispatcher.projectRoot,
+			call.filePath,
+			dispatcher.allocator,
+		)
+		if !pathOK {
+			return "Permission denied."
+		}
+		defer delete(path, dispatcher.allocator)
+		return grep_search(path, call.query, call.maxResults)
 	case TOOL_IN_TERMINAL:
 		workingDirectory := dispatcher.projectRoot
 		if call.workingDirectory != "" {

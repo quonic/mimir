@@ -687,7 +687,7 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) -> string {
 	target := ""
 	switch call.id {
-	case "read_file", "write_file", "get_file_info":
+	case "read_file", "write_file", "get_file_info", "grep_search":
 		target = call.filePath
 	case "list_directory":
 		target = call.directoryPath

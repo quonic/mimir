@@ -3,6 +3,7 @@ package main
 import "agent"
 import "ai"
 import "approval_safety"
+import "builtin_tools"
 import "commands"
 import "console"
 import "core:os"
@@ -220,6 +221,85 @@ test_patch_file_tool_call_requires_patch_arguments :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_grep_search_tool_call_decodes_pattern_and_normalizes_limit :: proc(t: ^testing.T) {
+	defaultCall, defaultOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-default",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"^main ::"}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&defaultCall, context.allocator)
+	assert(defaultOK, "expected grep_search tool call to decode")
+	assert(defaultCall.filePath == "src/main.odin", "expected grep target path")
+	assert(defaultCall.query == "^main ::", "expected search_string to map to query")
+	assert(
+		defaultCall.maxResults == builtin_tools.GREP_SEARCH_DEFAULT_MAX_RESULTS,
+		"expected omitted max_results to use the grep default",
+	)
+
+	cappedCall, cappedOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-capped",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":500}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&cappedCall, context.allocator)
+	assert(cappedOK, "expected grep_search with a large limit to decode")
+	assert(
+		cappedCall.maxResults == builtin_tools.GREP_SEARCH_MAX_RESULTS,
+		"expected grep max_results to be capped",
+	)
+	_ = t
+}
+
+@(test)
+test_grep_search_tool_call_rejects_missing_pattern_and_negative_limit :: proc(t: ^testing.T) {
+	missingCall, missingOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-missing",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin"}`,
+		},
+		context.allocator,
+	)
+	assert(!missingOK, "expected a missing grep pattern to be rejected")
+	assert(missingCall.id == "", "expected rejected grep call to be empty")
+
+	negativeCall, negativeOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-negative",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":-1}`,
+		},
+		context.allocator,
+	)
+	assert(!negativeOK, "expected a negative grep limit to be rejected")
+	assert(negativeCall.id == "", "expected rejected grep call to be empty")
+	_ = t
+}
+
+@(test)
+test_grep_search_history_displays_file_path :: proc(t: ^testing.T) {
+	content := app_tool_history_content(
+		tool_policy.Tool_Call {
+			id = "grep_search",
+			filePath = "src/main.odin",
+			query = "secret pattern",
+		},
+		"completed",
+	)
+	assert(
+		content == "grep_search: src/main.odin (completed)",
+		"expected grep history to display the file path",
+	)
+	_ = t
+}
+
+@(test)
 test_approval_safety_model_prefers_explicit_selection :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
@@ -349,7 +429,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 12, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 13, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }

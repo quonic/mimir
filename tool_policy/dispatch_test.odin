@@ -17,6 +17,57 @@ test_tool_dispatcher_allows_project_read_only :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tool_dispatcher_allows_file_grep_as_read_only :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	result := tool_dispatch_prepare(
+		&dispatcher,
+		Tool_Call {
+			id = "grep_search",
+			filePath = "src/main.odin",
+			query = "^main ::",
+			maxResults = 50,
+		},
+	)
+	defer tool_dispatch_result_destroy(&result, context.allocator)
+	assert(result.decision == .Allowed_Read_Only, "expected file grep to be read-only")
+	assert(result.actionOK, "expected file grep to resolve to an action")
+	assert(result.action.effect == .Read, "expected grep_search to use the Read effect")
+	assert(
+		result.action.targetPath == "/workspace/project/src/main.odin",
+		"expected grep target path to be resolved",
+	)
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_denies_invalid_file_grep :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	missingPattern := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call{id = "grep_search", filePath = "src/main.odin", maxResults = 50},
+	)
+	assert(missingPattern == .Denied, "expected an empty grep pattern to be denied")
+
+	traversal := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call {
+			id = "grep_search",
+			filePath = "../secret.txt",
+			query = "secret",
+			maxResults = 50,
+		},
+	)
+	assert(traversal == .Denied, "expected grep path traversal to be denied")
+	_ = t
+}
+
+@(test)
 test_tool_dispatcher_requires_approval_for_write_without_grant :: proc(t: ^testing.T) {
 	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
 	defer tool_dispatcher_destroy(&dispatcher)
