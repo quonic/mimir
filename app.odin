@@ -2985,6 +2985,19 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 					contextWindowsChanged
 			}
 		}
+	} else if provider.type == .OpenAI {
+		for model in models {
+			if model.contextWindowTokens > 0 {
+				contextWindowsChanged =
+					settings.config_update_context_window_tokens(
+						&state.config,
+						provider.name,
+						model.name,
+						model.contextWindowTokens,
+					) ||
+					contextWindowsChanged
+			}
+		}
 	}
 	ai.clear_interfaces()
 	for configuredProvider in state.config.providers {

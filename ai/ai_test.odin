@@ -294,6 +294,45 @@ test_parse_openai_models_response_infers_embedding_by_name :: proc(t: ^testing.T
 }
 
 @(test)
+test_parse_openai_models_response_uses_models_dev_metadata :: proc(t: ^testing.T) {
+	metadata := make(map[string]Models_Dev_Model_Metadata, 2, context.allocator)
+	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
+	chatModelKey := strings.clone("chat-model", context.allocator)
+	chatOutput := make([dynamic]string, 0, 1, context.allocator)
+	append_elem(&chatOutput, strings.clone("text", context.allocator))
+	metadata[chatModelKey] = Models_Dev_Model_Metadata {
+		id = strings.clone("chat-model", context.allocator),
+		toolCall = true,
+		limit = Models_Dev_Limit{contextWindow = 128000},
+		modalities = Models_Dev_Modalities{output = chatOutput},
+	}
+	embeddingModelKey := strings.clone("model-without-embed-name", context.allocator)
+	embeddingOutput := make([dynamic]string, 0, 1, context.allocator)
+	append_elem(&embeddingOutput, strings.clone("embedding", context.allocator))
+	metadata[embeddingModelKey] = Models_Dev_Model_Metadata {
+		id = strings.clone("model-without-embed-name", context.allocator),
+		modalities = Models_Dev_Modalities{output = embeddingOutput},
+	}
+
+	models, modelErr := parse_openai_models_response_with_metadata(
+		`{"data":[{"id":"chat-model"},{"id":"model-without-embed-name"}]}`,
+		metadata,
+		context.allocator,
+	)
+	defer models_destroy(&models, context.allocator)
+	assert(modelErr == .None, "expected OpenAI models response with metadata to parse")
+	assert(len(models) == 2, "expected two OpenAI models")
+	assert(model_supports_chat(models[0]), "expected metadata chat model to support chat")
+	assert(models[0].contextWindowTokens == 128000, "expected metadata context window")
+	assert(
+		model_supports_embeddings(models[1]),
+		"expected metadata embedding modality to determine embedding support",
+	)
+	assert(!model_supports_chat(models[1]), "expected embedding model to reject chat")
+	_ = t
+}
+
+@(test)
 test_openai_endpoint_target_and_sse_stream :: proc(t: ^testing.T) {
 	root := http.url_parse("https://example.test")
 	rootTarget, rootOK := openai_endpoint_target(root, OPENAI_CHAT_PATH)

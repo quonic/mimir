@@ -173,10 +173,12 @@ empty custom prompt in `append` mode.
 `contextWindows` can store a manual context limit for a provider and model. The
 value must not be negative. A value of `0` means the limit is unknown. For
 Ollama, Mimir reads a positive `model_info` key that ends in `.context_length`
-from `/api/show`. This value takes priority over the manual limit. **Refresh
-models** finds these values for all listed Ollama models and saves changed
-positive values. Missing or unsupported metadata keeps an existing limit and
-does not stop chat.
+from `/api/show`. This value takes priority over the manual limit. For
+OpenAI-compatible providers, Mimir uses the positive `limit.context` value
+from the OpenAI branch of models.dev when available. **Refresh models** finds
+these values for listed models and saves changed positive values. Missing,
+unsupported, or unavailable metadata keeps an existing limit and does not stop
+chat.
 
 Mimir also uses this value to size each response: it requests up to the
 context window minus the current conversation's estimated size, so replies

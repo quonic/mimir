@@ -83,10 +83,16 @@ if err == .None {
 }
 ```
 
-OpenAI-compatible `/models` responses carry no capability data, so
-`ai.list_openai_models` identifies embedding models by name (any model whose
-id contains "embed", e.g. `text-embedding-3-small`, `nomic-embed-text-v2-moe`,
-`qwen3-embedding`, `embeddinggemma`). Use `ai.model_supports_embeddings` and
+OpenAI-compatible `/models` responses carry no capability data. Mimir uses the
+OpenAI branch of models.dev as supplementary metadata when it is available.
+The metadata identifies embedding output, tool support, and positive context
+limits. The `/models` response remains authoritative for the model list.
+
+If models.dev is unavailable or does not contain a listed model, Mimir keeps
+the name-based fallback: an id containing "embed" is treated as an embedding
+model (for example `text-embedding-3-small`, `nomic-embed-text-v2-moe`,
+`qwen3-embedding`, or `embeddinggemma`). A missing context limit does not erase
+an existing manual limit. Use `ai.model_supports_embeddings` and
 `ai.model_supports_chat` to filter the results.
 
 Use `send_embeddings` for multiple inputs. The response vectors keep the order

@@ -16,8 +16,9 @@ Interface :: struct {
 }
 
 Model :: struct {
-	name:         string,
-	capabilities: [dynamic]string,
+	name:                string,
+	capabilities:        [dynamic]string,
+	contextWindowTokens: int,
 }
 
 Interface_Type :: enum {
@@ -205,7 +206,8 @@ probe_openai_endpoint_with_api_key :: proc(
 
 model_clone :: proc(model: Model, allocator := context.allocator) -> Model {
 	clone := Model {
-		name = strings.clone(model.name, allocator),
+		name                = strings.clone(model.name, allocator),
+		contextWindowTokens = model.contextWindowTokens,
 	}
 	for capability in model.capabilities {
 		append_elem(&clone.capabilities, strings.clone(capability, allocator))
