@@ -1,8 +1,9 @@
 package ai
 
-// OpenAI-only lookup for model capability/limit metadata sourced from models.dev.
+// Model capability/limit lookup sourced from models.dev.
 
 import json "core:encoding/json"
+import "core:mem"
 import "core:strings"
 import "core:sync"
 
@@ -52,9 +53,7 @@ Models_Dev_Provider_Wire :: struct {
 	models: map[string]Models_Dev_Model_Wire,
 }
 
-Models_Dev_Api_Response_Wire :: struct {
-	openai: Models_Dev_Provider_Wire,
-}
+Models_Dev_Api_Response_Wire :: map[string]Models_Dev_Provider_Wire
 
 Models_Dev_Cost :: struct {
 	input:       f64,
@@ -161,7 +160,7 @@ models_dev_metadata_map_destroy :: proc(
 	delete_map(metadata^)
 }
 
-// Pure parser: no HTTP. Only the "openai" provider branch of the models.dev catalog is kept.
+// Pure parser: no HTTP. Keep only the OpenAI provider branch for compatibility.
 parse_models_dev_openai_response :: proc(
 	body: string,
 	allocator := context.allocator,
@@ -171,62 +170,99 @@ parse_models_dev_openai_response :: proc(
 ) {
 	wire: Models_Dev_Api_Response_Wire
 	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
-	if decodeErr != nil || len(wire.openai.models) == 0 {
+	openai, ok := wire["openai"]
+	if decodeErr != nil || !ok || len(openai.models) == 0 {
 		return nil, .Invalid_Response
 	}
 
-	metadata := make(map[string]Models_Dev_Model_Metadata, len(wire.openai.models), allocator)
-	for modelID, modelWire in wire.openai.models {
-		key := strings.to_lower(modelID, allocator)
-		entry := Models_Dev_Model_Metadata {
-			id = strings.to_lower(modelID, allocator),
-			name = strings.clone(modelWire.name, allocator),
-			attachment = modelWire.attachment,
-			reasoning = modelWire.reasoning,
-			toolCall = modelWire.tool_call,
-			structuredOutput = modelWire.structured_output,
-			temperature = modelWire.temperature,
-			knowledge = strings.clone(modelWire.knowledge, allocator),
-			releaseDate = strings.clone(modelWire.release_date, allocator),
-			lastUpdated = strings.clone(modelWire.last_updated, allocator),
-			openWeights = modelWire.open_weights,
-			status = strings.clone(modelWire.status, allocator),
-			cost = Models_Dev_Cost {
-				input = modelWire.cost.input,
-				output = modelWire.cost.output,
-				reasoning = modelWire.cost.reasoning,
-				cacheRead = modelWire.cost.cache_read,
-				cacheWrite = modelWire.cost.cache_write,
-				inputAudio = modelWire.cost.input_audio,
-				outputAudio = modelWire.cost.output_audio,
-			},
-			limit = Models_Dev_Limit {
-				contextWindow = modelWire.limit.contextWindow,
-				input = modelWire.limit.input,
-				output = modelWire.limit.output,
-			},
-		}
-		entry.modalities.input = make(
-			[dynamic]string,
-			0,
-			len(modelWire.modalities.input),
-			allocator,
-		)
-		for value in modelWire.modalities.input {
-			append(&entry.modalities.input, strings.clone(value, allocator))
-		}
-		entry.modalities.output = make(
-			[dynamic]string,
-			0,
-			len(modelWire.modalities.output),
-			allocator,
-		)
-		for value in modelWire.modalities.output {
-			append(&entry.modalities.output, strings.clone(value, allocator))
-		}
-		metadata[key] = entry
+	metadata := make(map[string]Models_Dev_Model_Metadata, len(openai.models), allocator)
+	for modelID, modelWire in openai.models {
+		models_dev_append_metadata(&metadata, modelID, modelWire, allocator)
 	}
 	return metadata, .None
+}
+
+parse_models_dev_catalog_response :: proc(
+	body: string,
+	allocator := context.allocator,
+) -> (
+	map[string]Models_Dev_Model_Metadata,
+	AI_Error,
+) {
+	wire: Models_Dev_Api_Response_Wire
+	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
+	if decodeErr != nil || len(wire) == 0 {
+		return nil, .Invalid_Response
+	}
+
+	metadata := make(map[string]Models_Dev_Model_Metadata, 0, allocator)
+	if openai, ok := wire["openai"]; ok {
+		for modelID, modelWire in openai.models {
+			models_dev_append_metadata(&metadata, modelID, modelWire, allocator)
+		}
+	}
+	for provider, providerWire in wire {
+		if provider == "openai" {
+			continue
+		}
+		for modelID, modelWire in providerWire.models {
+			lowerID := strings.to_lower(modelID, context.temp_allocator)
+			if _, exists := metadata[lowerID]; !exists {
+				models_dev_append_metadata(&metadata, modelID, modelWire, allocator)
+			}
+		}
+	}
+	if len(metadata) == 0 {
+		models_dev_metadata_map_destroy(&metadata, allocator)
+		return nil, .Invalid_Response
+	}
+	return metadata, .None
+}
+
+models_dev_append_metadata :: proc(
+	metadata: ^map[string]Models_Dev_Model_Metadata,
+	modelID: string,
+	modelWire: Models_Dev_Model_Wire,
+	allocator: mem.Allocator,
+) {
+	key := strings.to_lower(modelID, allocator)
+	entry := Models_Dev_Model_Metadata {
+		id = strings.to_lower(modelID, allocator),
+		name = strings.clone(modelWire.name, allocator),
+		attachment = modelWire.attachment,
+		reasoning = modelWire.reasoning,
+		toolCall = modelWire.tool_call,
+		structuredOutput = modelWire.structured_output,
+		temperature = modelWire.temperature,
+		knowledge = strings.clone(modelWire.knowledge, allocator),
+		releaseDate = strings.clone(modelWire.release_date, allocator),
+		lastUpdated = strings.clone(modelWire.last_updated, allocator),
+		openWeights = modelWire.open_weights,
+		status = strings.clone(modelWire.status, allocator),
+		cost = Models_Dev_Cost {
+			input = modelWire.cost.input,
+			output = modelWire.cost.output,
+			reasoning = modelWire.cost.reasoning,
+			cacheRead = modelWire.cost.cache_read,
+			cacheWrite = modelWire.cost.cache_write,
+			inputAudio = modelWire.cost.input_audio,
+			outputAudio = modelWire.cost.output_audio,
+		},
+		limit = Models_Dev_Limit {
+			contextWindow = modelWire.limit.contextWindow,
+			input = modelWire.limit.input,
+			output = modelWire.limit.output,
+		},
+	}
+	entry.modalities.input = make([dynamic]string, 0, len(modelWire.modalities.input), allocator)
+	for value in modelWire.modalities.input {
+		append(&entry.modalities.input, strings.clone(value, allocator))
+	}
+	entry.modalities.output = make([dynamic]string, 0, len(modelWire.modalities.output), allocator)
+	for value in modelWire.modalities.output {
+		append(&entry.modalities.output, strings.clone(value, allocator))
+	}
+	metadata^[key] = entry
 }
 
 // Exact match only, normalized to lowercase; falls back to stripping a leading "prefix/" segment
@@ -247,6 +283,17 @@ models_dev_lookup :: proc(
 		stripped := lower[slashIndex + 1:]
 		if entry, ok := metadata[stripped]; ok {
 			return models_dev_model_metadata_clone(entry, allocator), true
+		}
+	}
+	for _, entry in metadata {
+		entryID := strings.to_lower(entry.id, context.temp_allocator)
+		if entryID == lower {
+			return models_dev_model_metadata_clone(entry, allocator), true
+		}
+		if slashIndex := strings.index_byte(lower, '/'); slashIndex >= 0 {
+			if entryID == lower[slashIndex + 1:] {
+				return models_dev_model_metadata_clone(entry, allocator), true
+			}
 		}
 	}
 	return Models_Dev_Model_Metadata{}, false
@@ -284,7 +331,7 @@ fetch_models_dev_openai_metadata :: proc(
 		return nil, map_status_to_error(status)
 	}
 
-	metadata, parseErr := parse_models_dev_openai_response(body, context.allocator)
+	metadata, parseErr := parse_models_dev_catalog_response(body, context.allocator)
 	if parseErr != .None {
 		return nil, parseErr
 	}
