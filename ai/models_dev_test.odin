@@ -63,6 +63,27 @@ test_parse_models_dev_openai_response_missing_openai_key :: proc(t: ^testing.T) 
 }
 
 @(test)
+test_parse_models_dev_catalog_response_includes_non_openai_models :: proc(t: ^testing.T) {
+	body :=
+		`{"openai":{"models":{"shared":{"name":"OpenAI shared",` +
+		`"limit":{"context":128000}}}},` +
+		`"local":{"models":{"qwen3.8-27b":{"name":"Local Qwen",` +
+		`"limit":{"context":262144}},"shared":{"name":"Local shared",` +
+		`"limit":{"context":4096}}}}}`
+	metadata, err := parse_models_dev_catalog_response(body, context.allocator)
+	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
+
+	assert(err == .None, "expected full models.dev catalog to parse")
+	assert(len(metadata) == 2, "expected unique model IDs from all providers")
+	assert(metadata["qwen3.8-27b"].limit.contextWindow == 262144, "expected local model limit")
+	assert(
+		metadata["shared"].limit.contextWindow == 128000,
+		"expected OpenAI metadata to take precedence",
+	)
+	_ = t
+}
+
+@(test)
 test_models_dev_lookup_exact_match_case_insensitive :: proc(t: ^testing.T) {
 	metadata := make(map[string]Models_Dev_Model_Metadata, 1, context.allocator)
 	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
@@ -109,5 +130,23 @@ test_models_dev_lookup_returns_false_when_not_found :: proc(t: ^testing.T) {
 
 	assert(!ok, "expected no match")
 	assert(entry.id == "", "expected zero value on no match")
+	_ = t
+}
+
+@(test)
+test_models_dev_lookup_matches_model_name_to_metadata_id :: proc(t: ^testing.T) {
+	metadata := make(map[string]Models_Dev_Model_Metadata, 1, context.allocator)
+	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
+	metadataKey := strings.clone("catalog-key", context.allocator)
+	metadata[metadataKey] = Models_Dev_Model_Metadata {
+		id   = strings.clone("GPT-5", context.allocator),
+		name = strings.clone("GPT-5", context.allocator),
+	}
+
+	entry, ok := models_dev_lookup(metadata, "gpt-5", context.allocator)
+	defer models_dev_model_metadata_destroy(&entry, context.allocator)
+
+	assert(ok, "expected model name to match metadata ID")
+	assert(entry.id == "GPT-5", "expected metadata entry matched by ID")
 	_ = t
 }
