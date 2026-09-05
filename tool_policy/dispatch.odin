@@ -34,6 +34,7 @@ Tool_Call :: struct {
 	startLine:         string,
 	endLine:           string,
 	content:           string,
+	patchContent:      string,
 	overwrite:         string,
 	command:           string,
 	workingDirectory:  string,
@@ -43,6 +44,8 @@ Tool_Call :: struct {
 	task:              string,
 	subagentToolsJSON: string,
 	subagentDepth:     int,
+	old:               string,
+	new:               string,
 }
 
 tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool_Call {
@@ -54,6 +57,7 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		startLine         = strings.clone(call.startLine, allocator),
 		endLine           = strings.clone(call.endLine, allocator),
 		content           = strings.clone(call.content, allocator),
+		patchContent      = strings.clone(call.patchContent, allocator),
 		overwrite         = strings.clone(call.overwrite, allocator),
 		command           = strings.clone(call.command, allocator),
 		workingDirectory  = strings.clone(call.workingDirectory, allocator),
@@ -63,6 +67,8 @@ tool_call_clone :: proc(call: Tool_Call, allocator := context.allocator) -> Tool
 		task              = strings.clone(call.task, allocator),
 		subagentToolsJSON = strings.clone(call.subagentToolsJSON, allocator),
 		subagentDepth     = call.subagentDepth,
+		old               = strings.clone(call.old, allocator),
+		new               = strings.clone(call.new, allocator),
 	}
 	return clone
 }
@@ -75,12 +81,15 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 	delete(call.startLine, allocator)
 	delete(call.endLine, allocator)
 	delete(call.content, allocator)
+	delete(call.patchContent, allocator)
 	delete(call.overwrite, allocator)
 	delete(call.command, allocator)
 	delete(call.workingDirectory, allocator)
 	delete(call.query, allocator)
 	delete(call.task, allocator)
 	delete(call.subagentToolsJSON, allocator)
+	delete(call.old, allocator)
+	delete(call.new, allocator)
 }
 
 tool_dispatcher_init :: proc(
@@ -143,7 +152,10 @@ tool_dispatch_build_action :: proc(
 		projectRoot = dispatcher.projectRoot,
 	}
 	switch call.id {
-	case "read_file", "get_file_info", "read_skill":
+	case "read_file", "get_file_info", "read_skill", "grep_search":
+		if call.id == "grep_search" && (call.query == "" || call.maxResults <= 0) {
+			return Permission_Action{}, false
+		}
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
 			call.filePath,
@@ -173,7 +185,7 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Read
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "write_file":
+	case "write_file", "patch_file":
 		resolvedPath, pathOK := permission_resolve_project_path(
 			dispatcher.projectRoot,
 			call.filePath,
@@ -188,7 +200,22 @@ tool_dispatch_build_action :: proc(
 		action.effect = .Write
 		action.targetPath = resolvedPath
 		action.targetPathOwned = true
-	case "run_command":
+	case "replace_string_in_file":
+		resolvedPath, pathOK := permission_resolve_project_path(
+			dispatcher.projectRoot,
+			call.filePath,
+			dispatcher.allocator,
+		)
+		if !pathOK || !permission_path_is_within_project(dispatcher.projectRoot, resolvedPath) {
+			if resolvedPath != "" {
+				delete(resolvedPath, dispatcher.allocator)
+			}
+			return Permission_Action{}, false
+		}
+		action.effect = .Write
+		action.targetPath = resolvedPath
+		action.targetPathOwned = true
+	case "run_in_terminal":
 		if call.command == "" {
 			return Permission_Action{}, false
 		}
@@ -212,7 +239,7 @@ tool_dispatch_build_action :: proc(
 		}
 		action.workingDirectory = resolvedDirectory
 		action.workingDirectoryOwned = true
-	case "create_subagent":
+	case "run_subagent":
 		if call.task == "" {
 			return Permission_Action{}, false
 		}

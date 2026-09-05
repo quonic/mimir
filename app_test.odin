@@ -3,6 +3,7 @@ package main
 import "agent"
 import "ai"
 import "approval_safety"
+import "builtin_tools"
 import "commands"
 import "console"
 import "core:os"
@@ -170,7 +171,7 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 	call, callOK := app_tool_call_from_ai(
 		ai.Tool_Call {
 			id = "call-1",
-			name = "run_command",
+			name = "run_in_terminal",
 			arguments = `{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
 		},
 		context.allocator,
@@ -183,6 +184,117 @@ test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t:
 	assert(
 		contains_string(sequence, `echo "Test Shell command"`),
 		"expected approval modal to display retained command text",
+	)
+	_ = t
+}
+
+@(test)
+test_patch_file_tool_call_decodes_owned_patch_content :: proc(t: ^testing.T) {
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-patch",
+			name = "patch_file",
+			arguments = `{"file_path":"src/main.odin","patch_content":"--- a/src/main.odin\n+++ b/src/main.odin\n@@ -1 +1 @@\n-old\n+new\n"}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&call, context.allocator)
+	assert(callOK, "expected patch_file tool call to decode")
+	assert(call.filePath == "src/main.odin", "expected patch target path")
+	assert(strings.contains(call.patchContent, "@@ -1 +1 @@"), "expected owned patch content")
+	_ = t
+}
+
+@(test)
+test_patch_file_tool_call_requires_patch_arguments :: proc(t: ^testing.T) {
+	call, callOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-patch",
+			name = "patch_file",
+			arguments = `{"file_path":"src/main.odin"}`,
+		},
+		context.allocator,
+	)
+	assert(!callOK, "expected missing patch_content to be rejected")
+	assert(call.id == "", "expected rejected call to be empty")
+	_ = t
+}
+
+@(test)
+test_grep_search_tool_call_decodes_pattern_and_normalizes_limit :: proc(t: ^testing.T) {
+	defaultCall, defaultOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-default",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"^main ::"}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&defaultCall, context.allocator)
+	assert(defaultOK, "expected grep_search tool call to decode")
+	assert(defaultCall.filePath == "src/main.odin", "expected grep target path")
+	assert(defaultCall.query == "^main ::", "expected search_string to map to query")
+	assert(
+		defaultCall.maxResults == builtin_tools.GREP_SEARCH_DEFAULT_MAX_RESULTS,
+		"expected omitted max_results to use the grep default",
+	)
+
+	cappedCall, cappedOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-capped",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":500}`,
+		},
+		context.allocator,
+	)
+	defer tool_policy.tool_call_destroy(&cappedCall, context.allocator)
+	assert(cappedOK, "expected grep_search with a large limit to decode")
+	assert(
+		cappedCall.maxResults == builtin_tools.GREP_SEARCH_MAX_RESULTS,
+		"expected grep max_results to be capped",
+	)
+	_ = t
+}
+
+@(test)
+test_grep_search_tool_call_rejects_missing_pattern_and_negative_limit :: proc(t: ^testing.T) {
+	missingCall, missingOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-missing",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin"}`,
+		},
+		context.allocator,
+	)
+	assert(!missingOK, "expected a missing grep pattern to be rejected")
+	assert(missingCall.id == "", "expected rejected grep call to be empty")
+
+	negativeCall, negativeOK := app_tool_call_from_ai(
+		ai.Tool_Call {
+			id = "call-grep-negative",
+			name = "grep_search",
+			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":-1}`,
+		},
+		context.allocator,
+	)
+	assert(!negativeOK, "expected a negative grep limit to be rejected")
+	assert(negativeCall.id == "", "expected rejected grep call to be empty")
+	_ = t
+}
+
+@(test)
+test_grep_search_history_displays_file_path :: proc(t: ^testing.T) {
+	content := app_tool_history_content(
+		tool_policy.Tool_Call {
+			id = "grep_search",
+			filePath = "src/main.odin",
+			query = "secret pattern",
+		},
+		"completed",
+	)
+	assert(
+		content == "grep_search: src/main.odin (completed)",
+		"expected grep history to display the file path",
 	)
 	_ = t
 }
@@ -298,7 +410,7 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 	assert(
 		app_show_approval(
 			&state,
-			tool_policy.Tool_Call{id = "run_command", command = "git status"},
+			tool_policy.Tool_Call{id = "run_in_terminal", command = "git status"},
 		),
 		"expected command call to open approval modal",
 	)
@@ -317,7 +429,7 @@ test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
 	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 10, "expected Ollama to receive all built-in tools")
+	assert(len(ollamaTools) == 13, "expected Ollama to receive all built-in tools")
 
 	_ = t
 }
@@ -450,13 +562,13 @@ test_retired_slash_commands_are_unknown_and_omitted_from_help :: proc(t: ^testin
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
-	app_run_command(&state, commands.parse_slash_command("/models"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/models"))
 	assert(state.status == "Unknown command", "expected /models to be unsupported")
 
-	app_run_command(&state, commands.parse_slash_command("/skills"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/skills"))
 	assert(state.status == "Unknown command", "expected /skills to be unsupported")
 
-	app_run_command(&state, commands.parse_slash_command("/help"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/help"))
 	assert(
 		state.history[len(state.history) - 1].content ==
 		"Commands: /exit, /config, /help, /stop, /clear",
@@ -710,18 +822,26 @@ test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t
 
 @(test)
 test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
-	defaultPrompt := system_prompt_effective("", .Append, context.temp_allocator)
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	defaultPrompt := system_prompt_effective(state, "", .Append, context.temp_allocator)
 	defer delete(defaultPrompt, context.temp_allocator)
 	assert(
-		defaultPrompt ==
-		strings.concatenate(
-			{DEFAULT_SYSTEM_PROMPT, system_prompt_date(context.temp_allocator)},
-			context.temp_allocator,
-		),
-		"expected default system prompt",
+		strings.contains(defaultPrompt, state.config.selectedModel),
+		"expected default system prompt to contain selected model",
+	)
+	assert(
+		!strings.contains(defaultPrompt, "{model_name}"),
+		"expected model name placeholder to be expanded",
+	)
+	assert(
+		!strings.contains(defaultPrompt, "{{output_formatting}}") &&
+		!strings.contains(defaultPrompt, "{{skills}}") &&
+		!strings.contains(defaultPrompt, "{{attachments}}"),
+		"expected prompt placeholders to be expanded",
 	)
 
-	appendedPrompt := system_prompt_effective("Use tabs.", .Append, context.temp_allocator)
+	appendedPrompt := system_prompt_effective(state, "Use tabs.", .Append, context.temp_allocator)
 	defer delete(appendedPrompt, context.temp_allocator)
 	assert(
 		contains_string(appendedPrompt, "Additional user instructions:\nUse tabs."),
@@ -729,6 +849,7 @@ test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) 
 	)
 
 	replacedPrompt := system_prompt_effective(
+		state,
 		"Only user instructions.",
 		.Replace,
 		context.temp_allocator,
@@ -754,7 +875,7 @@ test_stop_command_requests_stream_cancel :: proc(t: ^testing.T) {
 		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
 		"expected active agent to start",
 	)
-	app_run_command(&state, commands.parse_slash_command("/stop"))
+	app_run_in_terminal(&state, commands.parse_slash_command("/stop"))
 	assert(state.status == "Canceling assistant stream", "expected /stop to update status")
 	agentState, agentOK := agent.runtime_state(
 		&state.agentHost.runtime,

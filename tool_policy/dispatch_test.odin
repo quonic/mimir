@@ -17,6 +17,57 @@ test_tool_dispatcher_allows_project_read_only :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tool_dispatcher_allows_file_grep_as_read_only :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	result := tool_dispatch_prepare(
+		&dispatcher,
+		Tool_Call {
+			id = "grep_search",
+			filePath = "src/main.odin",
+			query = "^main ::",
+			maxResults = 50,
+		},
+	)
+	defer tool_dispatch_result_destroy(&result, context.allocator)
+	assert(result.decision == .Allowed_Read_Only, "expected file grep to be read-only")
+	assert(result.actionOK, "expected file grep to resolve to an action")
+	assert(result.action.effect == .Read, "expected grep_search to use the Read effect")
+	assert(
+		result.action.targetPath == "/workspace/project/src/main.odin",
+		"expected grep target path to be resolved",
+	)
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_denies_invalid_file_grep :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	missingPattern := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call{id = "grep_search", filePath = "src/main.odin", maxResults = 50},
+	)
+	assert(missingPattern == .Denied, "expected an empty grep pattern to be denied")
+
+	traversal := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call {
+			id = "grep_search",
+			filePath = "../secret.txt",
+			query = "secret",
+			maxResults = 50,
+		},
+	)
+	assert(traversal == .Denied, "expected grep path traversal to be denied")
+	_ = t
+}
+
+@(test)
 test_tool_dispatcher_requires_approval_for_write_without_grant :: proc(t: ^testing.T) {
 	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
 	defer tool_dispatcher_destroy(&dispatcher)
@@ -27,6 +78,41 @@ test_tool_dispatcher_requires_approval_for_write_without_grant :: proc(t: ^testi
 		Tool_Call{id = "write_file", filePath = "generated/output.txt"},
 	)
 	assert(decision == .Approval_Required, "expected project write to require approval")
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_requires_approval_for_patch_file :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	result := tool_dispatch_prepare(
+		&dispatcher,
+		Tool_Call{id = "patch_file", filePath = "src/main.odin", patchContent = "patch"},
+	)
+	defer tool_dispatch_result_destroy(&result, context.allocator)
+	assert(result.decision == .Approval_Required, "expected patch write to require approval")
+	assert(result.actionOK, "expected patch write to resolve to an action")
+	assert(result.action.effect == .Write, "expected patch_file to use the Write effect")
+	assert(
+		result.action.targetPath == "/workspace/project/src/main.odin",
+		"expected patch target path to be resolved",
+	)
+	_ = t
+}
+
+@(test)
+test_tool_dispatcher_denies_patch_file_path_traversal :: proc(t: ^testing.T) {
+	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
+	defer tool_dispatcher_destroy(&dispatcher)
+	assert(ok, "expected dispatcher project root to initialize")
+
+	decision := tool_dispatch_decide(
+		&dispatcher,
+		Tool_Call{id = "patch_file", filePath = "../secret.txt", patchContent = "patch"},
+	)
+	assert(decision == .Denied, "expected traversal patch target to be denied")
 	_ = t
 }
 
@@ -137,22 +223,19 @@ test_tool_dispatcher_denies_unknown_tool :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_tool_dispatcher_requires_approval_for_create_subagent :: proc(t: ^testing.T) {
+test_tool_dispatcher_requires_approval_for_run_subagent :: proc(t: ^testing.T) {
 	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
 	defer tool_dispatcher_destroy(&dispatcher)
 	assert(ok, "expected dispatcher project root to initialize")
 
 	result := tool_dispatch_prepare(
 		&dispatcher,
-		Tool_Call{id = "create_subagent", task = "Summarize the README"},
+		Tool_Call{id = "run_subagent", task = "Summarize the README"},
 	)
 	defer tool_dispatch_result_destroy(&result, context.allocator)
-	assert(result.decision == .Approval_Required, "expected create_subagent to require approval")
-	assert(result.actionOK, "expected create_subagent to resolve to a valid action")
-	assert(
-		result.action.effect == .Execute,
-		"expected create_subagent to reuse the Execute effect",
-	)
+	assert(result.decision == .Approval_Required, "expected run_subagent to require approval")
+	assert(result.actionOK, "expected run_subagent to resolve to a valid action")
+	assert(result.action.effect == .Execute, "expected run_subagent to reuse the Execute effect")
 	assert(
 		result.action.command == "Summarize the README",
 		"expected the task text to be surfaced for the approval prompt",
@@ -161,12 +244,12 @@ test_tool_dispatcher_requires_approval_for_create_subagent :: proc(t: ^testing.T
 }
 
 @(test)
-test_tool_dispatcher_denies_create_subagent_without_task :: proc(t: ^testing.T) {
+test_tool_dispatcher_denies_run_subagent_without_task :: proc(t: ^testing.T) {
 	dispatcher, ok := tool_dispatcher_init("/workspace/project", nil, context.allocator)
 	defer tool_dispatcher_destroy(&dispatcher)
 	assert(ok, "expected dispatcher project root to initialize")
 
-	decision := tool_dispatch_decide(&dispatcher, Tool_Call{id = "create_subagent"})
-	assert(decision == .Denied, "expected create_subagent without a task to be denied")
+	decision := tool_dispatch_decide(&dispatcher, Tool_Call{id = "run_subagent"})
+	assert(decision == .Denied, "expected run_subagent without a task to be denied")
 	_ = t
 }

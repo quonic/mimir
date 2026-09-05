@@ -37,11 +37,13 @@ AI_Tool_Call_Arguments :: struct {
 	file_path:         string,
 	directory_path:    string,
 	content:           string,
+	patch_content:     string,
 	overwrite:         string,
 	command:           string,
 	working_directory: string,
 	timeout:           int,
 	query:             string,
+	search_string:     string,
 	max_results:       int,
 	name:              string,
 	resource:          string,
@@ -272,6 +274,7 @@ app_tool_call_from_ai :: proc(
 		filePath         = strings.clone(arguments.file_path, allocator),
 		directoryPath    = strings.clone(arguments.directory_path, allocator),
 		content          = strings.clone(arguments.content, allocator),
+		patchContent     = strings.clone(arguments.patch_content, allocator),
 		overwrite        = strings.clone(arguments.overwrite, allocator),
 		command          = strings.clone(arguments.command, allocator),
 		workingDirectory = strings.clone(arguments.working_directory, allocator),
@@ -291,6 +294,24 @@ app_tool_call_from_ai :: proc(
 			return tool_policy.Tool_Call{}, false
 		}
 	}
+	if call.id == builtin_tools.TOOL_PATCH_FILE &&
+	   (call.filePath == "" || call.patchContent == "") {
+		tool_policy.tool_call_destroy(&call, allocator)
+		return tool_policy.Tool_Call{}, false
+	}
+	if call.id == builtin_tools.TOOL_GREP_SEARCH {
+		delete(call.query, allocator)
+		call.query = strings.clone(arguments.search_string, allocator)
+		if call.filePath == "" || call.query == "" || call.maxResults < 0 {
+			tool_policy.tool_call_destroy(&call, allocator)
+			return tool_policy.Tool_Call{}, false
+		}
+		if call.maxResults == 0 {
+			call.maxResults = builtin_tools.GREP_SEARCH_DEFAULT_MAX_RESULTS
+		} else if call.maxResults > builtin_tools.GREP_SEARCH_MAX_RESULTS {
+			call.maxResults = builtin_tools.GREP_SEARCH_MAX_RESULTS
+		}
+	}
 	if call.id == "search_code" || call.id == "find_code" {
 		if call.query == "" || call.maxResults < 0 {
 			tool_policy.tool_call_destroy(&call, allocator)
@@ -302,7 +323,7 @@ app_tool_call_from_ai :: proc(
 			call.maxResults = SEARCH_CODE_MAX_RESULTS
 		}
 	}
-	if call.id == "create_subagent" {
+	if call.id == "run_subagent" {
 		if call.task == "" || len(arguments.tools) == 0 {
 			tool_policy.tool_call_destroy(&call, allocator)
 			return tool_policy.Tool_Call{}, false
@@ -487,10 +508,12 @@ app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	case "read_file",
 	     "read_skill",
 	     "write_file",
+	     "patch_file",
+	     "grep_search",
 	     "list_directory",
 	     "get_file_info",
 	     "list_available_shells",
-	     "run_command":
+	     "run_in_terminal":
 		return true
 	case "search_code", "find_code":
 		return true

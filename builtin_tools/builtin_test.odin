@@ -5,11 +5,11 @@ import "core:strings"
 import "core:testing"
 
 @(test)
-test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
+test_builtin_ai_tool_definitions_returns_all_tools :: proc(t: ^testing.T) {
 	definitions := builtin_ai_tool_definitions(context.temp_allocator)
 	defer delete(definitions)
 
-	assert(len(definitions) == 10, "expected 10 builtin tool definitions")
+	assert(len(definitions) == 13, "expected 13 builtin tool definitions")
 
 	// Verify all expected tools are present
 	tool_names := make([]string, len(definitions), context.temp_allocator)
@@ -17,16 +17,20 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 		tool_names[i] = def.name
 	}
 
-	expected_tools := [9]string {
+	expected_tools := [13]string {
 		"read_file",
+		"read_skill",
 		"write_file",
-		"run_command",
+		"replace_string_in_file",
+		"patch_file",
+		"run_in_terminal",
 		"list_available_shells",
 		"list_directory",
 		"get_file_info",
+		"grep_search",
 		"search_code",
 		"find_code",
-		"create_subagent",
+		"run_subagent",
 	}
 
 	for expected in expected_tools {
@@ -39,6 +43,57 @@ test_builtin_ai_tool_definitions_returns_8_tools :: proc(t: ^testing.T) {
 		}
 		assert(found, "expected tool definition to be present")
 	}
+}
+
+@(test)
+test_grep_search_returns_matching_lines_as_json :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/search.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(
+		path,
+		"alpha 12\r\nbeta\r\nalpha 34\r\nalpha 56\r\n",
+	)
+	assert(writeErr == nil, "expected search fixture to be written")
+
+	result := grep_search(path, `^alpha [0-9]+$`, 2)
+	defer delete(result, context.allocator)
+	assert(
+		result ==
+		`{"results":[{"line_number":1,"text":"alpha 12"},{"line_number":3,"text":"alpha 34"}]}`,
+		"expected ordered, limited regex matches with normalized CRLF lines",
+	)
+	_ = t
+}
+
+@(test)
+test_grep_search_escapes_json_and_reports_errors :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/search.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(path, "say \"hello\"\\world\nother\n")
+	assert(writeErr == nil, "expected search fixture to be written")
+
+	matched := grep_search(path, "hello", 50)
+	defer delete(matched, context.allocator)
+	assert(
+		matched == `{"results":[{"line_number":1,"text":"say \"hello\"\\world"}]}`,
+		"expected matching text to be JSON escaped",
+	)
+
+	noMatch := grep_search(path, "missing", 50)
+	defer delete(noMatch, context.allocator)
+	assert(noMatch == `{"results":[]}`, "expected an empty JSON result list")
+
+	invalidPattern := grep_search(path, "[", 50)
+	defer delete(invalidPattern, context.allocator)
+	assert(
+		strings.starts_with(invalidPattern, "Error compiling regular expression:"),
+		"expected an invalid regex error",
+	)
+	_ = t
 }
 
 @(test)
@@ -81,6 +136,87 @@ test_write_file_tool_creates_new_file :: proc(t: ^testing.T) {
 	result := write_file(test_file_path, test_content, "false")
 	defer delete(result, context.allocator)
 	assert(result == "File written successfully", "expected success message")
+}
+
+@(test)
+test_patch_file_applies_multiple_hunks :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/test.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(path, "alpha\nbeta\ngamma\ndelta\n")
+	assert(writeErr == nil, "expected fixture file to be written")
+
+	patch := `--- a/test.txt
++++ b/test.txt
+@@ -1,2 +1,2 @@
+ alpha
+-beta
++BETA
+@@ -4 +4,2 @@
+ delta
++epsilon
+`
+	result := patch_file(path, patch)
+	defer delete(result, context.allocator)
+	assert(result == "Patch applied successfully", "expected patch to succeed")
+
+	data, readErr := os.read_entire_file_from_path(path, context.temp_allocator)
+	assert(readErr == nil, "expected patched file to be readable")
+	assert(string(data) == "alpha\nBETA\ngamma\ndelta\nepsilon\n", "expected both hunks")
+}
+
+@(test)
+test_patch_file_preserves_crlf_and_missing_final_newline :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/test.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	writeErr := os.write_entire_file_from_string(path, "one\r\ntwo")
+	assert(writeErr == nil, "expected fixture file to be written")
+
+	patch := `--- a/test.txt
++++ b/test.txt
+@@ -1,2 +1,2 @@
+ one
+-two
+\ No newline at end of file
++TWO
+\ No newline at end of file
+`
+	result := patch_file(path, patch)
+	defer delete(result, context.allocator)
+	assert(result == "Patch applied successfully", "expected patch to succeed")
+
+	data, readErr := os.read_entire_file_from_path(path, context.temp_allocator)
+	assert(readErr == nil, "expected patched file to be readable")
+	assert(string(data) == "one\r\nTWO", "expected CRLF and missing final newline preserved")
+}
+
+@(test)
+test_patch_file_context_mismatch_leaves_file_unchanged :: proc(t: ^testing.T) {
+	tempDir, _ := os.make_directory_temp("", "builtin_test_*", context.temp_allocator)
+	defer os.remove_all(tempDir)
+	path := strings.concatenate({tempDir, "/test.txt"}, context.temp_allocator)
+	defer delete(path, context.temp_allocator)
+	original := "alpha\nbeta\n"
+	writeErr := os.write_entire_file_from_string(path, original)
+	assert(writeErr == nil, "expected fixture file to be written")
+
+	patch := `--- a/test.txt
++++ b/test.txt
+@@ -1,2 +1,2 @@
+ alpha
+-missing
++replacement
+`
+	result := patch_file(path, patch)
+	defer delete(result, context.allocator)
+	assert(strings.starts_with(result, "Error applying patch:"), "expected patch to fail")
+
+	data, readErr := os.read_entire_file_from_path(path, context.temp_allocator)
+	assert(readErr == nil, "expected original file to remain readable")
+	assert(string(data) == original, "expected failed patch not to modify the file")
 }
 
 @(test)

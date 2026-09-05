@@ -687,15 +687,15 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) -> string {
 	target := ""
 	switch call.id {
-	case "read_file", "write_file", "get_file_info":
+	case "read_file", "write_file", "get_file_info", "grep_search":
 		target = call.filePath
 	case "list_directory":
 		target = call.directoryPath
-	case "run_command":
+	case "run_in_terminal":
 		target = call.command
 	case "search_code", "find_code":
 		target = call.query
-	case "create_subagent":
+	case "run_subagent":
 		target = call.task
 	}
 	if target == "" {
@@ -2139,7 +2139,7 @@ app_submit_input :: proc(state: ^App_State) {
 
 	command := commands.parse_slash_command(text)
 	if command.isCommand {
-		app_run_command(state, command)
+		app_run_in_terminal(state, command)
 		return
 	}
 
@@ -2154,7 +2154,7 @@ app_submit_input :: proc(state: ^App_State) {
 	_ = app_start_agent_host_stream(state)
 }
 
-app_run_command :: proc(state: ^App_State, command: commands.Parsed_Command) {
+app_run_in_terminal :: proc(state: ^App_State, command: commands.Parsed_Command) {
 	switch command.kind {
 	case commands.Slash_Command.Exit:
 		state.shouldQuit = true

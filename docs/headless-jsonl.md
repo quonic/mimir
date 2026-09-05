@@ -35,12 +35,12 @@ return an error response and keep the process running.
 
 ## Actions
 
-### `run_command`
+### `run_in_terminal`
 
 Runs a slash command through the same command dispatcher used by the terminal UI.
 
 ```json
-{ "id": "1", "action": "run_command", "command": "/config" }
+{ "id": "1", "action": "run_in_terminal", "command": "/config" }
 ```
 
 ### `send_message`

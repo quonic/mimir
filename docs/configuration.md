@@ -143,14 +143,14 @@ Invalid skills are skipped and shown as warnings in Settings. Refreshing the
 Skills page reloads discovery for future requests and does not change an agent
 that is already running.
 
-`maxSubagentDepth` sets how many levels of subagents the `create_subagent`
-tool may spawn. A top-level agent that calls `create_subagent` starts its
+`maxSubagentDepth` sets how many levels of subagents the `run_subagent`
+tool may spawn. A top-level agent that calls `run_subagent` starts its
 child with this many levels of budget remaining; each further nested subagent
 must request a `depth` at or below its own remaining budget minus one. It must
 be a non-negative integer and defaults to `2`. Set it to `0` to disable
 subagent spawning.
 
-`maxSubagentsPerSession` caps the total number of subagents `create_subagent`
+`maxSubagentsPerSession` caps the total number of subagents `run_subagent`
 may spawn for one session, across all nesting levels. It must be a
 non-negative integer and defaults to `10`.
 

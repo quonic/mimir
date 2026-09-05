@@ -22,7 +22,7 @@ Agent_Host :: struct {
 	spinnerLastFrame:    time.Tick,
 	usage:               ai.Chat_Usage,
 	contextWindowTokens: int,
-	// Suspended parent frames while a create_subagent tool call is awaiting its child's result.
+	// Suspended parent frames while a run_subagent tool call is awaiting its child's result.
 	agentStack:          [dynamic]Agent_Stack_Frame,
 	subagentSpawnCount:  int,
 	maxSubagents:        int,
@@ -151,7 +151,7 @@ app_poll_agent_host :: proc(state: ^App_State) -> bool {
 	return dirty
 }
 
-// Resolves the parent's pending create_subagent tool call with the finished child's result.
+// Resolves the parent's pending run_subagent tool call with the finished child's result.
 app_finish_subagent :: proc(
 	state: ^App_State,
 	childID: agent.Agent_ID,
@@ -357,7 +357,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		return true
 	}
 	historyIndex := app_append_tool_history(state, call, "running")
-	if call.id == "create_subagent" {
+	if call.id == "run_subagent" {
 		if !app_start_subagent(state, call, historyIndex, event.agentID, event.requestID) {
 			app_update_tool_history(state, historyIndex, call, "failed")
 			_ = agent.runtime_resolve_tool(
@@ -411,7 +411,7 @@ app_fail_subagent_tool :: proc(
 	return true
 }
 
-// Spawns a child agent for a create_subagent tool call and retargets the active agent to it.
+// Spawns a child agent for a run_subagent tool call and retargets the active agent to it.
 // Returns false only if the call could not be resolved at all (caller then finishes it as failed).
 app_start_subagent :: proc(
 	state: ^App_State,
@@ -467,7 +467,7 @@ app_start_subagent :: proc(
 
 	childTools := make([dynamic]ai.Tool_Definition, 0, len(requestedNames), context.temp_allocator)
 	for name in requestedNames {
-		if name == "create_subagent" && childDepth <= 0 {
+		if name == "run_subagent" && childDepth <= 0 {
 			continue
 		}
 		for definition in available {
@@ -503,16 +503,15 @@ app_start_subagent :: proc(
 	if agent.runtime_begin(&state.agentHost.runtime, childID) != .None {
 		return app_fail_subagent_tool(state, parentID, "Could not start subagent.")
 	}
-	skillCatalog := settings.skill_registry_prompt_catalog(&state.skills, context.temp_allocator)
-	defer delete(skillCatalog, context.temp_allocator)
-	childSystemPrompt := SUBAGENT_SYSTEM_PROMPT
-	if skillCatalog != "" {
-		childSystemPrompt = strings.concatenate(
-			{SUBAGENT_SYSTEM_PROMPT, "\n\nAvailable skills:\n", skillCatalog},
-			context.temp_allocator,
-		)
-		defer delete(childSystemPrompt, context.temp_allocator)
-	}
+	childSystemPrompt := strings.concatenate(
+		{
+			SUBAGENT_SYSTEM_PROMPT,
+			"\n\n",
+			get_skills_list(state.skills.skills[:], context.temp_allocator),
+		},
+		context.temp_allocator,
+	)
+	defer delete(childSystemPrompt, context.temp_allocator)
 	messages := []ai.Message {
 		{role = .System, content = childSystemPrompt},
 		{role = .User, content = call.task},
@@ -583,21 +582,12 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	}
 
 	systemPrompt := system_prompt_effective(
+		state^,
 		state.config.systemPrompt,
 		state.config.systemPromptMode,
 		context.temp_allocator,
 	)
 	defer delete(systemPrompt, context.temp_allocator)
-	skillCatalog := settings.skill_registry_prompt_catalog(&state.skills, context.temp_allocator)
-	defer delete(skillCatalog, context.temp_allocator)
-	if skillCatalog != "" {
-		withSkills := strings.concatenate(
-			{systemPrompt, "\n\nAvailable skills:\n", skillCatalog},
-			context.temp_allocator,
-		)
-		delete(systemPrompt, context.temp_allocator)
-		systemPrompt = withSkills
-	}
 	messages := app_build_ai_messages(state.history[:], systemPrompt, context.temp_allocator)
 	defer agent_host_messages_destroy(&messages, context.temp_allocator)
 	if len(messages) == 0 {
