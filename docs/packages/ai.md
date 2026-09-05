@@ -83,8 +83,10 @@ if err == .None {
 }
 ```
 
-OpenAI-compatible `/models` responses carry no capability data. Mimir uses the
-OpenAI branch of models.dev as supplementary metadata when it is available.
+OpenAI-compatible `/models` responses carry no capability data. Mimir uses
+models.dev as supplementary metadata when it is available, preferring its
+OpenAI branch and falling back to other provider branches for compatible local
+model IDs.
 The metadata identifies embedding output, tool support, and positive context
 limits. The `/models` response remains authoritative for the model list.
 
