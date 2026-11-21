@@ -194,7 +194,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			adviceRegion := interior
 			adviceRegion.top_row = row
 			adviceRegion.bottom_row = interior.bottom_row - 4
-			if !app_approval_safety_ready(state) {
+			if !pending_approval_safety_ready(&state.approval) {
 				write_clipped_line(
 					batch,
 					row,
@@ -203,7 +203,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 					"Safety advice: assessing action...",
 				)
 				row += 1
-			} else if app_approval_safety_unavailable(state) {
+			} else if pending_approval_safety_unavailable(&state.approval) {
 				write_clipped_line(
 					batch,
 					row,
@@ -213,7 +213,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 				)
 				row += 1
 			} else {
-				advice := app_approval_safety_response(state)
+				advice := pending_approval_safety_response(&state.approval)
 				if advice != "" {
 					write_clipped_line(batch, row, interior.left_column, width, "Safety advice:")
 					row += 1
@@ -231,7 +231,8 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 			break
 		}
 		prefix := "  "
-		if app_approval_safety_ready(state) && int(state.approval.choice) == index {
+		selected := int(state.approvalView.choice) == index
+		if pending_approval_safety_ready(&state.approval) && selected {
 			prefix = "> "
 		}
 		line := strings.concatenate({prefix, label}, context.temp_allocator)

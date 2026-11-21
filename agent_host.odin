@@ -321,7 +321,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 	}
 	defer tool_policy.tool_call_destroy(&call, state.dispatcher.allocator)
 
-	decision := tool_policy.tool_dispatch_decide(&state.dispatcher, call)
+	decision := tool_policy.tool_dispatch_decide(app_dispatcher(state), call)
 	if decision == .Denied {
 		output := "Permission denied."
 		_ = app_show_agent_output(state, app_agent_tool_call(call, .Denied, -1, output))
@@ -390,16 +390,10 @@ app_show_agent_approval :: proc(
 	agentID: agent.Agent_ID,
 	requestID: string,
 ) -> bool {
-	if !app_show_approval(state, call) {
+	if app_request_approval(state, call, agentID, requestID) == .Rejected {
 		return false
 	}
-	state.approval.agentID = agentID
-	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
-	state.approval.historyIndex = app_show_agent_output(
-		state,
-		app_agent_tool_call(call, .Awaiting_Approval, -1),
-	)
-	_ = app_apply_approval_method(state)
+	app_sync_approval_overlay(state)
 	return true
 }
 

@@ -148,7 +148,8 @@ app_tool_execution_context :: proc(
 	call: tool_policy.Tool_Call,
 ) -> Tool_Execution_Context {
 	toolContext := Tool_Execution_Context {
-		dispatcher     = &state.dispatcher,
+		// Binds the grant pointer on this thread; the worker only reads it.
+		dispatcher     = app_dispatcher(state),
 		skills         = &state.skills,
 		embeddingError = .Invalid_Request,
 	}

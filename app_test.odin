@@ -117,9 +117,9 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 		"expected write call to open approval modal",
 	)
 	assert(app_has_overlay(&state, Approval_Overlay), "expected approval mode")
-	assert(state.approval.choice == .Allow_Once, "expected once approval selected initially")
+	assert(state.approvalView.choice == .Allow_Once, "expected once approval selected initially")
 	assert(app_handle_approval_input(&state, 'j'), "expected approval choice movement")
-	assert(state.approval.choice == .Allow_Session, "expected session approval selected")
+	assert(state.approvalView.choice == .Allow_Session, "expected session approval selected")
 	assert(!app_handle_approval_input(&state, 0x1b), "expected escape sequence start")
 	assert(app_handle_approval_input(&state, 'x'), "expected escape to deny approval")
 	assert(len(state.overlayStack) == 0, "expected denial to restore chat mode")
@@ -148,7 +148,7 @@ test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
 		"expected mouse motion to keep approval modal open",
 	)
 	assert(
-		state.approval.choice == .Allow_Once,
+		state.approvalView.choice == .Allow_Once,
 		"expected mouse motion coordinates to leave the approval choice unchanged",
 	)
 	_ = t
@@ -393,7 +393,10 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		app_has_overlay(&state, Approval_Overlay),
 		"expected pending analysis to keep modal open",
 	)
-	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
+	assert(
+		state.approvalView.choice == .Allow_Once,
+		"expected pending analysis to preserve selection",
+	)
 
 	approval_safety.mark_unavailable(&state.approval.safety)
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
@@ -2559,5 +2562,108 @@ test_app_rebuild_code_index_waits_for_running_tool :: proc(t: ^testing.T) {
 	state.toolExecution.active = false
 	app_rebuild_code_index(&state, context.allocator)
 	assert(!state.codeIndexRebuildPending, "expected code index rebuild to run without a tool")
+	_ = t
+}
+
+// Open an approval overlay for a `pwd` terminal call on the active agent.
+_open_terminal_approval :: proc(state: ^App_State) {
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	assert(
+		agent.runtime_request_tool(
+			&state.agentHost.runtime,
+			state.agentHost.activeAgentID,
+			agent.Tool_Request {
+				id = "call-1",
+				name = "run_in_terminal",
+				arguments = `{"command":"pwd"}`,
+			},
+		) ==
+		.None,
+		"expected runtime tool request",
+	)
+	assert(app_poll_agent_host(state), "expected tool request to open approval")
+	assert(app_has_overlay(state, Approval_Overlay), "expected approval mode")
+}
+
+@(test)
+test_allow_always_saves_grant_and_dispatcher_reads_it :: proc(t: ^testing.T) {
+	home, tempErr := os.make_directory_temp("", "mimir-app-*", context.temp_allocator)
+	assert(tempErr == nil, "expected temp home directory")
+	defer os.remove_all(home)
+
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	// app_destroy frees only the grant array of an unloaded default config.
+	defer for &grant in state.config.permissionGrants {
+		tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
+	}
+	delete(state.configHome)
+	state.configHome = strings.clone(home)
+
+	_open_terminal_approval(&state)
+	app_apply_approval_choice(&state, .Allow_Always)
+	assert(
+		len(state.config.permissionGrants) == 1,
+		"expected Allow_Always to append one grant to the config",
+	)
+	assert(
+		state.config.permissionGrants[0].command == "pwd",
+		"expected Allow_Always to grant the approved command",
+	)
+	decision := tool_policy.tool_dispatch_decide(
+		app_dispatcher(&state),
+		tool_policy.Tool_Call{id = "run_in_terminal", command = "pwd"},
+	)
+	assert(
+		decision == .Allowed_Persistent,
+		"expected dispatcher to read the saved grant without a resync",
+	)
+
+	loaded, loadErr := settings.load_config_from_file(home, context.allocator)
+	defer settings.config_destroy(&loaded)
+	assert(loadErr == .None, "expected saved config to load")
+	assert(len(loaded.permissionGrants) == 1, "expected the grant to be saved to disk")
+
+	_ = app_poll_agent_host(&state)
+	for state.toolExecution.active && !app_poll_tool_execution(&state) {
+	}
+	_ = t
+}
+
+@(test)
+test_allow_always_rolls_back_grant_when_save_fails :: proc(t: ^testing.T) {
+	home, tempErr := os.make_directory_temp("", "mimir-app-*", context.temp_allocator)
+	assert(tempErr == nil, "expected temp home directory")
+	defer os.remove_all(home)
+	// A regular file where the config directory should be makes the save fail.
+	blocker := strings.concatenate({home, "/.config"}, context.temp_allocator)
+	assert(os.write_entire_file(blocker, "") == nil, "expected config directory blocker")
+
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	delete(state.configHome)
+	state.configHome = strings.clone(home)
+
+	_open_terminal_approval(&state)
+	app_apply_approval_choice(&state, .Allow_Always)
+	assert(
+		state.status == "Permission grant could not be saved",
+		"expected save failure status",
+	)
+	assert(
+		len(state.config.permissionGrants) == 0,
+		"expected failed save to roll back the appended grant",
+	)
+	decision := tool_policy.tool_dispatch_decide(
+		app_dispatcher(&state),
+		tool_policy.Tool_Call{id = "run_in_terminal", command = "pwd"},
+	)
+	assert(
+		decision == .Approval_Required,
+		"expected dispatcher to stop seeing the rolled-back grant",
+	)
 	_ = t
 }
