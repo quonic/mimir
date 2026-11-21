@@ -391,13 +391,10 @@ app_show_agent_approval :: proc(
 	agentID: agent.Agent_ID,
 	requestID: string,
 ) -> bool {
-	if !app_show_approval(state, call) {
+	if app_request_approval(state, call, agentID, requestID) == .Rejected {
 		return false
 	}
-	state.approval.agentID = agentID
-	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
-	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
-	_ = app_apply_approval_method(state)
+	app_sync_approval_overlay(state)
 	return true
 }
 

@@ -117,9 +117,9 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 		"expected write call to open approval modal",
 	)
 	assert(app_has_overlay(&state, Approval_Overlay), "expected approval mode")
-	assert(state.approval.choice == .Allow_Once, "expected once approval selected initially")
+	assert(state.approvalView.choice == .Allow_Once, "expected once approval selected initially")
 	assert(app_handle_approval_input(&state, 'j'), "expected approval choice movement")
-	assert(state.approval.choice == .Allow_Session, "expected session approval selected")
+	assert(state.approvalView.choice == .Allow_Session, "expected session approval selected")
 	assert(!app_handle_approval_input(&state, 0x1b), "expected escape sequence start")
 	assert(app_handle_approval_input(&state, 'x'), "expected escape to deny approval")
 	assert(len(state.overlayStack) == 0, "expected denial to restore chat mode")
@@ -148,7 +148,7 @@ test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
 		"expected mouse motion to keep approval modal open",
 	)
 	assert(
-		state.approval.choice == .Allow_Once,
+		state.approvalView.choice == .Allow_Once,
 		"expected mouse motion coordinates to leave the approval choice unchanged",
 	)
 	_ = t
@@ -393,7 +393,10 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		app_has_overlay(&state, Approval_Overlay),
 		"expected pending analysis to keep modal open",
 	)
-	assert(state.approval.choice == .Allow_Once, "expected pending analysis to preserve selection")
+	assert(
+		state.approvalView.choice == .Allow_Once,
+		"expected pending analysis to preserve selection",
+	)
 
 	approval_safety.mark_unavailable(&state.approval.safety)
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
