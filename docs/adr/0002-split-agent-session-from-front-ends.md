@@ -1,6 +1,6 @@
 # 0002: Split the agent session from its front ends
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context
