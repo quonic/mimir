@@ -148,6 +148,8 @@ Config_Setting_ID :: enum int {
 	Safety_Model,
 	Approval_Method,
 	Tool_Continuations,
+	Connect_Timeout,
+	Stall_Timeout,
 	System_Prompt_Mode,
 	System_Prompt,
 	Reset_System_Prompt,
@@ -361,6 +363,7 @@ app_register_config_interfaces :: proc(
 	allocator := context.allocator,
 ) -> Config_Register_Result {
 	result: Config_Register_Result
+	ai.set_request_timeouts(config.connectTimeoutSeconds, config.stallTimeoutSeconds)
 	for provider in config.providers {
 		if !provider.enabled {
 			continue
@@ -2383,6 +2386,8 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 		)
 		append(&state.configSettings, Config_Setting{id = .System_Prompt, kind = .Text})
 		append(&state.configSettings, Config_Setting{id = .Reset_System_Prompt, kind = .Button})
+		append(&state.configSettings, Config_Setting{id = .Connect_Timeout, kind = .Text})
+		append(&state.configSettings, Config_Setting{id = .Stall_Timeout, kind = .Text})
 	case .Skills:
 		append(&state.configSettings, Config_Setting{id = .Refresh_Skills, kind = .Button})
 		for index := 0; index < settings.skill_registry_count(&state.skills); index += 1 {
@@ -2511,6 +2516,8 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 	     .Provider_Model,
 	     .Provider_Context_Window,
 	     .Tool_Continuations,
+	     .Connect_Timeout,
+	     .Stall_Timeout,
 	     .System_Prompt:
 		app_begin_config_edit(state, setting)
 	case .Refresh_Models:
@@ -2686,11 +2693,16 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 		state.status = "Editing system prompt: Ctrl-S saves, Esc cancels"
 		return
 	}
-	if setting.id == .Tool_Continuations {
-		widgets.text_editor_set_text(
-			&state.configEditor,
-			fmt.tprintf("%d", state.config.toolContinuations),
-		)
+	if setting.id == .Tool_Continuations ||
+	   setting.id == .Connect_Timeout ||
+	   setting.id == .Stall_Timeout {
+		value := state.config.toolContinuations
+		if setting.id == .Connect_Timeout {
+			value = state.config.connectTimeoutSeconds
+		} else if setting.id == .Stall_Timeout {
+			value = state.config.stallTimeoutSeconds
+		}
+		widgets.text_editor_set_text(&state.configEditor, fmt.tprintf("%d", value))
 		state.configEditingSetting = setting
 		state.configEditing = true
 		state.status = "Editing: Enter saves, Esc cancels"
@@ -2764,6 +2776,21 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		}
 		state.config.toolContinuations = continuations
 		app_apply_config_change(state, "Tool continuation limit saved")
+		return
+	}
+	if setting.id == .Connect_Timeout || setting.id == .Stall_Timeout {
+		seconds, secondsOK := strconv.parse_int(text)
+		if !secondsOK || seconds < 1 {
+			state.status = "Timeout must be a positive number of seconds"
+			return
+		}
+		if setting.id == .Connect_Timeout {
+			state.config.connectTimeoutSeconds = seconds
+			app_apply_config_change(state, "Connect timeout saved")
+		} else {
+			state.config.stallTimeoutSeconds = seconds
+			app_apply_config_change(state, "Stall timeout saved")
+		}
 		return
 	}
 	if setting.id == .System_Prompt {
@@ -3122,6 +3149,7 @@ app_select_config_safety_model :: proc(state: ^App_State, modelIndex: int) {
 }
 
 app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
+	ai.set_request_timeouts(state.config.connectTimeoutSeconds, state.config.stallTimeoutSeconds)
 	// Snapshot already-probed models (e.g. OpenAI) so re-registering interfaces
 	// after a config edit doesn't drop them back to a single fallback model.
 	preservedModels := make(map[string][dynamic]ai.Model, 0, context.temp_allocator)

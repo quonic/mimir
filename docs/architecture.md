@@ -33,5 +33,10 @@ Chat requests stream assistant responses from the configured provider and model
 on a background worker. The input loop continues to process terminal events.
 `/stop` and `/cancel` request cancellation.
 
-Cancellation completes after the provider sends the next stream chunk. The HTTP
-transport cannot abort an active request immediately.
+Cancellation aborts the active HTTP request. The transport checks for a
+cancellation request at least once per second, so the stream stops within about
+a second even when the provider sends no data.
+
+All provider requests go through the `transport` package, which uses libcurl
+from Odin's `vendor:curl`. See
+[ADR 0001](adr/0001-use-libcurl-for-http.md).

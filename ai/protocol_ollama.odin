@@ -4,7 +4,7 @@ import json "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
-import http "../http"
+import transport "../transport"
 
 Ollama_Message :: struct {
 	role:       string,
@@ -425,7 +425,7 @@ get_ollama_model_context_window :: proc(client: Client, model: string) -> (int, 
 		return 0, errKind
 	}
 	defer if body != "" {delete(body)}
-	if !http.status_is_success(status) {
+	if !transport.status_is_success(status) {
 		_ = parse_ollama_error_message(body)
 		return 0, map_status_to_error(status)
 	}
