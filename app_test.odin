@@ -1875,7 +1875,7 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
 
-	assert(len(state.configSettings) == 5, "expected five advanced settings")
+	assert(len(state.configSettings) == 7, "expected seven advanced settings")
 	assert(state.configSettings[1].id == .Tool_Continuations, "expected tool continuation setting")
 	state.configSettingCursor = 1
 	assert(app_activate_config_setting(&state), "expected continuation setting activation")
@@ -1885,6 +1885,41 @@ test_config_modal_edits_tool_continuation_limit :: proc(t: ^testing.T) {
 
 	assert(state.config.toolContinuations == 2500, "expected continuation limit to update")
 	assert(state.status == "Tool continuation limit saved", "expected saved continuation status")
+	_ = t
+}
+
+@(test)
+test_config_modal_edits_and_rejects_timeouts :: proc(t: ^testing.T) {
+	state := app_init(context.temp_allocator)
+	defer app_destroy(&state)
+	app_show_config(&state)
+	state.configCategory = .Advanced
+	state.configFocus = .Settings
+	app_rebuild_config_settings(&state)
+
+	assert(state.configSettings[5].id == .Connect_Timeout, "expected connect timeout setting")
+	assert(state.configSettings[6].id == .Stall_Timeout, "expected stall timeout setting")
+
+	state.configSettingCursor = 5
+	assert(app_activate_config_setting(&state), "expected connect timeout activation")
+	assert(state.configEditing, "expected connect timeout edit mode")
+	widgets.text_editor_set_text(&state.configEditor, "12")
+	app_commit_config_edit(&state)
+	assert(state.config.connectTimeoutSeconds == 12, "expected connect timeout to update")
+	assert(state.status == "Connect timeout saved", "expected saved connect timeout status")
+
+	state.configSettingCursor = 6
+	app_activate_config_setting(&state)
+	widgets.text_editor_set_text(&state.configEditor, "0")
+	app_commit_config_edit(&state)
+	assert(
+		state.config.stallTimeoutSeconds == settings.DEFAULT_STALL_TIMEOUT_SECONDS,
+		"expected invalid stall timeout to preserve previous value",
+	)
+	assert(
+		state.status == "Timeout must be a positive number of seconds",
+		"expected invalid timeout status",
+	)
 	_ = t
 }
 

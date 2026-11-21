@@ -82,6 +82,14 @@ test_parse_config_from_json :: proc(t: ^testing.T) {
 		config.maxSubagentsPerSession == settings.DEFAULT_MAX_SUBAGENTS_PER_SESSION,
 		"expected missing max subagents per session to use the default",
 	)
+	assert(
+		config.connectTimeoutSeconds == settings.DEFAULT_CONNECT_TIMEOUT_SECONDS,
+		"expected missing connect timeout to use the default",
+	)
+	assert(
+		config.stallTimeoutSeconds == settings.DEFAULT_STALL_TIMEOUT_SECONDS,
+		"expected missing stall timeout to use the default",
+	)
 	assert(config.systemPrompt == "", "expected missing system prompt to stay empty")
 	assert(
 		config.systemPromptMode == .Append,
@@ -175,6 +183,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	config.toolContinuations = 2500
 	config.maxSubagentDepth = 3
 	config.maxSubagentsPerSession = 5
+	config.connectTimeoutSeconds = 12
+	config.stallTimeoutSeconds = 600
 	config.systemPrompt = "Use tabs.\nRun tests."
 	config.systemPromptMode = .Replace
 	config.providers[0].model = "llama3.2"
@@ -222,6 +232,8 @@ test_save_and_load_config_round_trip :: proc(t: ^testing.T) {
 	assert(loaded.toolContinuations == 2500, "expected tool continuation limit round trip")
 	assert(loaded.maxSubagentDepth == 3, "expected max subagent depth round trip")
 	assert(loaded.maxSubagentsPerSession == 5, "expected max subagents per session round trip")
+	assert(loaded.connectTimeoutSeconds == 12, "expected connect timeout round trip")
+	assert(loaded.stallTimeoutSeconds == 600, "expected stall timeout round trip")
 	assert(loaded.systemPrompt == "Use tabs.\nRun tests.", "expected system prompt round trip")
 	assert(loaded.systemPromptMode == .Replace, "expected system prompt mode round trip")
 	assert(len(loaded.providers) == 1, "expected one provider after load")
@@ -273,6 +285,26 @@ test_parse_config_rejects_negative_max_subagents_per_session :: proc(t: ^testing
 
 	_, err := settings.parse_config_from_json(payload, context.temp_allocator)
 	assert(err == .Invalid_JSON, "expected negative max subagents per session to reject config")
+	_ = t
+}
+
+@(test)
+test_parse_config_rejects_negative_timeouts :: proc(t: ^testing.T) {
+	connectPayload := `{
+  "connectTimeoutSeconds": -1,
+  "providers": [],
+  "disabledSkills": []
+}`
+	_, connectErr := settings.parse_config_from_json(connectPayload, context.temp_allocator)
+	assert(connectErr == .Invalid_JSON, "expected negative connect timeout to reject config")
+
+	stallPayload := `{
+  "stallTimeoutSeconds": -5,
+  "providers": [],
+  "disabledSkills": []
+}`
+	_, stallErr := settings.parse_config_from_json(stallPayload, context.temp_allocator)
+	assert(stallErr == .Invalid_JSON, "expected negative stall timeout to reject config")
 	_ = t
 }
 

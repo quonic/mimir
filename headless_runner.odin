@@ -441,6 +441,18 @@ headless_config_snapshot :: proc(state: ^App_State, allocator := context.allocat
 	)
 	headless_object_set(
 		&object,
+		"connectTimeoutSeconds",
+		json.Integer(i64(state.config.connectTimeoutSeconds)),
+		allocator,
+	)
+	headless_object_set(
+		&object,
+		"stallTimeoutSeconds",
+		json.Integer(i64(state.config.stallTimeoutSeconds)),
+		allocator,
+	)
+	headless_object_set(
+		&object,
 		"systemPromptMode",
 		headless_string_value(
 			settings.system_prompt_mode_to_string(state.config.systemPromptMode),
@@ -484,6 +496,10 @@ headless_config_value :: proc(
 		return json.Integer(i64(state.config.maxSubagentDepth)), true
 	case "maxSubagentsPerSession":
 		return json.Integer(i64(state.config.maxSubagentsPerSession)), true
+	case "connectTimeoutSeconds":
+		return json.Integer(i64(state.config.connectTimeoutSeconds)), true
+	case "stallTimeoutSeconds":
+		return json.Integer(i64(state.config.stallTimeoutSeconds)), true
 	case "systemPromptMode":
 		return headless_string_value(
 				settings.system_prompt_mode_to_string(state.config.systemPromptMode),
@@ -577,6 +593,16 @@ headless_set_config_value :: proc(state: ^App_State, path: string, value: json.V
 		integer, ok := value.(json.Integer)
 		if !ok || integer < 0 {return false}
 		state.config.maxSubagentsPerSession = int(integer)
+		return true
+	case "connectTimeoutSeconds":
+		integer, ok := value.(json.Integer)
+		if !ok || integer < 1 {return false}
+		state.config.connectTimeoutSeconds = int(integer)
+		return true
+	case "stallTimeoutSeconds":
+		integer, ok := value.(json.Integer)
+		if !ok || integer < 1 {return false}
+		state.config.stallTimeoutSeconds = int(integer)
 		return true
 	case "systemPromptMode":
 		text, ok := value.(json.String)

@@ -58,6 +58,8 @@ The initial configuration shape is:
   "toolContinuations": 1000,
   "maxSubagentDepth": 2,
   "maxSubagentsPerSession": 10,
+  "connectTimeoutSeconds": 30,
+  "stallTimeoutSeconds": 300,
   "systemPrompt": "",
   "systemPromptMode": "append",
   "contextWindows": [
@@ -113,6 +115,20 @@ permission grants.
 `toolContinuations` sets the maximum number of consecutive model and tool
 continuation cycles for one request. It must be a positive integer and defaults
 to `1000`. Change it through `/config` in `Advanced`, or edit the JSON file.
+
+`connectTimeoutSeconds` sets how many seconds Mimir waits to connect to a
+provider before the request fails. It applies to every provider request. It must
+be a positive integer and defaults to `30`.
+
+`stallTimeoutSeconds` sets how many seconds a request may receive no data before
+it fails. This includes the wait for the first response byte, so a local model
+that processes a long prompt needs a high value. A response that keeps
+streaming data never times out. It must be a positive integer and defaults to
+`300`.
+
+Change both timeouts through `/config` in `Advanced`, or edit the JSON file. A
+value of `0` or a missing key uses the default. A negative value makes the
+config file invalid.
 
 ## Skills
 
@@ -173,10 +189,12 @@ empty custom prompt in `append` mode.
 `contextWindows` can store a manual context limit for a provider and model. The
 value must not be negative. A value of `0` means the limit is unknown. For
 Ollama, Mimir reads a positive `model_info` key that ends in `.context_length`
-from `/api/show`. This value takes priority over the manual limit. **Refresh
-models** finds these values for all listed Ollama models and saves changed
-positive values. Missing or unsupported metadata keeps an existing limit and
-does not stop chat.
+from `/api/show`. This value takes priority over the manual limit. For
+OpenAI-compatible providers, Mimir uses the positive `limit.context` value
+from the OpenAI branch of models.dev when available. **Refresh models** finds
+these values for listed models and saves changed positive values. Missing,
+unsupported, or unavailable metadata keeps an existing limit and does not stop
+chat.
 
 Mimir also uses this value to size each response: it requests up to the
 context window minus the current conversation's estimated size, so replies

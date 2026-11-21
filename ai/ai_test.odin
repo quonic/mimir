@@ -1,7 +1,7 @@
 #+vet explicit-allocators
 package ai
 
-import http "../http"
+import transport "../transport"
 import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -294,15 +294,54 @@ test_parse_openai_models_response_infers_embedding_by_name :: proc(t: ^testing.T
 }
 
 @(test)
+test_parse_openai_models_response_uses_models_dev_metadata :: proc(t: ^testing.T) {
+	metadata := make(map[string]Models_Dev_Model_Metadata, 2, context.allocator)
+	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
+	chatModelKey := strings.clone("chat-model", context.allocator)
+	chatOutput := make([dynamic]string, 0, 1, context.allocator)
+	append_elem(&chatOutput, strings.clone("text", context.allocator))
+	metadata[chatModelKey] = Models_Dev_Model_Metadata {
+		id = strings.clone("chat-model", context.allocator),
+		toolCall = true,
+		limit = Models_Dev_Limit{contextWindow = 128000},
+		modalities = Models_Dev_Modalities{output = chatOutput},
+	}
+	embeddingModelKey := strings.clone("model-without-embed-name", context.allocator)
+	embeddingOutput := make([dynamic]string, 0, 1, context.allocator)
+	append_elem(&embeddingOutput, strings.clone("embedding", context.allocator))
+	metadata[embeddingModelKey] = Models_Dev_Model_Metadata {
+		id = strings.clone("model-without-embed-name", context.allocator),
+		modalities = Models_Dev_Modalities{output = embeddingOutput},
+	}
+
+	models, modelErr := parse_openai_models_response_with_metadata(
+		`{"data":[{"id":"chat-model"},{"id":"model-without-embed-name"}]}`,
+		metadata,
+		context.allocator,
+	)
+	defer models_destroy(&models, context.allocator)
+	assert(modelErr == .None, "expected OpenAI models response with metadata to parse")
+	assert(len(models) == 2, "expected two OpenAI models")
+	assert(model_supports_chat(models[0]), "expected metadata chat model to support chat")
+	assert(models[0].contextWindowTokens == 128000, "expected metadata context window")
+	assert(
+		model_supports_embeddings(models[1]),
+		"expected metadata embedding modality to determine embedding support",
+	)
+	assert(!model_supports_chat(models[1]), "expected embedding model to reject chat")
+	_ = t
+}
+
+@(test)
 test_openai_endpoint_target_and_sse_stream :: proc(t: ^testing.T) {
-	root := http.url_parse("https://example.test")
+	root := transport.url_parse("https://example.test")
 	rootTarget, rootOK := openai_endpoint_target(root, OPENAI_CHAT_PATH)
 	assert(rootOK, "expected OpenAI root endpoint")
 	assert(
 		rootTarget == "https://example.test/v1/chat/completions",
 		"expected versioned root target",
 	)
-	apiBase := http.url_parse("https://example.test/v1/")
+	apiBase := transport.url_parse("https://example.test/v1/")
 	baseTarget, baseOK := openai_endpoint_target(apiBase, OPENAI_CHAT_PATH)
 	assert(baseOK, "expected versioned OpenAI endpoint")
 	assert(
@@ -719,7 +758,7 @@ test_new_client_with_endpoint_validates_endpoint :: proc(t: ^testing.T) {
 
 @(test)
 test_compose_endpoint_target :: proc(t: ^testing.T) {
-	withVersion := http.url_parse("http://localhost:11434/v1")
+	withVersion := transport.url_parse("http://localhost:11434/v1")
 	target1, ok1 := compose_endpoint_target(withVersion, "/chat/completions")
 	assert(ok1, "expected compose_endpoint_target to accept endpoint with host")
 	assert(
@@ -727,7 +766,7 @@ test_compose_endpoint_target :: proc(t: ^testing.T) {
 		"expected endpoint composition to keep version path",
 	)
 
-	withTrailingSlash := http.url_parse("http://localhost:11434/v1/")
+	withTrailingSlash := transport.url_parse("http://localhost:11434/v1/")
 	target2, ok2 := compose_endpoint_target(withTrailingSlash, "/chat/completions")
 	assert(ok2, "expected compose_endpoint_target to support trailing slash")
 	assert(
@@ -761,7 +800,7 @@ test_ollama_native_integration :: proc(t: ^testing.T) {
 	}
 
 	client := Client {
-		iface = Interface{name = "ollama", type = .Ollama, endpoint = http.url_parse(endpoint)},
+		iface = Interface{name = "ollama", type = .Ollama, endpoint = transport.url_parse(endpoint)},
 		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
 	}
 
@@ -812,7 +851,7 @@ test_ollama_native_embedding_integration :: proc(t: ^testing.T) {
 		)
 	}
 	client := Client {
-		iface = Interface{name = "ollama", type = .Ollama, endpoint = http.url_parse(endpoint)},
+		iface = Interface{name = "ollama", type = .Ollama, endpoint = transport.url_parse(endpoint)},
 		apiKey = os.get_env("AI_OLLAMA_API_KEY", context.temp_allocator),
 	}
 

@@ -919,6 +919,20 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			context.temp_allocator,
 		)
 	}
+	if setting.id == .Connect_Timeout {
+		return widgets.setting_row_value(
+			"Connect timeout (seconds)",
+			fmt.tprintf("%d", state.config.connectTimeoutSeconds),
+			context.temp_allocator,
+		)
+	}
+	if setting.id == .Stall_Timeout {
+		return widgets.setting_row_value(
+			"Stall timeout (seconds)",
+			fmt.tprintf("%d", state.config.stallTimeoutSeconds),
+			context.temp_allocator,
+		)
+	}
 	if setting.id == .Approval_Method {
 		return widgets.setting_row_choice(
 			"Approval method",
@@ -1064,6 +1078,10 @@ config_setting_label :: proc(id: Config_Setting_ID) -> string {
 		return "Approval method"
 	case .Tool_Continuations:
 		return "Tool continuation limit"
+	case .Connect_Timeout:
+		return "Connect timeout"
+	case .Stall_Timeout:
+		return "Stall timeout"
 	case .System_Prompt_Mode:
 		return "System prompt mode"
 	case .System_Prompt:

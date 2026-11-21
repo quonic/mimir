@@ -67,6 +67,29 @@ err := ai.send_chat_completion_stream(client, ai.Chat_Request{
 }, stream_chat_delta)
 ```
 
+To stop a stream from another thread, use
+`send_chat_completion_stream_with_cancel`. The transport calls `shouldCancel`
+while the request is in flight, at least once per second. When it returns
+`true`, the request is aborted and the call returns `.None`.
+
+```odin
+stream_should_cancel :: proc(userData: rawptr) -> bool {
+    state := cast(^My_Stream_State)userData
+    return sync.atomic_load(&state.cancelRequested)
+}
+
+err := ai.send_chat_completion_stream_with_cancel(
+    client,
+    request,
+    stream_chat_delta_with_context,
+    stream_should_cancel,
+    rawptr(&state),
+)
+```
+
+`ai.set_request_timeouts(connectSeconds, stallSeconds)` sets the connect and
+stall timeouts for later requests. A value of `0` or less uses the default.
+
 ## Generating Embeddings
 
 Native Ollama and OpenAI-compatible interfaces support embeddings. One input
@@ -83,10 +106,18 @@ if err == .None {
 }
 ```
 
-OpenAI-compatible `/models` responses carry no capability data, so
-`ai.list_openai_models` identifies embedding models by name (any model whose
-id contains "embed", e.g. `text-embedding-3-small`, `nomic-embed-text-v2-moe`,
-`qwen3-embedding`, `embeddinggemma`). Use `ai.model_supports_embeddings` and
+OpenAI-compatible `/models` responses carry no capability data. Mimir uses
+models.dev as supplementary metadata when it is available, preferring its
+OpenAI branch and falling back to other provider branches for compatible local
+model IDs.
+The metadata identifies embedding output, tool support, and positive context
+limits. The `/models` response remains authoritative for the model list.
+
+If models.dev is unavailable or does not contain a listed model, Mimir keeps
+the name-based fallback: an id containing "embed" is treated as an embedding
+model (for example `text-embedding-3-small`, `nomic-embed-text-v2-moe`,
+`qwen3-embedding`, or `embeddinggemma`). A missing context limit does not erase
+an existing manual limit. Use `ai.model_supports_embeddings` and
 `ai.model_supports_chat` to filter the results.
 
 Use `send_embeddings` for multiple inputs. The response vectors keep the order

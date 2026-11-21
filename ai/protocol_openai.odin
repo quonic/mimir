@@ -3,7 +3,7 @@ package ai
 import json "core:encoding/json"
 import "core:strings"
 
-import http "../http"
+import transport "../transport"
 
 OpenAI_Message :: struct {
 	role:         string,
@@ -278,6 +278,17 @@ parse_openai_models_response :: proc(
 	[dynamic]Model,
 	AI_Error,
 ) {
+	return parse_openai_models_response_with_metadata(body, nil, allocator)
+}
+
+parse_openai_models_response_with_metadata :: proc(
+	body: string,
+	metadata: map[string]Models_Dev_Model_Metadata,
+	allocator := context.allocator,
+) -> (
+	[dynamic]Model,
+	AI_Error,
+) {
 	wire: OpenAI_Models_Response
 	decodeErr := json.unmarshal_string(body, &wire, allocator = context.temp_allocator)
 	if decodeErr != nil {
@@ -291,15 +302,41 @@ parse_openai_models_response :: proc(
 		entry := Model {
 			name = strings.clone(model.id, allocator),
 		}
-		if model_name_indicates_embedding(model.id) {
+		metadataEntry, metadataFound := models_dev_lookup(metadata, model.id, allocator)
+		if metadataFound {
+			defer models_dev_model_metadata_destroy(&metadataEntry, allocator)
+		}
+		isEmbedding :=
+			metadataFound && models_dev_model_has_output_modality(metadataEntry, "embedding")
+		if !metadataFound {
+			isEmbedding = model_name_indicates_embedding(model.id)
+		}
+		if isEmbedding {
 			append(&entry.capabilities, strings.clone("embedding", allocator))
 		} else {
 			append(&entry.capabilities, strings.clone("completion", allocator))
-			append(&entry.capabilities, strings.clone("tools", allocator))
+			if !metadataFound || metadataEntry.toolCall {
+				append(&entry.capabilities, strings.clone("tools", allocator))
+			}
+		}
+		if metadataFound && metadataEntry.limit.contextWindow > 0 {
+			entry.contextWindowTokens = metadataEntry.limit.contextWindow
 		}
 		append(&models, entry)
 	}
 	return models, .None
+}
+
+models_dev_model_has_output_modality :: proc(
+	metadata: Models_Dev_Model_Metadata,
+	modality: string,
+) -> bool {
+	for candidate in metadata.modalities.output {
+		if candidate == modality {
+			return true
+		}
+	}
+	return false
 }
 
 parse_openai_error_message :: proc(body: string, allocator := context.allocator) -> string {
@@ -443,7 +480,7 @@ send_openai_chat_completion :: proc(
 		return Chat_Response{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_openai_chat_response(body)
 	}
 	return Chat_Response{}, map_status_to_error(status)
@@ -474,7 +511,7 @@ send_openai_embeddings :: proc(
 		return Embedding_Batch_Response{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_openai_embedding_response(body, len(request.inputs), allocator)
 	}
 	return Embedding_Batch_Response{}, map_status_to_error(status)
@@ -509,7 +546,7 @@ send_openai_chat_completion_stream :: proc(
 	if err != .None {
 		return err
 	}
-	if !http.status_is_success(status) {
+	if !transport.status_is_success(status) {
 		return map_status_to_error(status)
 	}
 	return .None
@@ -536,13 +573,17 @@ list_openai_models :: proc(
 		return [dynamic]Model{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
+		metadata, metadataErr := fetch_models_dev_openai_metadata()
+		if metadataErr == .None {
+			return parse_openai_models_response_with_metadata(body, metadata, allocator)
+		}
 		return parse_openai_models_response(body, allocator)
 	}
 	return [dynamic]Model{}, map_status_to_error(status)
 }
 
-openai_endpoint_target :: proc(endpoint: http.URL, pathSuffix: string) -> (string, bool) {
+openai_endpoint_target :: proc(endpoint: transport.URL, pathSuffix: string) -> (string, bool) {
 	if endpoint.host == "" || endpoint.raw == "" {
 		return "", false
 	}

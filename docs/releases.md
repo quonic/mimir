@@ -40,6 +40,10 @@ Each release carries:
 Windows Terminal is the preferred way to run `mimir.exe`; plain `cmd.exe`
 (conhost) is supported best-effort.
 
+The Linux binary links the system libcurl (`libcurl.so.4`) at runtime. Most
+distributions install it by default. The Windows binary links libcurl
+statically and has no extra runtime dependencies.
+
 ## Verifying a download
 
 Check the checksum:

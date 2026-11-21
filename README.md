@@ -240,6 +240,12 @@ multiplexer for copied text to reach the system clipboard.
 
 ## Build From Source
 
+Mimir uses libcurl through Odin's `vendor:curl` package.
+
+- Linux: install the libcurl development package, for example
+  `libcurl-devel` (Fedora) or `libcurl4-openssl-dev` (Debian, Ubuntu).
+- Windows: no extra packages. Odin ships the libcurl libraries.
+
 From the repository root:
 
 ```sh

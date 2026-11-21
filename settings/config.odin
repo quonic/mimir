@@ -13,6 +13,8 @@ DEFAULT_OPENAI_CONFIG_ENDPOINT :: "https://api.openai.com/v1"
 DEFAULT_TOOL_CONTINUATIONS :: 1000
 DEFAULT_MAX_SUBAGENT_DEPTH :: 2
 DEFAULT_MAX_SUBAGENTS_PER_SESSION :: 10
+DEFAULT_CONNECT_TIMEOUT_SECONDS :: 30
+DEFAULT_STALL_TIMEOUT_SECONDS :: 300
 
 Approval_Method :: enum int {
 	Always_Ask = 0,
@@ -67,6 +69,8 @@ Mimir_Config_Wire :: struct {
 	toolContinuations:      int,
 	maxSubagentDepth:       int,
 	maxSubagentsPerSession: int,
+	connectTimeoutSeconds:  int,
+	stallTimeoutSeconds:    int,
 	systemPrompt:           string,
 	systemPromptMode:       string,
 	providers:              []Provider_Config_Wire,
@@ -105,6 +109,8 @@ Mimir_Config :: struct {
 	toolContinuations:      int,
 	maxSubagentDepth:       int,
 	maxSubagentsPerSession: int,
+	connectTimeoutSeconds:  int,
+	stallTimeoutSeconds:    int,
 	systemPrompt:           string,
 	systemPromptMode:       System_Prompt_Mode,
 	providers:              [dynamic]Provider_Config,
@@ -194,6 +200,8 @@ default_ollama_config :: proc(allocator := context.allocator) -> Mimir_Config {
 	config.toolContinuations = DEFAULT_TOOL_CONTINUATIONS
 	config.maxSubagentDepth = DEFAULT_MAX_SUBAGENT_DEPTH
 	config.maxSubagentsPerSession = DEFAULT_MAX_SUBAGENTS_PER_SESSION
+	config.connectTimeoutSeconds = DEFAULT_CONNECT_TIMEOUT_SECONDS
+	config.stallTimeoutSeconds = DEFAULT_STALL_TIMEOUT_SECONDS
 	config.systemPromptMode = .Append
 	config.providers = make([dynamic]Provider_Config, 0, 1, allocator)
 	config.contextWindows = make([dynamic]Context_Window_Config, 0, 0, allocator)
@@ -485,6 +493,18 @@ parse_config_from_json :: proc(
 	if config.maxSubagentsPerSession == 0 {
 		config.maxSubagentsPerSession = DEFAULT_MAX_SUBAGENTS_PER_SESSION
 	}
+	if wire.connectTimeoutSeconds < 0 || wire.stallTimeoutSeconds < 0 {
+		config_destroy(&config)
+		return Mimir_Config{}, .Invalid_JSON
+	}
+	config.connectTimeoutSeconds = wire.connectTimeoutSeconds
+	if config.connectTimeoutSeconds == 0 {
+		config.connectTimeoutSeconds = DEFAULT_CONNECT_TIMEOUT_SECONDS
+	}
+	config.stallTimeoutSeconds = wire.stallTimeoutSeconds
+	if config.stallTimeoutSeconds == 0 {
+		config.stallTimeoutSeconds = DEFAULT_STALL_TIMEOUT_SECONDS
+	}
 	config.providers = make([dynamic]Provider_Config, 0, len(wire.providers), allocator)
 	config.contextWindows = make(
 		[dynamic]Context_Window_Config,
@@ -631,6 +651,12 @@ config_to_json :: proc(config: Mimir_Config, allocator := context.allocator) -> 
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"maxSubagentsPerSession\": ")
 	write_decimal(&builder, config.maxSubagentsPerSession)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"connectTimeoutSeconds\": ")
+	write_decimal(&builder, config.connectTimeoutSeconds)
+	strings.write_string(&builder, ",\n")
+	strings.write_string(&builder, "  \"stallTimeoutSeconds\": ")
+	write_decimal(&builder, config.stallTimeoutSeconds)
 	strings.write_string(&builder, ",\n")
 	strings.write_string(&builder, "  \"systemPrompt\": ")
 	write_json_string(&builder, config.systemPrompt)

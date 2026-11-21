@@ -70,6 +70,7 @@ Chat_Stream_Delta :: struct {
 
 Chat_Stream_Callback :: #type proc(delta: Chat_Stream_Delta) -> bool
 Chat_Stream_Context_Callback :: #type proc(delta: Chat_Stream_Delta, userData: rawptr) -> bool
+Chat_Stream_Cancel_Callback :: #type proc(userData: rawptr) -> bool
 
 message_role_to_string :: proc(role: Message_Role) -> string {
 	switch role {
