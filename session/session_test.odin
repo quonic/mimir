@@ -903,3 +903,58 @@ test_agent_host_starts_active_and_background_agents :: proc(t: ^testing.T) {
 	assert(backgroundOK && backgroundState == .Idle, "expected idle background agent")
 	_ = t
 }
+
+@(test)
+test_session_makes_repeated_model_tool_call_ids_unique :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Approve_All)
+	defer test_session_destroy(&test)
+	// Ollama numbers the tool calls of each response from ollama-0, so both responses use the
+	// same model ID.
+	test_queue_tool_turn(&test, "run_in_terminal", PWD_ARGUMENTS)
+	test_queue_tool_turn(&test, "run_in_terminal", `{"command":"ls"}`)
+	fake_provider_add_response(&test.provider, false, fake_provider_text_line("ok", true))
+
+	assert(session_submit(test.session, "run") == .None, "expected the turn to start")
+	ended := test_wait_for_turn_end(&test)
+	assert(ended.reason == .Completed, "expected the turn to complete")
+	first, firstIndex := test_find_event(&test, Tool_Call_Started)
+	second, _ := test_find_event(&test, Tool_Call_Started, firstIndex + 1)
+	assert(first != nil && second != nil, "expected two tool calls")
+	assert(first.toolCallID == FIRST_TOOL_CALL_ID, "expected the model ID for a new ID")
+	assert(
+		second.toolCallID == "ollama-0-2",
+		fmt.tprintf("expected a unique ID for the repeated model ID, got %q", second.toolCallID),
+	)
+	assert(
+		test_statuses_equal(
+			test_tool_statuses(&test, "ollama-0-2"),
+			.Awaiting_Approval,
+			.Running,
+			.Completed,
+		),
+		"expected the updates of the second call to use its unique ID",
+	)
+
+	// A later turn keeps the IDs unique.
+	test_queue_tool_turn(&test, "run_in_terminal", PWD_ARGUMENTS)
+	fake_provider_add_response(&test.provider, false, fake_provider_text_line("ok", true))
+	eventCount := len(test.events)
+	assert(session_submit(test.session, "again") == .None, "expected the second turn to start")
+	_, _ = test_wait_for_event(&test, Turn_Ended, eventCount)
+	third, _ := test_find_event(&test, Tool_Call_Started, eventCount)
+	assert(third != nil && third.toolCallID == "ollama-0-3", "expected a unique ID in turn two")
+	_ = t
+}
+
+@(test)
+test_session_unique_tool_call_id_skips_taken_suffixes :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Always_Ask)
+	defer test_session_destroy(&test)
+	assert(session_unique_tool_call_id(test.session, "a-2") == "a-2", "expected a new ID")
+	assert(session_unique_tool_call_id(test.session, "a") == "a", "expected a new ID")
+	assert(session_unique_tool_call_id(test.session, "a") == "a-3", "expected a free suffix")
+	assert(session_unique_tool_call_id(test.session, "") == "call", "expected a default ID")
+	_ = t
+}

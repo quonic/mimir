@@ -65,8 +65,12 @@ for {
 ## Events
 
 Events carry data, not display text. A tool call and its approval are
-identified by the tool call ID of the model. Ollama numbers its tool calls
-from `ollama-0` in each response, so an ID can repeat in one conversation.
+identified by a tool call ID that is unique in the session. It is the tool call
+ID of the model when the session has not used that ID before. Models can
+repeat their IDs (Ollama numbers the tool calls of each response from
+`ollama-0`), so a repeated ID gets a suffix: `ollama-0`, then `ollama-0-2`,
+`ollama-0-3` and so on. The agent runtime and the conversation sent to the
+model keep the model's ID.
 
 | Event | Data |
 | --- | --- |
