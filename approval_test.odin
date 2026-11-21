@@ -99,7 +99,6 @@ approval_test_destroy_grants :: proc(state: ^App_State) {
 		tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
 	}
 	clear(&state.config.permissionGrants)
-	state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 }
 
 @(test)
