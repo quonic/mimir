@@ -236,7 +236,9 @@ App_State :: struct {
 	skills:                  settings.Skill_Registry,
 	codeIndex:               code_index.Code_Index,
 	codeIndexReady:          bool,
+	codeIndexRebuildPending: bool,
 	agentHost:               Agent_Host,
+	transcript:              Transcript,
 	toolExecution:           Tool_Execution_State,
 	models:                  [dynamic]Model_Select_Entry,
 	modelProviderOwned:      bool,
@@ -269,6 +271,7 @@ app_init_with_home :: proc(
 	state.screen = .Chat
 	state.overlayStack = make([dynamic]Overlay, 0, 4, allocator)
 	state.agentHost = agent_host_init(allocator)
+	state.transcript = transcript_init(allocator)
 	state.toolExecution.allocator = allocator
 	state.toolExecution.historyIndex = -1
 	state.input = text_input.input_buffer_init(allocator)
@@ -493,6 +496,7 @@ app_destroy :: proc(state: ^App_State) {
 	delete(state.overlayStack)
 	agent_host_destroy(&state.agentHost)
 	app_destroy_tool_execution(&state.toolExecution)
+	transcript_destroy(&state.transcript)
 	text_input.input_buffer_destroy(&state.input)
 	delete(state.inputState.paste_buf)
 	for entry in state.inputHistory {
@@ -727,24 +731,7 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 }
 
 app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) -> string {
-	target := ""
-	switch call.id {
-	case "read_file", "write_file", "get_file_info", "grep_search":
-		target = call.filePath
-	case "list_directory":
-		target = call.directoryPath
-	case "run_in_terminal":
-		target = call.command
-	case "search_code", "find_code":
-		target = call.query
-	case "run_subagent":
-		target = call.task
-	}
-	if target == "" {
-		return fmt.tprintf("%s (%s)", call.id, status)
-	}
-	displayTarget := approval_display_text(target, context.temp_allocator)
-	return fmt.tprintf("%s: %s (%s)", call.id, displayTarget, status)
+	return app_tool_history_line(call.id, app_tool_call_target(call), status)
 }
 
 app_append_tool_history :: proc(
@@ -1585,7 +1572,10 @@ app_request_approval :: proc(
 	if !app_prepare_approval(state, call, agentID, requestID) {
 		return .Rejected
 	}
-	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
+	state.approval.historyIndex = app_show_agent_output(
+		state,
+		app_agent_tool_call(call, .Awaiting_Approval, -1),
+	)
 	_ = app_apply_approval_method(state)
 	if app_approval_pending(state) {
 		return .Awaiting_Choice
@@ -2034,6 +2024,7 @@ app_clear_input_history :: proc(state: ^App_State) {
 		entry = {}
 	}
 	clear(&state.history)
+	transcript_clear(&state.transcript)
 	state.historyScrollOffset = 0
 	state.historySelection = {}
 
@@ -2316,6 +2307,7 @@ app_submit_input :: proc(state: ^App_State) {
 	}
 
 	append_history(state, .User, text)
+	transcript_append_user(&state.transcript, text)
 	_ = app_start_agent_host_stream(state)
 }
 
@@ -3353,6 +3345,12 @@ app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 }
 
 app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator) {
+	// A running tool call can use the code index, so rebuild it after the tool call ends.
+	if state.toolExecution.active {
+		state.codeIndexRebuildPending = true
+		return
+	}
+	state.codeIndexRebuildPending = false
 	if state.codeIndexReady {
 		code_index.code_index_destroy(&state.codeIndex, allocator)
 		state.codeIndexReady = false
@@ -3393,84 +3391,6 @@ app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
 		return ai.Client{}, .Unsupported_Interface
 	}
 	return ai.new_client(provider.name, provider.apiKey)
-}
-
-app_ensure_code_index :: proc(state: ^App_State, allocator := context.allocator) -> ai.AI_Error {
-	if state == nil {
-		return .Invalid_Request
-	}
-	if !state.codeIndexReady {
-		app_rebuild_code_index(state, allocator)
-	}
-	if !state.codeIndexReady {
-		return .Invalid_Request
-	}
-	if state.codeIndex.databaseInitialized {
-		return .None
-	}
-	client, clientError := app_embedding_client(state)
-	if clientError != .None {
-		return clientError
-	}
-	rebuildError := code_index.code_index_rebuild(
-		&state.codeIndex,
-		client,
-		code_index.CODE_INDEX_DEFAULT_CHUNK_LINES,
-		code_index.CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
-		allocator,
-	)
-	if rebuildError != .None {
-		return rebuildError
-	}
-	if code_index.code_index_save(&state.codeIndex) != .None {
-		return .Provider_Error
-	}
-	return .None
-}
-
-app_search_code :: proc(
-	state: ^App_State,
-	query: string,
-	maximumResults: int,
-	allocator := context.allocator,
-) -> (
-	[dynamic]code_index.Code_Search_Result,
-	ai.AI_Error,
-) {
-	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
-	ensureError := app_ensure_code_index(state, allocator)
-	if ensureError != .None {
-		return results, ensureError
-	}
-	client, clientError := app_embedding_client(state)
-	if clientError != .None {
-		return results, clientError
-	}
-	delete(results)
-	return code_index.code_index_search_text(
-		&state.codeIndex,
-		client,
-		query,
-		maximumResults,
-		allocator,
-	)
-}
-
-app_find_code :: proc(
-	state: ^App_State,
-	query: string,
-	maximumResults: int,
-	allocator := context.allocator,
-) -> [dynamic]code_index.Code_Search_Result {
-	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
-	if state == nil || state.dispatcher.projectRoot == "" {
-		return results
-	}
-	delete(results)
-	index := code_index.Code_Index {
-		projectRoot = state.dispatcher.projectRoot,
-	}
-	return code_index.code_index_find_text(&index, query, maximumResults, allocator)
 }
 
 app_clear_model_entries :: proc(state: ^App_State) {

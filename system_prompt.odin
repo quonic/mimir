@@ -88,8 +88,10 @@ EXAMPLE_ATTACHMENT :: `
 // Subagents have no access to the parent's conversation, only the task given as the first user message.
 SUBAGENT_SYSTEM_PROMPT :: `You are a subagent spawned by another agent to complete one self-contained task. You have no access to the parent's conversation history or ability to ask clarifying questions — make reasonable assumptions and proceed. If the task requires a tool you were not given, say so explicitly instead of guessing. When finished, reply with a single final message containing your complete answer, concise enough for the parent agent to use directly.`
 
+// Builds the system prompt for the main agent from the config and the enabled skills.
 system_prompt_effective :: proc(
-	state: App_State,
+	config: ^settings.Mimir_Config,
+	skills: []settings.Skill,
 	customPrompt: string,
 	mode: settings.System_Prompt_Mode,
 	allocator := context.allocator,
@@ -104,7 +106,7 @@ system_prompt_effective :: proc(
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
 			"{model_name}",
-			state.config.selectedModel,
+			config.selectedModel,
 			allocator,
 		)
 
@@ -119,7 +121,7 @@ system_prompt_effective :: proc(
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
 			"{{skills}}",
-			get_skills_list(state.skills.skills[:], allocator),
+			get_skills_list(skills, allocator),
 			allocator,
 		)
 
