@@ -1511,6 +1511,15 @@ app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) 
 	return false
 }
 
+// Return the app's dispatcher bound to the shared config's persistent grants.
+// The binding stores a pointer to state.config.permissionGrants, so appends,
+// pops and array growth need no resync. It is redone here because App_State
+// can move by value (app_init returns it), which changes that address.
+app_dispatcher :: proc(state: ^App_State) -> ^tool_policy.Tool_Dispatcher {
+	state.dispatcher.persistentGrants = &state.config.permissionGrants
+	return &state.dispatcher
+}
+
 // The approval decision logic starts here. These procedures decide and settle
 // tool approvals: the approval method, the safety verdict and the grants. They
 // do not use overlays or other UI types, so they can move to the session
@@ -1535,17 +1544,6 @@ app_prepare_approval :: proc(
 	requestID: string,
 ) -> bool {
 	if !state.dispatcherReady || app_approval_pending(state) {
-// Return the app's dispatcher bound to the shared config's persistent grants.
-// The binding stores a pointer to state.config.permissionGrants, so appends,
-// pops and array growth need no resync. It is redone here because App_State
-// can move by value (app_init returns it), which changes that address.
-app_dispatcher :: proc(state: ^App_State) -> ^tool_policy.Tool_Dispatcher {
-	state.dispatcher.persistentGrants = &state.config.permissionGrants
-	return &state.dispatcher
-}
-
-app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
-	if !state.dispatcherReady || app_has_overlay(state, Approval_Overlay) {
 		return false
 	}
 
