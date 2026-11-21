@@ -1,6 +1,6 @@
 # 0003: ACP front end (`mimir --acp`)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-21
 
 ## Context
@@ -733,15 +733,18 @@ found. This document refines the ADR in four places:
   reloads the config, as today.
 - The `acp` package and its tests must be added to the CI package list.
 
-## Open questions
+## Resolved questions
 
-- **MCP servers:** ignore with a warning (this proposal), or reject a
-  non-empty `mcpServers` with `-32602`?
-- **Safety hold timeout:** is 15 seconds right, and should it be a constant
-  (this proposal) or a config key?
-- **Embedded context:** advertise `promptCapabilities.embeddedContext` in v1
-  and inline text resources, or keep `resource_link` only (this proposal)?
-- **Per-session model and approval method:** expose them as ACP session
-  config options in v1, or later (this proposal)?
-- **Error codes:** are Mimir-specific codes in `-31000` to `-31099` acceptable,
-  or should `.Busy` reuse `-32602`?
+These were open when the ADR was proposed. Each was settled in favor of this
+proposal when the ADR was accepted:
+
+- **MCP servers:** a non-empty `mcpServers` is accepted, ignored and logged as a
+  warning. It is not rejected with `-32602`.
+- **Safety hold timeout:** 15 seconds, as a constant. It is not a config key.
+- **Embedded context:** v1 does not advertise
+  `promptCapabilities.embeddedContext`. Prompts support `text` and
+  `resource_link` only.
+- **Per-session model and approval method:** not exposed as ACP session config
+  options in v1. They come later.
+- **Error codes:** Mimir-specific codes in `-31000` to `-31099` are used;
+  `.Busy` maps to `-31001`.
