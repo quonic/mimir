@@ -329,7 +329,7 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 	}
 	defer tool_policy.tool_call_destroy(&call, state.dispatcher.allocator)
 
-	decision := tool_policy.tool_dispatch_decide(&state.dispatcher, call)
+	decision := tool_policy.tool_dispatch_decide(app_dispatcher(state), call)
 	if decision == .Denied {
 		app_append_tool_history(state, call, "denied")
 		_ = agent.runtime_resolve_tool(
