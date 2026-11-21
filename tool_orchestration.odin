@@ -149,6 +149,8 @@ app_start_tool_execution_for_agent :: proc(
 	if execution.active || call.id == "" {
 		return false
 	}
+	// Bind the grant pointer on this thread; the worker only reads it.
+	_ = app_dispatcher(state)
 	execution.app = state
 	execution.call = tool_policy.tool_call_clone(call, execution.allocator)
 	execution.historyIndex = historyIndex

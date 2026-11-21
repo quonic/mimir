@@ -258,9 +258,12 @@ app_init_with_home :: proc(
 	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
 	app_load_input_history(&state, allocator)
 	app_rebuild_code_index(&state, allocator)
+	// The persistent grant pointer is bound by app_dispatcher, not here: this
+	// proc returns App_State by value, so the address of state.config is not
+	// final until the caller holds the state.
 	state.dispatcher, state.dispatcherReady = tool_policy.tool_dispatcher_init(
 		state.workingDirectory,
-		state.config.permissionGrants[:],
+		nil,
 		allocator,
 	)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
@@ -1472,13 +1475,22 @@ app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) 
 	return false
 }
 
+// Return the app's dispatcher bound to the shared config's persistent grants.
+// The binding stores a pointer to state.config.permissionGrants, so appends,
+// pops and array growth need no resync. It is redone here because App_State
+// can move by value (app_init returns it), which changes that address.
+app_dispatcher :: proc(state: ^App_State) -> ^tool_policy.Tool_Dispatcher {
+	state.dispatcher.persistentGrants = &state.config.permissionGrants
+	return &state.dispatcher
+}
+
 app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
 	if !state.dispatcherReady || app_has_overlay(state, Approval_Overlay) {
 		return false
 	}
 
 	approvalCall := tool_policy.tool_call_clone(call, state.dispatcher.allocator)
-	prepared := tool_policy.tool_dispatch_prepare(&state.dispatcher, approvalCall)
+	prepared := tool_policy.tool_dispatch_prepare(app_dispatcher(state), approvalCall)
 	if prepared.decision != .Approval_Required || !prepared.actionOK {
 		tool_policy.tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
 		tool_policy.tool_call_destroy(&approvalCall, state.dispatcher.allocator)
@@ -1692,12 +1704,10 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
 		} else {
 			append(&state.config.permissionGrants, grant)
-			state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 			if state.configHome != "" &&
 			   settings.save_config_to_file(state.configHome, state.config) != .None {
 				grant = pop(&state.config.permissionGrants)
 				tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
-				state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 				state.status = "Permission grant could not be saved"
 				return
 			}

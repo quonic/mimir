@@ -3,6 +3,7 @@ package settings
 import "core:os"
 import "core:strings"
 import "core:testing"
+import tool_policy "../tool_policy"
 
 @(test)
 test_skill_paths_and_names :: proc(t: ^testing.T) {
@@ -298,5 +299,83 @@ test_skill_registry_skips_symlinked_skill_root :: proc(t: ^testing.T) {
 	defer skill_registry_destroy(&registry)
 	skill_registry_load(&registry, "", project)
 	assert(len(registry.skills) == 0, "expected symlinked skill root to be skipped")
+	_ = t
+}
+
+@(test)
+test_dispatchers_share_persistent_grants_through_config :: proc(t: ^testing.T) {
+	config := default_ollama_config(context.allocator)
+	defer {
+		for &grant in config.permissionGrants {
+			tool_policy.permission_grant_destroy(&grant, context.allocator)
+		}
+		delete(config.providers)
+		delete(config.contextWindows)
+		delete(config.disabledSkills)
+		delete(config.permissionGrants)
+	}
+
+	first, firstOK := tool_policy.tool_dispatcher_init(
+		"/workspace/project",
+		&config.permissionGrants,
+		context.allocator,
+	)
+	defer tool_policy.tool_dispatcher_destroy(&first)
+	second, secondOK := tool_policy.tool_dispatcher_init(
+		"/workspace/project",
+		&config.permissionGrants,
+		context.allocator,
+	)
+	defer tool_policy.tool_dispatcher_destroy(&second)
+	assert(firstOK && secondOK, "expected both dispatchers to initialize")
+
+	writeCall := tool_policy.Tool_Call {
+		id       = "write_file",
+		filePath = "generated/output.txt",
+	}
+	prepared := tool_policy.tool_dispatch_prepare(&first, writeCall)
+	defer tool_policy.tool_dispatch_result_destroy(&prepared, context.allocator)
+	assert(
+		prepared.decision == .Approval_Required,
+		"expected write to require approval before any grant",
+	)
+
+	// Fill the array to capacity so the next append must move it.
+	for len(config.permissionGrants) < cap(config.permissionGrants) ||
+	    len(config.permissionGrants) == 0 {
+		append(
+			&config.permissionGrants,
+			tool_policy.Permission_Grant {
+				kind = .Command_Prefix,
+				projectRoot = strings.clone("/workspace/project"),
+				command = strings.clone("unrelated-command"),
+			},
+		)
+	}
+	oldData := raw_data(config.permissionGrants)
+	oldCap := cap(config.permissionGrants)
+
+	// Allow_Always appends to the shared config through one dispatcher.
+	grant, grantOK := tool_policy.tool_dispatch_grant_from_action(
+		prepared.action,
+		context.allocator,
+	)
+	assert(grantOK, "expected write action to produce a grant")
+	append(first.persistentGrants, grant)
+	assert(
+		cap(config.permissionGrants) > oldCap && raw_data(config.permissionGrants) != oldData,
+		"expected appending the grant to grow and move the grant array",
+	)
+
+	firstDecision := tool_policy.tool_dispatch_decide(&first, writeCall)
+	secondDecision := tool_policy.tool_dispatch_decide(&second, writeCall)
+	assert(
+		firstDecision == .Allowed_Persistent,
+		"expected the appending dispatcher to see the persistent grant",
+	)
+	assert(
+		secondDecision == .Allowed_Persistent,
+		"expected the other dispatcher to see the persistent grant after the array moved",
+	)
 	_ = t
 }
