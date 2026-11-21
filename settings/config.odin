@@ -234,6 +234,16 @@ provider_config_destroy :: proc(provider: ^Provider_Config, allocator: mem.Alloc
 	}
 }
 
+// Returns the provider with the name name.
+config_find_provider :: proc(config: Mimir_Config, name: string) -> (Provider_Config, bool) {
+	for provider in config.providers {
+		if provider.name == name {
+			return provider, true
+		}
+	}
+	return Provider_Config{}, false
+}
+
 config_context_window_tokens :: proc(config: ^Mimir_Config, providerName, model: string) -> int {
 	if config == nil || providerName == "" || model == "" {
 		return 0

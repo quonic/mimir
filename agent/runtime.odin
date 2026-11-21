@@ -391,6 +391,8 @@ runtime_cancel_at_index :: proc(runtime: ^Runtime, index: int) -> Agent_Error {
 			_ = runtime_cancel_at_index(runtime, childIndex)
 		}
 	}
+	// A canceled agent must not start the continuation of a finished tool call.
+	instance.streamConfig.continuationPending = false
 	if runtime_request_stream_cancel(instance) {
 		return .None
 	}

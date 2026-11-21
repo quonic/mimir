@@ -3,6 +3,7 @@ package main
 import "console"
 import "core:fmt"
 import "core:strings"
+import "session"
 import "settings"
 import "text_input"
 import "tool_policy"
@@ -163,8 +164,8 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 	row := interior.top_row
 	write_clipped_line(batch, row, interior.left_column, width, "Approve this tool call?")
 	row += 2
-	if state.approval.preparedOwned {
-		action := state.approval.prepared.action
+	if state.approvalView.active {
+		action := state.approvalView.action
 		write_clipped_line(
 			batch,
 			row,
@@ -189,12 +190,12 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 		}
 		row += 2
 		showSafetyAdvice :=
-			action.effect == .Execute || state.config.approvalMethod == .Approve_Safe
+			action.effect == .Execute || state.session.approvalMethod == .Approve_Safe
 		if showSafetyAdvice {
 			adviceRegion := interior
 			adviceRegion.top_row = row
 			adviceRegion.bottom_row = interior.bottom_row - 4
-			if !pending_approval_safety_ready(&state.approval) {
+			if !app_approval_safety_ready(state) {
 				write_clipped_line(
 					batch,
 					row,
@@ -203,7 +204,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 					"Safety advice: assessing action...",
 				)
 				row += 1
-			} else if pending_approval_safety_unavailable(&state.approval) {
+			} else if state.approvalView.safety.status == .Unavailable {
 				write_clipped_line(
 					batch,
 					row,
@@ -213,7 +214,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 				)
 				row += 1
 			} else {
-				advice := pending_approval_safety_response(&state.approval)
+				advice := app_approval_safety_advice(state)
 				if advice != "" {
 					write_clipped_line(batch, row, interior.left_column, width, "Safety advice:")
 					row += 1
@@ -232,7 +233,7 @@ render_approval_modal :: proc(batch: ^console.Batch, parent: console.Region, sta
 		}
 		prefix := "  "
 		selected := int(state.approvalView.choice) == index
-		if pending_approval_safety_ready(&state.approval) && selected {
+		if app_approval_safety_ready(state) && selected {
 			prefix = "> "
 		}
 		line := strings.concatenate({prefix, label}, context.temp_allocator)
@@ -493,8 +494,8 @@ history_display_line :: proc(
 	index: int,
 	allocator := context.allocator,
 ) -> string {
-	if app_agent_host_stream_active(state) && index == state.agentHost.historyIndex {
-		spinnerFrame := app_agent_host_spinner_frame(state)
+	if session.session_turn_active(state.session) && index == state.assistantHistoryIndex {
+		spinnerFrame := app_assistant_spinner_frame(state)
 		if spinnerFrame != "" {
 			return history_entry_line(
 				History_Entry{role = .Assistant, content = spinnerFrame},
@@ -959,11 +960,11 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		return widgets.setting_row_button("Reset system prompt", context.temp_allocator)
 	}
 	if setting.id == .Skill_Toggle {
-		skill, ok := settings.skill_registry_skill_at(&state.skills, setting.skillIndex)
+		skill, ok := settings.skill_registry_skill_at(&state.session.skills, setting.skillIndex)
 		if ok {
 			return widgets.setting_row_checkbox(
 				settings.skill_name(skill),
-				settings.skill_is_enabled(skill),
+				app_skill_enabled(state, skill),
 				context.temp_allocator,
 			)
 		}
@@ -972,7 +973,10 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 		return widgets.setting_row_button("Refresh skills", context.temp_allocator)
 	}
 	if setting.id == .Skill_Warning {
-		diagnostic, ok := settings.skill_registry_diagnostic_at(&state.skills, setting.skillIndex)
+		diagnostic, ok := settings.skill_registry_diagnostic_at(
+			&state.session.skills,
+			setting.skillIndex,
+		)
 		if ok {
 			return widgets.setting_row_value(
 				"Warning",
@@ -1020,7 +1024,7 @@ config_setting_line :: proc(state: ^App_State, setting: Config_Setting) -> strin
 			fmt.tprintf(
 				"%d",
 				settings.config_context_window_tokens(
-					&state.config,
+					state.config,
 					provider.name,
 					provider.model,
 				),

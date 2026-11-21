@@ -1,13 +1,13 @@
 #+vet explicit-allocators
-package main
+package session
 
-import "ai"
+import "../ai"
 import "core:mem"
 import "core:strings"
 
 // The conversation that later turns send to the model: the user text and the assistant text of
 // the main agent. Tool calls, tool results, subagent text and notes are not part of it. The
-// transcript is separate from the history panel, so the agent code does not read UI history.
+// session stores it itself and does not read the history of a front end.
 Transcript :: struct {
 	allocator:     mem.Allocator,
 	entries:       [dynamic]Transcript_Entry,

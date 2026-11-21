@@ -27,6 +27,19 @@ It polls for input with a short timeout so it can redraw after a resize. If it
 cannot read the size, it uses `LINES` and `COLUMNS`. If those are unavailable,
 it uses 24 by 80.
 
+## Agent Sessions
+
+The agent loop is in the `session` package, not in the terminal UI. A
+`Session` holds one conversation in one project root: the agent runtime, the
+tool dispatcher and its grants, the skills, the code index, the tool worker,
+the pending approval and the transcript. The terminal UI (`App_State`) holds
+one session. Its main loop calls `session_poll`, then drains the session
+events into history lines, status text and the approval overlay
+(`session_view.odin`). The session never calls front-end code, so a later
+ACP front end can drive the same sessions. See
+[ADR 0002](adr/0002-split-agent-session-from-front-ends.md) and the
+[session package](packages/session.md).
+
 ## Chat Streaming and Cancellation
 
 Chat requests stream assistant responses from the configured provider and model

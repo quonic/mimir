@@ -241,7 +241,8 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 	canceled := cancelRequested
 	err := ai.AI_Error.None
 	if sync.mutex_guard(&stream.mutex) {
-		canceled = stream.canceled
+		// A cancel can arrive after the worker finished, so the request counts too.
+		canceled = stream.canceled || stream.cancelRequested
 		err = stream.err
 	}
 	runtime_destroy_stream(instance)
