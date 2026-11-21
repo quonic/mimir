@@ -206,6 +206,36 @@ session_cancel :: proc(session: ^Session) -> Session_Error {
 	return .None
 }
 
+// Cancels the whole turn: the main agent and every subagent that runs for it. A pending
+// approval is denied first. The turn then ends with Turn_Ended and the reason Canceled, after a
+// failed Subagent_Finished for each running subagent. session_cancel (the terminal /stop)
+// cancels only the active subagent, and the parent agent goes on.
+session_cancel_turn :: proc(session: ^Session) -> Session_Error {
+	if session == nil {
+		return .Invalid_Argument
+	}
+	host := &session.host
+	// The bottom of the subagent stack is the main agent. Canceling it cancels its children.
+	mainID := host.activeAgentID
+	if len(host.agentStack) > 0 {
+		mainID = host.agentStack[0].agentID
+	}
+	mainState, mainOK := agent.runtime_state(&host.runtime, mainID)
+	if agent.agent_id_is_none(mainID) || !mainOK || agent.agent_state_is_terminal(mainState) {
+		session_emit_notice(session, "No assistant stream to cancel", .Warning)
+		return .Not_Active
+	}
+	if pending_approval_active(&session.approval) {
+		_ = session_apply_approval_choice(session, session.approval.call.callID, .Deny)
+	}
+	if agent.runtime_cancel(&host.runtime, mainID) != .None {
+		session_emit_notice(session, "No assistant stream to cancel", .Warning)
+		return .Not_Active
+	}
+	session_emit_notice(session, "Canceling assistant turn")
+	return .None
+}
+
 // Answers the pending approval with the tool call ID toolCallID. Allow_Session adds a grant to
 // the dispatcher of the session; Allow_Always appends a grant to the shared config and saves
 // the config.

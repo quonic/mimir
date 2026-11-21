@@ -958,3 +958,88 @@ test_session_unique_tool_call_id_skips_taken_suffixes :: proc(t: ^testing.T) {
 	assert(session_unique_tool_call_id(test.session, "") == "call", "expected a default ID")
 	_ = t
 }
+
+// Polls the session for a while and keeps the events, so a test can check that nothing more
+// happens.
+test_session_settle :: proc(test: ^Test_Session) {
+	for _ in 0 ..< 50 {
+		_ = session_poll(test.session)
+		time.sleep(2 * time.Millisecond)
+	}
+	test_session_drain(test)
+}
+
+@(test)
+test_session_cancel_turn_ends_the_turn_during_a_subagent :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Approve_All)
+	defer test_session_destroy(&test)
+	test_queue_tool_turn(&test, "run_subagent", `{"task":"Wait","tools":["find_code"]}`)
+	// The subagent streams text and then waits until it is canceled.
+	fake_provider_add_response(&test.provider, true, fake_provider_text_line("child working"))
+
+	assert(session_submit(test.session, "delegate") == .None, "expected the turn to start")
+	delta, _ := test_wait_for_event(&test, Message_Delta)
+	assert(delta != nil && delta.subagentDepth == 1, "expected the subagent to stream")
+
+	assert(session_cancel_turn(test.session) == .None, "expected the turn to be canceled")
+	ended := test_wait_for_turn_end(&test)
+	assert(ended.reason == .Canceled, "expected a canceled turn")
+	finished, finishedIndex := test_find_event(&test, Subagent_Finished)
+	_, endedIndex := test_find_event(&test, Turn_Ended)
+	assert(finished != nil && finished.failed, "expected the subagent to finish as failed")
+	assert(finishedIndex < endedIndex, "expected the subagent to finish before the turn ends")
+	test_session_settle(&test)
+	assert(test_count_events(&test, Turn_Ended) == 1, "expected exactly one turn end")
+	assert(!session_turn_active(test.session), "expected no active turn")
+	assert(session_cancel_turn(test.session) == .Not_Active, "expected no turn to cancel")
+	_ = t
+}
+
+@(test)
+test_session_cancel_turn_denies_a_subagent_approval :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Always_Ask)
+	defer test_session_destroy(&test)
+	// run_subagent itself needs no approval. The subagent then asks to run pwd.
+	test_queue_tool_turn(&test, "run_subagent", `{"task":"Run","tools":["run_in_terminal"]}`)
+	test_queue_tool_turn(&test, "run_in_terminal", PWD_ARGUMENTS)
+
+	assert(session_submit(test.session, "delegate") == .None, "expected the turn to start")
+	requested, _ := test_wait_for_event(&test, Approval_Requested)
+	assert(requested != nil, "expected the subagent's tool call to wait for approval")
+
+	assert(session_cancel_turn(test.session) == .None, "expected the turn to be canceled")
+	ended := test_wait_for_turn_end(&test)
+	assert(ended.reason == .Canceled, "expected a canceled turn")
+	resolved, _ := test_find_event(&test, Approval_Resolved)
+	assert(
+		resolved != nil && resolved.toolCallID == requested.toolCallID && resolved.choice == .Deny,
+		"expected cancel to deny the pending approval",
+	)
+	test_session_settle(&test)
+	assert(test_count_events(&test, Turn_Ended) == 1, "expected exactly one turn end")
+	assert(!pending_approval_active(&test.session.approval), "expected no pending approval")
+	_ = t
+}
+
+@(test)
+test_session_cancel_during_a_subagent_cancels_only_the_subagent :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Approve_All)
+	defer test_session_destroy(&test)
+	test_queue_tool_turn(&test, "run_subagent", `{"task":"Wait","tools":["find_code"]}`)
+	fake_provider_add_response(&test.provider, true, fake_provider_text_line("child working"))
+	fake_provider_add_response(&test.provider, false, fake_provider_text_line("parent done", true))
+
+	assert(session_submit(test.session, "delegate") == .None, "expected the turn to start")
+	delta, _ := test_wait_for_event(&test, Message_Delta)
+	assert(delta != nil && delta.subagentDepth == 1, "expected the subagent to stream")
+
+	// The terminal /stop keeps its behavior: the parent gets the failed result and goes on.
+	assert(session_cancel(test.session) == .None, "expected the subagent to be canceled")
+	ended := test_wait_for_turn_end(&test)
+	assert(ended.reason == .Completed, "expected the parent to complete the turn")
+	assert(test_streamed_text(&test, false) == "parent done", "expected the parent text")
+	_ = t
+}

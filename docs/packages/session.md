@@ -51,7 +51,8 @@ for {
 | `session_create` | Makes a session. With `requireUsableModel`, it returns `.No_Usable_Model` when no enabled provider or model is selected. |
 | `session_destroy` | Frees the session. It is safe during a turn: it cancels the stream and waits for a running tool call. |
 | `session_submit` | Starts a turn. It returns `.Busy` while a turn is active, and `.Start_Failed` with a `Notice` when the turn cannot start. |
-| `session_cancel` | Cancels the active agent (the subagent while one runs). It denies a pending approval first. It returns `.Not_Active` when nothing runs. |
+| `session_cancel` | Cancels the active agent (the subagent while one runs; the parent then goes on). It denies a pending approval first. It returns `.Not_Active` when nothing runs. The terminal `/stop` uses it. |
+| `session_cancel_turn` | Cancels the whole turn: the main agent and every running subagent. It denies a pending approval first. The turn ends with `Turn_Ended` `Canceled`, after a failed `Subagent_Finished` for each running subagent. It returns `.Not_Active` when nothing runs. ACP `session/cancel` uses it. |
 | `session_resolve_approval` | Answers the pending approval. It returns `.Unknown_Tool_Call` for another ID, `.No_Pending_Approval` when nothing waits, and `.Approval_Not_Applied` when a grant cannot be added or saved (the approval stays pending). |
 | `session_poll` | Advances the stream, the tool worker and the safety classifier. |
 | `session_next_event` | Returns the next event. The caller owns it. |
