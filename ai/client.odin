@@ -1,16 +1,13 @@
 package ai
 
-import "core:bufio"
-import "core:bytes"
+import json "core:encoding/json"
 import "core:fmt"
-import "core:strconv"
 import "core:strings"
 import "core:sync"
 
-import http "../http"
-import httpClient "../http/client"
+import transport "../transport"
 
-MIMIR_USER_AGENT :: "Mimir/alpha (odin-http)"
+MIMIR_USER_AGENT :: "Mimir/alpha"
 
 OLLAMA_CHAT_PATH :: "/api/chat"
 OLLAMA_EMBED_PATH :: "/api/embed"
@@ -142,6 +139,26 @@ send_chat_completion_stream_with_context :: proc(
 	)
 }
 
+// Like send_chat_completion_stream_with_context, but `shouldCancel` is polled while the
+// request is in flight so a cancellation aborts the transfer without waiting for data.
+send_chat_completion_stream_with_cancel :: proc(
+	client: Client,
+	request: Chat_Request,
+	callback: Chat_Stream_Context_Callback,
+	shouldCancel: Chat_Stream_Cancel_Callback,
+	userData: rawptr,
+) -> AI_Error {
+	return send_chat_completion_stream_internal(
+		client,
+		request,
+		Chat_Stream_Callback_State {
+			callbackWithContext = callback,
+			shouldCancel = shouldCancel,
+			userData = userData,
+		},
+	)
+}
+
 send_chat_completion_stream_internal :: proc(
 	client: Client,
 	request: Chat_Request,
@@ -169,8 +186,14 @@ send_chat_completion_stream_internal :: proc(
 Chat_Stream_Callback_State :: struct {
 	callback:            Chat_Stream_Callback,
 	callbackWithContext: Chat_Stream_Context_Callback,
+	// Optional. Polled while the request is in flight; returning true aborts it.
+	shouldCancel:        Chat_Stream_Cancel_Callback,
 	userData:            rawptr,
 	parserData:          rawptr,
+}
+
+chat_stream_cancel_requested :: proc(state: Chat_Stream_Callback_State) -> bool {
+	return state.shouldCancel != nil && state.shouldCancel(state.userData)
 }
 
 chat_stream_callback_valid :: proc(state: Chat_Stream_Callback_State) -> bool {
@@ -249,7 +272,7 @@ send_ollama_chat_completion :: proc(
 	}
 	defer if body != "" {delete(body)}
 
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_ollama_chat_response(body)
 	}
 
@@ -283,7 +306,7 @@ send_ollama_embeddings :: proc(
 	}
 	defer if body != "" {delete(body)}
 
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_ollama_embedding_response(body, len(request.inputs), allocator)
 	}
 
@@ -324,7 +347,7 @@ send_ollama_chat_completion_stream :: proc(
 	}
 	defer if body != "" {delete(body)}
 
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return .None
 	}
 
@@ -356,7 +379,7 @@ list_ollama_models :: proc(
 	}
 	defer if body != "" {delete(body)}
 
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_ollama_models_response(body, allocator)
 	}
 
@@ -364,7 +387,7 @@ list_ollama_models :: proc(
 	return [dynamic]Model{}, map_status_to_error(status)
 }
 
-compose_endpoint_target :: proc(endpoint: http.URL, pathSuffix: string) -> (string, bool) {
+compose_endpoint_target :: proc(endpoint: transport.URL, pathSuffix: string) -> (string, bool) {
 	if endpoint.host == "" || endpoint.raw == "" {
 		return "", false
 	}
@@ -443,10 +466,66 @@ next_ai_request_id :: proc() -> string {
 	return fmt.tprintf("mimir-%d", id)
 }
 
-apply_extra_headers :: proc(headers: ^http.Headers, extraHeaders: [][2]string) {
+// Set the connect and stall timeouts, in seconds, for later requests.
+// A value of 0 or less selects the transport default.
+set_request_timeouts :: proc(connectSeconds: int, stallSeconds: int) {
+	transport.set_timeouts(connectSeconds, stallSeconds)
+}
+
+// Build the header list for a JSON request body.
+json_request_headers :: proc(extraHeaders: [][2]string) -> [][2]string {
+	headers := make([dynamic][2]string, 0, len(extraHeaders) + 1, context.temp_allocator)
+	append(&headers, [2]string{"content-type", "application/json"})
 	for header in extraHeaders {
-		http.headers_set_unsafe(headers, header[0], header[1])
+		if header[0] == "content-type" {
+			continue
+		}
+		append(&headers, header)
 	}
+	return headers[:]
+}
+
+transport_error_to_ai_error :: proc(err: transport.Error) -> AI_Error {
+	switch err {
+	case .None, .Canceled:
+		return .None
+	case .Invalid_Request:
+		return .Invalid_Request
+	case .Network_Error, .Timeout:
+		return .Network_Error
+	case .Invalid_Response:
+		return .Invalid_Response
+	}
+	return .Network_Error
+}
+
+// Send a JSON request and log the exchange. Shared by do_json_post and do_json_get.
+do_buffered_request :: proc(
+	req: transport.Request,
+) -> (
+	body: string,
+	status: transport.Status,
+	err: AI_Error,
+) {
+	_ = raw_http_log_begin(req.target)
+
+	transportErr: transport.Error
+	status, body, transportErr = transport.request(req)
+	if transportErr != .None {
+		_ = raw_http_log_append(fmt.tprintf("end: %v\n", transportErr))
+		return body, status, transport_error_to_ai_error(transportErr)
+	}
+
+	_ = raw_http_log_append(fmt.tprintf("status: %d\nraw body:\n", int(status)))
+	_ = raw_http_log_append(body)
+
+	if body == "" && !transport.status_is_success(status) {
+		_ = raw_http_log_append("\nend: empty error response\n")
+		return "", status, map_status_to_error(status)
+	}
+
+	_ = raw_http_log_append("\nend: complete\n")
+	return body, status, .None
 }
 
 do_json_post :: proc(
@@ -455,51 +534,36 @@ do_json_post :: proc(
 	extraHeaders: [][2]string,
 ) -> (
 	body: string,
-	status: http.Status,
+	status: transport.Status,
 	err: AI_Error,
 ) {
-	req: httpClient.Request
-	httpClient.request_init(&req, .Post)
-	defer httpClient.request_destroy(&req)
-
-	apply_extra_headers(&req.headers, extraHeaders)
-
-	jsonErr := httpClient.with_json(&req, payload)
+	payloadBytes, jsonErr := json.marshal(payload)
 	if jsonErr != nil {
-		return "", http.Status(0), .Invalid_Request
+		return "", .Unknown, .Invalid_Request
 	}
+	defer delete(payloadBytes)
 
-	_ = raw_http_log_begin(target)
+	return do_buffered_request(
+		transport.Request {
+			method = .Post,
+			target = target,
+			headers = json_request_headers(extraHeaders),
+			body = payloadBytes,
+		},
+	)
+}
 
-	res, reqErr := httpClient.request(&req, target)
-	if reqErr != nil {
-		_ = raw_http_log_append("end: network error\n")
-		return "", http.Status(0), .Network_Error
-	}
-	defer httpClient.response_destroy(&res)
-
-	status = res.status
-	_ = raw_http_log_append(fmt.tprintf("status: %d\nraw body:\n", int(status)))
-	resBody, allocated, bodyErr := httpClient.response_body(&res)
-	if bodyErr != nil {
-		_ = raw_http_log_append("\nend: invalid response body\n")
-		return "", status, .Invalid_Response
-	}
-	defer httpClient.body_destroy(resBody, allocated)
-
-	#partial switch plain in resBody {
-	case httpClient.Body_Plain:
-		body = strings.clone(plain)
-	}
-	_ = raw_http_log_append(body)
-
-	if body == "" && !http.status_is_success(status) {
-		_ = raw_http_log_append("\nend: empty error response\n")
-		return "", status, map_status_to_error(status)
-	}
-
-	_ = raw_http_log_append("\nend: complete\n")
-	return body, status, .None
+do_json_get :: proc(
+	target: string,
+	extraHeaders: [][2]string,
+) -> (
+	body: string,
+	status: transport.Status,
+	err: AI_Error,
+) {
+	return do_buffered_request(
+		transport.Request{method = .Get, target = target, headers = extraHeaders},
+	)
 }
 
 Stream_Chunk_Parser :: #type proc(
@@ -512,6 +576,47 @@ Stream_Chunk_Parser :: #type proc(
 	AI_Error,
 )
 
+// State shared with the transport stream handlers for one streaming request.
+Stream_Request_State :: struct {
+	parseState:    Stream_Parse_State,
+	callbackState: Chat_Stream_Callback_State,
+	parse_event:   Stream_Event_Parser,
+	parse_chunk:   Stream_Chunk_Parser,
+	started:       bool,
+	stopped:       bool,
+	err:           AI_Error,
+}
+
+stream_request_on_data :: proc(chunk: string, user: rawptr) -> bool {
+	state := cast(^Stream_Request_State)user
+	if !state.started {
+		state.started = true
+		_ = raw_http_log_append("raw stream:\n")
+	}
+	_ = raw_http_log_append(chunk)
+
+	stop, err := state.parse_chunk(
+		&state.parseState,
+		chunk,
+		state.callbackState,
+		state.parse_event,
+	)
+	if err != .None {
+		state.err = err
+		return false
+	}
+	if stop {
+		state.stopped = true
+		return false
+	}
+	return true
+}
+
+stream_request_should_cancel :: proc(user: rawptr) -> bool {
+	state := cast(^Stream_Request_State)user
+	return chat_stream_cancel_requested(state.callbackState)
+}
+
 do_json_post_stream :: proc(
 	target: string,
 	payload: $T,
@@ -521,313 +626,69 @@ do_json_post_stream :: proc(
 	parse_chunk: Stream_Chunk_Parser,
 ) -> (
 	body: string,
-	status: http.Status,
+	status: transport.Status,
 	err: AI_Error,
 ) {
-	req: httpClient.Request
-	httpClient.request_init(&req, .Post)
-	defer httpClient.request_destroy(&req)
-
-	apply_extra_headers(&req.headers, extraHeaders)
-
-	jsonErr := httpClient.with_json(&req, payload)
+	payloadBytes, jsonErr := json.marshal(payload)
 	if jsonErr != nil {
-		return "", http.Status(0), .Invalid_Request
+		return "", .Unknown, .Invalid_Request
 	}
+	defer delete(payloadBytes)
 
 	_ = raw_http_log_begin(target)
 
-	res, reqErr := httpClient.request(&req, target)
-	if reqErr != nil {
-		_ = raw_http_log_append("end: network error\n")
-		return "", http.Status(0), .Network_Error
+	state := Stream_Request_State {
+		callbackState = callbackState,
+		parse_event   = parse_event,
+		parse_chunk   = parse_chunk,
 	}
-	defer httpClient.response_destroy(&res)
+	defer destroy_stream_parse_state(&state.parseState)
 
-	status = res.status
-	if !http.status_is_success(status) {
-		body, status, err = read_response_body(&res, status)
-		_ = raw_http_log_append(fmt.tprintf("status: %d\nraw body:\n", int(status)))
-		_ = raw_http_log_append(body)
-		_ = raw_http_log_append(fmt.tprintf("\nend: %v\n", err))
-		return body, status, err
+	transportErr: transport.Error
+	status, body, transportErr = transport.request_stream(
+		transport.Request {
+			method = .Post,
+			target = target,
+			headers = json_request_headers(extraHeaders),
+			body = payloadBytes,
+		},
+		transport.Stream_Handlers {
+			on_data = stream_request_on_data,
+			should_cancel = stream_request_should_cancel,
+			user = &state,
+		},
+	)
+
+	if state.started {
+		_ = raw_http_log_append("\n")
 	}
 	_ = raw_http_log_append(fmt.tprintf("status: %d\n", int(status)))
 
-	state: Stream_Parse_State
-	defer destroy_stream_parse_state(&state)
-
-	err = stream_response_body(&res, &state, callbackState, parse_event, parse_chunk)
-	_ = raw_http_log_append(fmt.tprintf("\nend: %v\n", err))
-	return "", status, err
-}
-
-read_response_body :: proc(
-	res: ^httpClient.Response,
-	status: http.Status,
-) -> (
-	string,
-	http.Status,
-	AI_Error,
-) {
-	body := ""
-	resBody, allocated, bodyErr := httpClient.response_body(res)
-	if bodyErr != nil {
-		return "", status, .Invalid_Response
-	}
-	defer httpClient.body_destroy(resBody, allocated)
-
-	#partial switch plain in resBody {
-	case httpClient.Body_Plain:
-		body = strings.clone(plain)
-	}
-
-	if body == "" && !http.status_is_success(status) {
-		return "", status, map_status_to_error(status)
-	}
-
-	return body, status, .None
-}
-
-stream_response_body :: proc(
-	res: ^httpClient.Response,
-	state: ^Stream_Parse_State,
-	callbackState: Chat_Stream_Callback_State,
-	parse_event: Stream_Event_Parser,
-	parse_chunk: Stream_Chunk_Parser,
-) -> AI_Error {
-	enc, hasEnc := http.headers_get_unsafe(res.headers, "transfer-encoding")
-	length, hasLength := http.headers_get_unsafe(res.headers, "content-length")
-
 	switch {
-	case hasEnc && strings.has_suffix(enc, "chunked"):
-		_ = raw_http_log_append("transfer: chunked\nraw stream:\n")
-		return stream_chunked_response_body(res, state, callbackState, parse_event, parse_chunk)
-	case hasLength:
-		_ = raw_http_log_append(fmt.tprintf("transfer: content-length %s\nraw stream:\n", length))
-		return stream_length_response_body(
-			res,
-			length,
-			state,
-			callbackState,
-			parse_event,
-			parse_chunk,
-		)
-	case:
-		_ = raw_http_log_append("transfer: line-scan\nraw stream:\n")
-		return stream_line_response_body(res, state, callbackState, parse_event, parse_chunk)
-	}
-}
-
-stream_chunked_response_body :: proc(
-	res: ^httpClient.Response,
-	state: ^Stream_Parse_State,
-	callbackState: Chat_Stream_Callback_State,
-	parse_event: Stream_Event_Parser,
-	parse_chunk: Stream_Chunk_Parser,
-) -> AI_Error {
-	defer reset_stream_scanner(res)
-
-	for {
-		if !bufio.scanner_scan(&res._body) {
-			_ = raw_http_log_append("\nstream error: missing chunk size\n")
-			return .Invalid_Response
-		}
-
-		sizeLine := bufio.scanner_bytes(&res._body)
-		if semi := bytes.index_byte(sizeLine, ';'); semi > -1 {
-			sizeLine = sizeLine[:semi]
-		}
-
-		size, ok := strconv.parse_int(string(sizeLine), 16)
-		if !ok {
-			_ = raw_http_log_append("\nstream error: invalid chunk size\n")
-			return .Invalid_Response
-		}
-		if size == 0 {
-			return consume_chunked_trailers(res)
-		}
-
-		context.user_index = size
-		res._body.max_token_size = size
-		res._body.split = stream_scan_num_bytes
-
-		if !bufio.scanner_scan(&res._body) {
-			_ = raw_http_log_append("\nstream error: missing chunk body\n")
-			return .Invalid_Response
-		}
-
-		res._body.max_token_size = bufio.DEFAULT_MAX_SCAN_TOKEN_SIZE
-		res._body.split = bufio.scan_lines
-		chunk := string(bufio.scanner_bytes(&res._body))
-		_ = raw_http_log_append(chunk)
-
-		stop, err := parse_chunk(state, chunk, callbackState, parse_event)
-		if err != .None || stop {
-			if stop {
-				_ = raw_http_log_append("\nstream stopped by callback\n")
-			} else {
-				_ = raw_http_log_append(fmt.tprintf("\nstream error: %v\n", err))
-			}
-			return err
-		}
-
-		if !bufio.scanner_scan(&res._body) || bufio.scanner_text(&res._body) != "" {
-			_ = raw_http_log_append("\nstream error: invalid chunk terminator\n")
-			return .Invalid_Response
-		}
-	}
-}
-
-reset_stream_scanner :: proc(res: ^httpClient.Response) {
-	res._body.max_token_size = bufio.DEFAULT_MAX_SCAN_TOKEN_SIZE
-	res._body.split = bufio.scan_lines
-}
-
-consume_chunked_trailers :: proc(res: ^httpClient.Response) -> AI_Error {
-	for {
-		if !bufio.scanner_scan(&res._body) {
-			return .None
-		}
-		if bufio.scanner_text(&res._body) == "" {
-			return .None
-		}
-	}
-}
-
-stream_length_response_body :: proc(
-	res: ^httpClient.Response,
-	length: string,
-	state: ^Stream_Parse_State,
-	callbackState: Chat_Stream_Callback_State,
-	parse_event: Stream_Event_Parser,
-	parse_chunk: Stream_Chunk_Parser,
-) -> AI_Error {
-	remaining, ok := strconv.parse_int(length, 10)
-	if !ok || remaining < 0 {
-		return .Invalid_Response
-	}
-	defer reset_stream_scanner(res)
-
-	for remaining > 0 {
-		chunkSize := min(remaining, 4096)
-		context.user_index = chunkSize
-		res._body.max_token_size = chunkSize
-		res._body.split = stream_scan_num_bytes
-
-		if !bufio.scanner_scan(&res._body) {
-			_ = raw_http_log_append("\nstream error: missing fixed-length chunk\n")
-			return .Invalid_Response
-		}
-		chunk := string(bufio.scanner_bytes(&res._body))
-		_ = raw_http_log_append(chunk)
-
-		stop, err := parse_chunk(state, chunk, callbackState, parse_event)
-		if err != .None || stop {
-			if stop {
-				_ = raw_http_log_append("\nstream stopped by callback\n")
-			} else {
-				_ = raw_http_log_append(fmt.tprintf("\nstream error: %v\n", err))
-			}
-			return err
-		}
-
-		remaining -= chunkSize
+	case transportErr == .Canceled && state.err != .None:
+		_ = raw_http_log_append(fmt.tprintf("stream error: %v\n", state.err))
+		return "", status, state.err
+	case transportErr == .Canceled:
+		_ = raw_http_log_append("end: stream stopped by callback\n")
+		return "", status, .None
+	case transportErr != .None:
+		_ = raw_http_log_append(fmt.tprintf("end: %v\n", transportErr))
+		return body, status, transport_error_to_ai_error(transportErr)
 	}
 
-	return .None
-}
-
-stream_line_response_body :: proc(
-	res: ^httpClient.Response,
-	state: ^Stream_Parse_State,
-	callbackState: Chat_Stream_Callback_State,
-	parse_event: Stream_Event_Parser,
-	parse_chunk: Stream_Chunk_Parser,
-) -> AI_Error {
-	for bufio.scanner_scan(&res._body) {
-		line := strings.concatenate({bufio.scanner_text(&res._body), "\n"})
-		_ = raw_http_log_append(line)
-		stop, err := parse_chunk(state, line, callbackState, parse_event)
-		delete(line)
-		if err != .None || stop {
-			if stop {
-				_ = raw_http_log_append("\nstream stopped by callback\n")
-			} else {
-				_ = raw_http_log_append(fmt.tprintf("\nstream error: %v\n", err))
-			}
-			return err
+	if !transport.status_is_success(status) {
+		_ = raw_http_log_append("raw body:\n")
+		_ = raw_http_log_append(body)
+		err = .None
+		if body == "" {
+			err = map_status_to_error(status)
 		}
+		_ = raw_http_log_append(fmt.tprintf("\nend: %v\n", err))
+		return body, status, err
 	}
 
-	return .None
-}
-
-stream_scan_num_bytes :: proc(
-	data: []byte,
-	atEOF: bool,
-) -> (
-	advance: int,
-	token: []byte,
-	err: bufio.Scanner_Error,
-	finalToken: bool,
-) {
-	n := context.user_index
-	if atEOF && len(data) < n {
-		return
-	}
-	if len(data) < n {
-		return
-	}
-
-	return n, data[:n], nil, false
-}
-
-do_json_get :: proc(
-	target: string,
-	extraHeaders: [][2]string,
-) -> (
-	body: string,
-	status: http.Status,
-	err: AI_Error,
-) {
-	req: httpClient.Request
-	httpClient.request_init(&req, .Get)
-	defer httpClient.request_destroy(&req)
-
-	apply_extra_headers(&req.headers, extraHeaders)
-
-	_ = raw_http_log_begin(target)
-
-	res, reqErr := httpClient.request(&req, target)
-	if reqErr != nil {
-		_ = raw_http_log_append("end: network error\n")
-		return "", http.Status(0), .Network_Error
-	}
-	defer httpClient.response_destroy(&res)
-
-	status = res.status
-	_ = raw_http_log_append(fmt.tprintf("status: %d\nraw body:\n", int(status)))
-	resBody, allocated, bodyErr := httpClient.response_body(&res)
-	if bodyErr != nil {
-		_ = raw_http_log_append("\nend: invalid response body\n")
-		return "", status, .Invalid_Response
-	}
-	defer httpClient.body_destroy(resBody, allocated)
-
-	#partial switch plain in resBody {
-	case httpClient.Body_Plain:
-		body = strings.clone(plain)
-	}
-	_ = raw_http_log_append(body)
-
-	if body == "" && !http.status_is_success(status) {
-		_ = raw_http_log_append("\nend: empty error response\n")
-		return "", status, map_status_to_error(status)
-	}
-
-	_ = raw_http_log_append("\nend: complete\n")
-	return body, status, .None
+	_ = raw_http_log_append("end: None\n")
+	return "", status, .None
 }
 
 Stream_Event_Parser :: #type proc(_: string, _: Chat_Stream_Callback_State) -> (bool, AI_Error)
@@ -1038,17 +899,17 @@ parse_json_lines_stream_body_internal :: proc(
 	return .None
 }
 
-map_status_to_error :: proc(status: http.Status) -> AI_Error {
+map_status_to_error :: proc(status: transport.Status) -> AI_Error {
 	#partial switch status {
 	case .Unauthorized, .Forbidden:
 		return .Authentication_Error
 	case .Too_Many_Requests:
 		return .Rate_Limited
 	case:
-		if http.status_is_server_error(status) {
+		if transport.status_is_server_error(status) {
 			return .Server_Error
 		}
-		if http.status_is_client_error(status) {
+		if transport.status_is_client_error(status) {
 			return .Provider_Error
 		}
 		return .Invalid_Response

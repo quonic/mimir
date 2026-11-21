@@ -1,6 +1,5 @@
 package ai
 
-import http "../http"
 import "core:testing"
 
 test_header_value :: proc(headers: [][2]string, key: string) -> (string, bool) {
@@ -10,10 +9,6 @@ test_header_value :: proc(headers: [][2]string, key: string) -> (string, bool) {
 		}
 	}
 	return "", false
-}
-
-test_request_header_value :: proc(headers: http.Headers, key: string) -> (string, bool) {
-	return http.headers_get(headers, key)
 }
 
 @(test)
@@ -87,25 +82,22 @@ test_append_standard_ai_headers_for_embedding :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_apply_extra_headers_normalizes_keys :: proc(t: ^testing.T) {
+test_json_request_headers_sets_single_content_type :: proc(t: ^testing.T) {
 	headers: [dynamic][2]string
 	defer delete(headers)
 	append(&headers, [2]string{"user-agent", "Mimir/test"})
-	append(&headers, [2]string{"accept", "application/json"})
+	append(&headers, [2]string{"content-type", "application/json"})
 
-	requestHeaders: http.Headers
-	http.headers_init(&requestHeaders)
-	defer delete(requestHeaders._kv)
+	requestHeaders := json_request_headers(headers[:])
 
-	apply_extra_headers(&requestHeaders, headers[:])
-
-	userAgent, hasUserAgent := test_request_header_value(requestHeaders, "user-agent")
-	assert(hasUserAgent, "expected normalized user-agent header")
-	assert(userAgent == "Mimir/test", "expected user-agent value")
-	assert(len(requestHeaders._kv) == 2, "expected only lowercase header keys")
-
-	accept, hasAccept := test_request_header_value(requestHeaders, "accept")
-	assert(hasAccept, "expected normalized accept header")
-	assert(accept == "application/json", "expected accept value")
+	assert(
+		len(requestHeaders) == 2,
+		"expected content-type and user-agent only, without a duplicate content-type",
+	)
+	assert(requestHeaders[0][0] == "content-type", "expected content-type header first")
+	assert(requestHeaders[0][1] == "application/json", "expected JSON content type")
+	userAgent, hasUserAgent := test_header_value(requestHeaders, "user-agent")
+	assert(hasUserAgent, "expected user-agent header to be kept")
+	assert(userAgent == "Mimir/test", "expected user-agent value to be kept")
 	_ = t
 }

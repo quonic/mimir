@@ -7,7 +7,7 @@ import "core:mem"
 import "core:strings"
 import "core:sync"
 
-import http "../http"
+import transport "../transport"
 
 MODELS_DEV_API_URL :: "https://models.dev/api.json"
 
@@ -327,7 +327,7 @@ fetch_models_dev_openai_metadata :: proc(
 		return nil, err
 	}
 	defer if body != "" {delete(body)}
-	if !http.status_is_success(status) {
+	if !transport.status_is_success(status) {
 		return nil, map_status_to_error(status)
 	}
 

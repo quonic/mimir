@@ -302,10 +302,11 @@ runtime_destroy_stream :: proc(instance: ^Agent_Instance) {
 
 runtime_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 	worker := cast(^Stream_Worker)workerThread.data
-	err := ai.send_chat_completion_stream_with_context(
+	err := ai.send_chat_completion_stream_with_cancel(
 		worker.client,
 		worker.request,
 		runtime_stream_delta_callback,
+		runtime_stream_cancel_requested,
 		rawptr(worker.state),
 	)
 	if sync.mutex_guard(&worker.state.mutex) {
@@ -315,6 +316,19 @@ runtime_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 			worker.state.canceled = true
 		}
 	}
+}
+
+// Polled by the HTTP transport so /stop aborts the request without waiting for data.
+runtime_stream_cancel_requested :: proc(userData: rawptr) -> bool {
+	stream := cast(^Stream_Worker_State)userData
+	if !sync.mutex_guard(&stream.mutex) {
+		return false
+	}
+	if stream.cancelRequested {
+		stream.canceled = true
+		return true
+	}
+	return false
 }
 
 runtime_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: rawptr) -> bool {

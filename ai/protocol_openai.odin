@@ -3,7 +3,7 @@ package ai
 import json "core:encoding/json"
 import "core:strings"
 
-import http "../http"
+import transport "../transport"
 
 OpenAI_Message :: struct {
 	role:         string,
@@ -480,7 +480,7 @@ send_openai_chat_completion :: proc(
 		return Chat_Response{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_openai_chat_response(body)
 	}
 	return Chat_Response{}, map_status_to_error(status)
@@ -511,7 +511,7 @@ send_openai_embeddings :: proc(
 		return Embedding_Batch_Response{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		return parse_openai_embedding_response(body, len(request.inputs), allocator)
 	}
 	return Embedding_Batch_Response{}, map_status_to_error(status)
@@ -546,7 +546,7 @@ send_openai_chat_completion_stream :: proc(
 	if err != .None {
 		return err
 	}
-	if !http.status_is_success(status) {
+	if !transport.status_is_success(status) {
 		return map_status_to_error(status)
 	}
 	return .None
@@ -573,7 +573,7 @@ list_openai_models :: proc(
 		return [dynamic]Model{}, err
 	}
 	defer if body != "" {delete(body)}
-	if http.status_is_success(status) {
+	if transport.status_is_success(status) {
 		metadata, metadataErr := fetch_models_dev_openai_metadata()
 		if metadataErr == .None {
 			return parse_openai_models_response_with_metadata(body, metadata, allocator)
@@ -583,7 +583,7 @@ list_openai_models :: proc(
 	return [dynamic]Model{}, map_status_to_error(status)
 }
 
-openai_endpoint_target :: proc(endpoint: http.URL, pathSuffix: string) -> (string, bool) {
+openai_endpoint_target :: proc(endpoint: transport.URL, pathSuffix: string) -> (string, bool) {
 	if endpoint.host == "" || endpoint.raw == "" {
 		return "", false
 	}

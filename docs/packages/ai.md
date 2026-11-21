@@ -67,6 +67,29 @@ err := ai.send_chat_completion_stream(client, ai.Chat_Request{
 }, stream_chat_delta)
 ```
 
+To stop a stream from another thread, use
+`send_chat_completion_stream_with_cancel`. The transport calls `shouldCancel`
+while the request is in flight, at least once per second. When it returns
+`true`, the request is aborted and the call returns `.None`.
+
+```odin
+stream_should_cancel :: proc(userData: rawptr) -> bool {
+    state := cast(^My_Stream_State)userData
+    return sync.atomic_load(&state.cancelRequested)
+}
+
+err := ai.send_chat_completion_stream_with_cancel(
+    client,
+    request,
+    stream_chat_delta_with_context,
+    stream_should_cancel,
+    rawptr(&state),
+)
+```
+
+`ai.set_request_timeouts(connectSeconds, stallSeconds)` sets the connect and
+stall timeouts for later requests. A value of `0` or less uses the default.
+
 ## Generating Embeddings
 
 Native Ollama and OpenAI-compatible interfaces support embeddings. One input

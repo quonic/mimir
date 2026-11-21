@@ -3,7 +3,7 @@ package ai
 // This package provides the interface for interacting with AI services.
 // Native Ollama interfaces.
 
-import http "../http"
+import transport "../transport"
 import "core:mem"
 import "core:strings"
 import "core:sync"
@@ -11,7 +11,7 @@ import "core:sync"
 Interface :: struct {
 	name:     string,
 	type:     Interface_Type,
-	endpoint: http.URL,
+	endpoint: transport.URL,
 	models:   [dynamic]Model,
 }
 
@@ -70,7 +70,7 @@ clear_interfaces :: proc() {
 }
 
 add_interface :: proc(name: string, type: Interface_Type, endpoint: string) {
-	url := http.url_parse(endpoint)
+	url := transport.url_parse(endpoint)
 	if url.host != "" {
 		sync.mutex_lock(&interfacesMutex)
 		defer sync.mutex_unlock(&interfacesMutex)
@@ -89,7 +89,7 @@ add_interface_with_models :: proc(
 	endpoint: string,
 	models: []Model,
 ) {
-	url := http.url_parse(endpoint)
+	url := transport.url_parse(endpoint)
 	if url.host == "" {
 		return
 	}
@@ -143,7 +143,7 @@ new_client_with_endpoint :: proc(
 	Client,
 	AI_Error,
 ) {
-	url := http.url_parse(endpoint)
+	url := transport.url_parse(endpoint)
 	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
 		return Client{}, .Invalid_Request
 	}
@@ -168,7 +168,7 @@ probe_ollama_endpoint_with_api_key :: proc(
 	[dynamic]Model,
 	AI_Error,
 ) {
-	url := http.url_parse(endpoint)
+	url := transport.url_parse(endpoint)
 	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
 		return [dynamic]Model{}, .Invalid_Request
 	}
@@ -190,7 +190,7 @@ probe_openai_endpoint_with_api_key :: proc(
 	[dynamic]Model,
 	AI_Error,
 ) {
-	url := http.url_parse(endpoint)
+	url := transport.url_parse(endpoint)
 	if url.host == "" || (url.scheme != "http" && url.scheme != "https") {
 		return [dynamic]Model{}, .Invalid_Request
 	}
