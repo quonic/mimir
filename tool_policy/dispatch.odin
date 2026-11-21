@@ -5,7 +5,10 @@ import "core:strings"
 
 Tool_Dispatcher :: struct {
 	projectRoot:      string,
-	persistentGrants: []Permission_Grant,
+	// Points at the shared config's grant array (or nil). The dispatcher reads
+	// it on every decision and never keeps its own copy, so a grant appended
+	// through any dispatcher is seen by all of them even if the array grows.
+	persistentGrants: ^[dynamic]Permission_Grant,
 	sessionGrants:    [dynamic]Permission_Grant,
 	allocator:        mem.Allocator,
 }
@@ -94,7 +97,7 @@ tool_call_destroy :: proc(call: ^Tool_Call, allocator := context.allocator) {
 
 tool_dispatcher_init :: proc(
 	projectRoot: string,
-	persistentGrants: []Permission_Grant,
+	persistentGrants: ^[dynamic]Permission_Grant,
 	allocator := context.allocator,
 ) -> (
 	Tool_Dispatcher,
@@ -260,10 +263,14 @@ tool_dispatch_prepare :: proc(
 	if !actionOK {
 		return Tool_Dispatch_Result{decision = .Denied}
 	}
+	persistentGrants: []Permission_Grant
+	if dispatcher.persistentGrants != nil {
+		persistentGrants = dispatcher.persistentGrants[:]
+	}
 	return Tool_Dispatch_Result {
 		decision = permission_action_decision(
 			action,
-			dispatcher.persistentGrants,
+			persistentGrants,
 			dispatcher.sessionGrants[:],
 		),
 		action = action,
