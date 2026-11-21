@@ -48,6 +48,8 @@ Overlay :: union {
 	widgets.Dropdown_List,
 }
 
+// Approval_Choice is the answer to a pending approval. It holds no UI types, so
+// it can move to the session package unchanged (ADR-0002).
 Approval_Choice :: enum int {
 	Allow_Once = 0,
 	Allow_Session,
@@ -55,7 +57,11 @@ Approval_Choice :: enum int {
 	Deny,
 }
 
-Approval_State :: struct {
+// Pending_Approval is the tool call that waits for an approval decision. It is
+// decision state only: the approval overlay keeps its view state in
+// Approval_View. historyIndex is the tool history line of the call; it goes
+// away when the session reports tool calls as events (ADR-0002).
+Pending_Approval :: struct {
 	call:           tool_policy.Tool_Call,
 	callOwned:      bool,
 	prepared:       tool_policy.Tool_Dispatch_Result,
@@ -64,7 +70,36 @@ Approval_State :: struct {
 	agentID:        agent.Agent_ID,
 	agentRequestID: string,
 	safety:         approval_safety.State,
-	choice:         Approval_Choice,
+}
+
+// Approval_View is the view state of the approval overlay.
+Approval_View :: struct {
+	choice: Approval_Choice,
+}
+
+// Approval_Request_Result tells the caller of app_request_approval what
+// happened to the call.
+Approval_Request_Result :: enum int {
+	// The call could not become a pending approval. Nothing was changed.
+	Rejected = 0,
+	// The call is pending and waits for a choice from the user.
+	Awaiting_Choice,
+	// The approval method settled the call. Nothing is pending.
+	Settled,
+}
+
+// Approval_Resolve_Result tells the caller of app_resolve_approval what
+// happened to the pending approval.
+Approval_Resolve_Result :: enum int {
+	// The call was approved or denied, and it is no longer pending.
+	Resolved = 0,
+	// The choice could not be applied (for example, a grant was not saved).
+	// The call stays pending.
+	Still_Pending,
+	// There is no pending approval.
+	No_Pending_Approval,
+	// The tool call ID does not match the pending approval.
+	Unknown_Tool_Call,
 }
 
 App_Setup_Step :: enum int {
@@ -196,7 +231,8 @@ App_State :: struct {
 	setupAPIKey:             string,
 	dispatcher:              tool_policy.Tool_Dispatcher,
 	dispatcherReady:         bool,
-	approval:                Approval_State,
+	approval:                Pending_Approval,
+	approvalView:            Approval_View,
 	skills:                  settings.Skill_Registry,
 	codeIndex:               code_index.Code_Index,
 	codeIndexReady:          bool,
@@ -627,8 +663,8 @@ run_app :: proc() {
 				frameDirty = false
 			}
 		}
-		if app_has_overlay(&state, Approval_Overlay) && app_poll_approval_safety(&state) {
-			_ = app_apply_approval_method(&state)
+		if app_poll_pending_approval(&state) {
+			app_sync_approval_overlay(&state)
 			frameDirty = true
 		}
 		if app_tick_menu_overlay(&state) {
@@ -1180,7 +1216,7 @@ app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Even
 			return app_handle_approval_event_with_safety_ready(
 				state,
 				event,
-				app_approval_safety_ready(state),
+				pending_approval_safety_ready(&state.approval),
 			)
 		case Config_Overlay:
 			return app_handle_config_event(state, event)
@@ -1472,8 +1508,30 @@ app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) 
 	return false
 }
 
-app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
-	if !state.dispatcherReady || app_has_overlay(state, Approval_Overlay) {
+// The approval decision logic starts here. These procedures decide and settle
+// tool approvals: the approval method, the safety verdict and the grants. They
+// do not use overlays or other UI types, so they can move to the session
+// package (ADR-0002). The approval overlay section below them shows the
+// pending approval and turns keys into approval choices. app_resolve_approval
+// follows the overlay section.
+
+// app_approval_pending reports whether a tool call waits for an approval
+// decision.
+app_approval_pending :: proc(state: ^App_State) -> bool {
+	return state.approval.callOwned && state.approval.preparedOwned
+}
+
+// app_prepare_approval makes call the pending approval and starts the safety
+// classifier when the approval method uses it. It does not run the approval
+// method. It returns false and changes nothing when the dispatcher is not
+// ready, another approval is pending, or the call does not need approval.
+app_prepare_approval :: proc(
+	state: ^App_State,
+	call: tool_policy.Tool_Call,
+	agentID: agent.Agent_ID,
+	requestID: string,
+) -> bool {
+	if !state.dispatcherReady || app_approval_pending(state) {
 		return false
 	}
 
@@ -1491,35 +1549,63 @@ app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> boo
 	state.approval.prepared = prepared
 	state.approval.preparedOwned = true
 	state.approval.historyIndex = -1
-	state.approval.choice = .Allow_Once
+	state.approval.agentID = agentID
+	if requestID != "" {
+		state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
+	}
 	if state.config.approvalMethod == .Approve_Safe ||
 	   (state.config.approvalMethod == .Always_Ask && prepared.action.effect == .Execute) {
-		app_start_approval_safety(state)
+		pending_approval_start_safety(&state.approval, state.config, state.dispatcher.allocator)
 	}
-	app_push_overlay(state, Approval_Overlay{})
-	state.status = "Permission approval required"
 	return true
 }
 
+// app_request_approval makes an agent tool call the pending approval, records
+// its tool history line and runs the approval method. Approve_All and Deny_All
+// settle the call here. Otherwise the call waits for a choice, or, under
+// Approve_Safe, for the safety verdict (see app_poll_pending_approval).
+app_request_approval :: proc(
+	state: ^App_State,
+	call: tool_policy.Tool_Call,
+	agentID: agent.Agent_ID,
+	requestID: string,
+) -> Approval_Request_Result {
+	if !app_prepare_approval(state, call, agentID, requestID) {
+		return .Rejected
+	}
+	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
+	_ = app_apply_approval_method(state)
+	if app_approval_pending(state) {
+		return .Awaiting_Choice
+	}
+	return .Settled
+}
+
+// app_apply_approval_method applies the configured approval method to the
+// pending approval. It returns true when the method chose for the user.
 app_apply_approval_method :: proc(state: ^App_State) -> bool {
+	if !app_approval_pending(state) {
+		return false
+	}
+	toolCallID := state.approval.agentRequestID
 	switch state.config.approvalMethod {
 	case .Always_Ask:
 		return false
 	case .Approve_All:
-		app_apply_approval_choice(state, .Allow_Once)
+		_ = app_resolve_approval(state, toolCallID, .Allow_Once)
 		return true
 	case .Deny_All:
-		app_apply_approval_choice(state, .Deny)
+		_ = app_resolve_approval(state, toolCallID, .Deny)
 		return true
 	case .Approve_Safe:
 		if !app_safety_allows_automatic_approval(
-			app_approval_safety_ready(state),
-			app_approval_safety_unavailable(state),
-			app_approval_safety_verdict(state),
+			pending_approval_safety_ready(&state.approval),
+			pending_approval_safety_unavailable(&state.approval),
+			pending_approval_safety_verdict(&state.approval),
 		) {
 			return false
 		}
-		app_apply_approval_choice(state, .Allow_Once)
+		_ = app_resolve_approval(state, toolCallID, .Allow_Once)
 		return true
 	}
 	return false
@@ -1532,33 +1618,90 @@ app_safety_allows_automatic_approval :: proc(
 	return ready && !unavailable && verdict == .Safe
 }
 
+// app_poll_pending_approval advances the safety classifier of the pending
+// approval. When the classifier finishes, it runs the approval method again,
+// so Approve_Safe approves a safe call by itself. It returns true when the
+// classifier finished.
+app_poll_pending_approval :: proc(state: ^App_State) -> bool {
+	if !app_approval_pending(state) || !pending_approval_poll_safety(&state.approval) {
+		return false
+	}
+	_ = app_apply_approval_method(state)
+	return true
+}
+
 app_clear_approval :: proc(state: ^App_State) {
-	app_destroy_approval_safety(&state.approval.safety)
-	if state.approval.callOwned {
-		tool_policy.tool_call_destroy(&state.approval.call, state.dispatcher.allocator)
+	pending_approval_destroy(&state.approval, state.dispatcher.allocator)
+}
+
+pending_approval_destroy :: proc(approval: ^Pending_Approval, allocator: mem.Allocator) {
+	app_destroy_approval_safety(&approval.safety)
+	if approval.callOwned {
+		tool_policy.tool_call_destroy(&approval.call, allocator)
 	}
-	if state.approval.preparedOwned {
-		tool_policy.tool_dispatch_result_destroy(
-			&state.approval.prepared,
-			state.dispatcher.allocator,
-		)
+	if approval.preparedOwned {
+		tool_policy.tool_dispatch_result_destroy(&approval.prepared, allocator)
 	}
-	delete(state.approval.agentRequestID, state.dispatcher.allocator)
-	state.approval = {}
+	delete(approval.agentRequestID, allocator)
+	approval^ = {}
+}
+
+// The approval overlay section starts here. The overlay only shows and hides
+// as a result of the decision logic.
+
+// app_sync_approval_overlay shows the approval overlay while an approval waits
+// for a choice, and hides it when nothing is pending.
+app_sync_approval_overlay :: proc(state: ^App_State) {
+	if !app_approval_pending(state) {
+		app_pop_overlay_if(state, Approval_Overlay)
+		return
+	}
+	for overlay in state.overlayStack {
+		if _, isApproval := overlay.(Approval_Overlay); isApproval {
+			return
+		}
+	}
+	state.approvalView = Approval_View {
+		choice = .Allow_Once,
+	}
+	app_push_overlay(state, Approval_Overlay{})
+	state.status = "Permission approval required"
+}
+
+// app_show_approval makes call the pending approval and shows the approval
+// overlay, without an agent request and without running the approval method.
+app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
+	if !app_prepare_approval(state, call, agent.Agent_ID(0), "") {
+		return false
+	}
+	app_sync_approval_overlay(state)
+	return true
+}
+
+// app_apply_approval_choice applies choice to the pending approval, then shows
+// or hides the approval overlay to match. Overlay keys and the headless
+// harness use it.
+app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
+	_ = app_resolve_approval(state, state.approval.agentRequestID, choice)
+	app_sync_approval_overlay(state)
 }
 
 app_move_approval_choice :: proc(state: ^App_State, delta: int) {
-	choice := int(state.approval.choice) + delta
+	choice := int(state.approvalView.choice) + delta
 	if choice < int(Approval_Choice.Allow_Once) {
 		choice = int(Approval_Choice.Deny)
 	} else if choice > int(Approval_Choice.Deny) {
 		choice = int(Approval_Choice.Allow_Once)
 	}
-	state.approval.choice = Approval_Choice(choice)
+	state.approvalView.choice = Approval_Choice(choice)
 }
 
 app_handle_approval_input :: proc(state: ^App_State, b: byte) -> bool {
-	return app_handle_approval_input_with_safety_ready(state, b, app_approval_safety_ready(state))
+	return app_handle_approval_input_with_safety_ready(
+		state,
+		b,
+		pending_approval_safety_ready(&state.approval),
+	)
 }
 
 // app_handle_approval_input_with_safety_ready is a byte-based wrapper kept for
@@ -1618,7 +1761,7 @@ app_handle_approval_event_with_safety_ready :: proc(
 		app_move_approval_choice(state, -1)
 		return true
 	case .Enter:
-		app_apply_approval_choice(state, state.approval.choice)
+		app_apply_approval_choice(state, state.approvalView.choice)
 		return true
 	case .Char:
 		switch key.char {
@@ -1629,16 +1772,16 @@ app_handle_approval_event_with_safety_ready :: proc(
 			app_move_approval_choice(state, -1)
 			return true
 		case '1':
-			state.approval.choice = .Allow_Once
+			state.approvalView.choice = .Allow_Once
 			return true
 		case '2':
-			state.approval.choice = .Allow_Session
+			state.approvalView.choice = .Allow_Session
 			return true
 		case '3':
-			state.approval.choice = .Allow_Always
+			state.approvalView.choice = .Allow_Always
 			return true
 		case '4':
-			state.approval.choice = .Deny
+			state.approvalView.choice = .Deny
 			return true
 		}
 	case:
@@ -1646,10 +1789,21 @@ app_handle_approval_event_with_safety_ready :: proc(
 	return false
 }
 
-app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
-	if !state.approval.callOwned || !state.approval.preparedOwned {
-		app_pop_overlay_if(state, Approval_Overlay)
-		return
+// app_resolve_approval is part of the approval decision logic. It applies
+// choice to the pending approval with the tool call ID toolCallID.
+// Allow_Session adds a grant to the dispatcher; Allow_Always appends a grant
+// to the config and saves the config. It does not show or hide the approval
+// overlay.
+app_resolve_approval :: proc(
+	state: ^App_State,
+	toolCallID: string,
+	choice: Approval_Choice,
+) -> Approval_Resolve_Result {
+	if !app_approval_pending(state) {
+		return .No_Pending_Approval
+	}
+	if toolCallID != state.approval.agentRequestID {
+		return .Unknown_Tool_Call
 	}
 
 	if choice == .Deny {
@@ -1672,9 +1826,8 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 			)
 		}
 		state.status = "Tool call denied"
-		app_pop_overlay_if(state, Approval_Overlay)
 		app_clear_approval(state)
-		return
+		return .Resolved
 	}
 
 	if choice == .Allow_Session || choice == .Allow_Always {
@@ -1684,7 +1837,7 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		)
 		if !grantOK {
 			state.status = "Tool call requires one-time approval"
-			return
+			return .Still_Pending
 		}
 
 		if choice == .Allow_Session {
@@ -1699,21 +1852,20 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 				tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
 				state.dispatcher.persistentGrants = state.config.permissionGrants[:]
 				state.status = "Permission grant could not be saved"
-				return
+				return .Still_Pending
 			}
 		}
 
 		if !grantOK {
 			state.status = "Permission grant could not be added"
-			return
+			return .Still_Pending
 		}
 	}
 
 	if agent.agent_id_is_none(state.approval.agentID) || state.approval.agentRequestID == "" {
 		state.status = "Tool call is no longer active"
-		app_pop_overlay_if(state, Approval_Overlay)
 		app_clear_approval(state)
-		return
+		return .Resolved
 	}
 
 	if state.approval.historyIndex < 0 {
@@ -1732,11 +1884,11 @@ app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
 		state.approval.agentID,
 		state.approval.agentRequestID,
 	)
-	app_pop_overlay_if(state, Approval_Overlay)
 	app_clear_approval(state)
 	if !started {
 		state.status = "Tool call could not start"
 	}
+	return .Resolved
 }
 
 app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -> bool {
