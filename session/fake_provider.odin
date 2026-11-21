@@ -141,9 +141,8 @@ fake_provider_add_response :: proc(provider: ^Fake_Provider, holdOpen: bool, lin
 
 // Returns the number of chat requests that the provider received.
 fake_provider_request_count :: proc(provider: ^Fake_Provider) -> int {
-	if !sync.mutex_guard(&provider.mutex) {
-		return 0
-	}
+	sync.mutex_lock(&provider.mutex)
+	defer sync.mutex_unlock(&provider.mutex)
 	return provider.requestCount
 }
 

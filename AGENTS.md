@@ -18,6 +18,7 @@ Making breaking changes to the project is currently allowed, but it is recommend
 - Variable declarations follow the syntax `name: type = value`, where the type can be inferred from the value if it is not explicitly specified. For example, `x := 5` will infer that `x` is of type `int`, while `y: f32 = 3.14` explicitly declares that `y` is of type `f32`. If the type cannot be inferred from the value, it must be explicitly declared to avoid compilation errors.
 - For getting the length of an array, use `len(array)`. This includes strings, slices, and other array-like structures.
 - When freeing memory of a string, use `myString = ""` instead of `delete(myString, allocator)`. Unless we have written our own allocator, we should not use `delete` on strings, as it can lead to double free issues. Setting the string to an empty string is a safer way to free its memory.
+- `sync.mutex_guard` releases the lock at the end of the statement that calls it. Use it only as `if sync.mutex_guard(&m) { ... }`, with the critical section inside the braces. `if !sync.mutex_guard(&m) { return }` releases the lock right away, so the rest of the procedure runs without it. To hold a lock for a whole procedure, write `sync.mutex_lock(&m)` followed by `defer sync.mutex_unlock(&m)`.
 
 ## Code Style
 

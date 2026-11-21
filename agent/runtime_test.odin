@@ -1,8 +1,12 @@
 package agent
 
 import ai "../ai"
+import "core:fmt"
 import "core:strings"
+import "core:sync"
 import "core:testing"
+import "core:thread"
+import "core:time"
 
 @(test)
 test_runtime_spawns_isolated_background_agents :: proc(t: ^testing.T) {
@@ -364,5 +368,64 @@ test_runtime_reports_subagent_depth_and_final_result :: proc(t: ^testing.T) {
 	result, resultOK2 := runtime_final_result(&runtime, agentID)
 	assert(resultOK2, "expected final result after completion")
 	assert(result == "done", "expected final result content")
+	_ = t
+}
+
+// Stands in for runtime_stream_worker_proc: delivers a short response through the delta
+// callback and finishes the stream like a real worker does.
+test_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
+	stream := cast(^Stream_Worker_State)workerThread.data
+	_ = runtime_stream_delta_callback(ai.Chat_Stream_Delta{content = "Hello"}, stream)
+	thread.yield()
+	_ = runtime_stream_delta_callback(ai.Chat_Stream_Delta{content = " world"}, stream)
+	thread.yield()
+	_ = runtime_stream_delta_callback(ai.Chat_Stream_Delta{done = true}, stream)
+	if sync.mutex_guard(&stream.mutex) {
+		stream.finished = true
+	}
+}
+
+// The worker can add its last deltas, then exit, while runtime_poll_stream runs. Those deltas
+// must still reach the agent. Before the fix, the poll took the pending deltas, then saw the
+// thread done and freed the deltas added in between, so the agent lost the done delta and the
+// turn never ended. The race is timing dependent, so the test repeats the stream many times.
+@(test)
+test_runtime_poll_stream_keeps_deltas_added_while_worker_finishes :: proc(t: ^testing.T) {
+	STREAM_REPEATS :: 2000
+	for repeat in 0 ..< STREAM_REPEATS {
+		runtime := runtime_init(context.allocator)
+		agentID, startErr := runtime_start_background(&runtime, Agent_Start_Options{})
+		assert(startErr == .None, "expected agent to start")
+		assert(runtime_begin(&runtime, agentID) == .None, "expected agent to begin streaming")
+
+		index, _ := runtime_find_index(&runtime, agentID)
+		stream := new(Stream_Worker_State, runtime.allocator)
+		stream.allocator = runtime.allocator
+		stream.pendingDeltas = make([dynamic]ai.Chat_Stream_Delta, 0, 0, runtime.allocator)
+		stream.worker = thread.create(test_stream_worker_proc)
+		stream.worker.data = rawptr(stream)
+		runtime.instances[index].stream = stream
+		thread.start(stream.worker)
+
+		start := time.tick_now()
+		for runtime.instances[index].stream != nil && time.tick_since(start) < 5 * time.Second {
+			_, pollErr := runtime_poll_stream(&runtime, agentID)
+			assert(pollErr == .None, "expected the stream poll to succeed")
+		}
+		state, _ := runtime_state(&runtime, agentID)
+		result, _ := runtime_final_result(&runtime, agentID)
+		if state != .Completed || result != "Hello world" {
+			fmt.eprintfln(
+				"repeat %d: state = %v, want Completed; result = %q, want %q",
+				repeat,
+				state,
+				result,
+				"Hello world",
+			)
+		}
+		assert(state == .Completed, "expected every delta of the stream to reach the agent")
+		assert(result == "Hello world", "expected the final result to hold all streamed text")
+		runtime_destroy(&runtime)
+	}
 	_ = t
 }

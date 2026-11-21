@@ -149,30 +149,26 @@ mark_unavailable :: proc(state: ^State, allocator := context.allocator) {
 }
 
 is_active :: proc(state: ^State) -> bool {
-	if !sync.mutex_guard(&state.mutex) {
-		return false
-	}
+	sync.mutex_lock(&state.mutex)
+	defer sync.mutex_unlock(&state.mutex)
 	return state.active
 }
 
 is_unavailable :: proc(state: ^State) -> bool {
-	if !sync.mutex_guard(&state.mutex) {
-		return true
-	}
+	sync.mutex_lock(&state.mutex)
+	defer sync.mutex_unlock(&state.mutex)
 	return state.unavailable
 }
 
 response :: proc(state: ^State, allocator := context.temp_allocator) -> string {
-	if !sync.mutex_guard(&state.mutex) {
-		return ""
-	}
+	sync.mutex_lock(&state.mutex)
+	defer sync.mutex_unlock(&state.mutex)
 	return strings.clone(string(state.response[:]), allocator)
 }
 
 verdict :: proc(state: ^State) -> Verdict {
-	if !sync.mutex_guard(&state.mutex) {
-		return .Invalid
-	}
+	sync.mutex_lock(&state.mutex)
+	defer sync.mutex_unlock(&state.mutex)
 	return verdict_from_response(string(state.response[:]))
 }
 

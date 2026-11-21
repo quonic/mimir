@@ -213,14 +213,22 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 
 	pendingDeltas: [dynamic]ai.Chat_Stream_Delta
 	cancelRequested := false
+	workerFinished := false
 	if sync.mutex_guard(&stream.mutex) {
 		pendingDeltas = stream.pendingDeltas
 		stream.pendingDeltas = make([dynamic]ai.Chat_Stream_Delta, 0, 0, stream.allocator)
 		cancelRequested = stream.cancelRequested
+		// The worker sets finished under this lock after its last delta. Read it together with
+		// the deltas: when it is set, pendingDeltas holds every remaining delta of the stream.
+		// Checking thread.is_done after the lock instead would miss the deltas that the worker
+		// adds in between, because runtime_destroy_stream frees them.
+		workerFinished = stream.finished
 	}
+	// runtime_destroy_stream below frees stream, so the cleanup must not read it.
+	deltaAllocator := stream.allocator
 	defer {
 		for &delta in pendingDeltas {
-			runtime_stream_delta_destroy(&delta, stream.allocator)
+			runtime_stream_delta_destroy(&delta, deltaAllocator)
 		}
 		delete(pendingDeltas)
 	}
@@ -234,7 +242,7 @@ runtime_poll_stream :: proc(runtime: ^Runtime, id: Agent_ID) -> (bool, Agent_Err
 			}
 		}
 	}
-	if stream.worker == nil || !thread.is_done(stream.worker) {
+	if stream.worker == nil || !workerFinished {
 		return dirty, .None
 	}
 
@@ -322,9 +330,8 @@ runtime_stream_worker_proc :: proc(workerThread: ^thread.Thread) {
 // Polled by the HTTP transport so /stop aborts the request without waiting for data.
 runtime_stream_cancel_requested :: proc(userData: rawptr) -> bool {
 	stream := cast(^Stream_Worker_State)userData
-	if !sync.mutex_guard(&stream.mutex) {
-		return false
-	}
+	sync.mutex_lock(&stream.mutex)
+	defer sync.mutex_unlock(&stream.mutex)
 	if stream.cancelRequested {
 		stream.canceled = true
 		return true
@@ -334,9 +341,8 @@ runtime_stream_cancel_requested :: proc(userData: rawptr) -> bool {
 
 runtime_stream_delta_callback :: proc(delta: ai.Chat_Stream_Delta, userData: rawptr) -> bool {
 	stream := cast(^Stream_Worker_State)userData
-	if !sync.mutex_guard(&stream.mutex) {
-		return false
-	}
+	sync.mutex_lock(&stream.mutex)
+	defer sync.mutex_unlock(&stream.mutex)
 	if stream.cancelRequested {
 		stream.canceled = true
 		return false
