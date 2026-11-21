@@ -1,9 +1,9 @@
-package main
+package session
 
 import "core:fmt"
 import "core:strings"
 import "core:time"
-import "settings"
+import "../settings"
 
 DEFAULT_SYSTEM_PROMPT :: `
 You are an expert AI programming assistant, working with a user in the Mimir harness.
@@ -88,9 +88,10 @@ EXAMPLE_ATTACHMENT :: `
 // Subagents have no access to the parent's conversation, only the task given as the first user message.
 SUBAGENT_SYSTEM_PROMPT :: `You are a subagent spawned by another agent to complete one self-contained task. You have no access to the parent's conversation history or ability to ask clarifying questions — make reasonable assumptions and proceed. If the task requires a tool you were not given, say so explicitly instead of guessing. When finished, reply with a single final message containing your complete answer, concise enough for the parent agent to use directly.`
 
-// Builds the system prompt for the main agent from the config and the enabled skills.
+// Builds the system prompt for the main agent from the model name, the skills and the custom
+// prompt settings of the config.
 system_prompt_effective :: proc(
-	config: ^settings.Mimir_Config,
+	modelName: string,
 	skills: []settings.Skill,
 	customPrompt: string,
 	mode: settings.System_Prompt_Mode,
@@ -106,7 +107,7 @@ system_prompt_effective :: proc(
 		result_prompt, _ = strings.replace_all(
 			result_prompt,
 			"{model_name}",
-			config.selectedModel,
+			modelName,
 			allocator,
 		)
 

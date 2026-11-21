@@ -6,6 +6,7 @@ import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "session"
 import "settings"
 import "text_input"
 import "widgets"
@@ -135,7 +136,7 @@ headless_handle_run_in_terminal :: proc(state: ^App_State, request: ^Headless_Re
 }
 
 headless_handle_approve :: proc(state: ^App_State, request: ^Headless_Request) {
-	choice := Approval_Choice.Allow_Once
+	choice := session.Approval_Choice.Allow_Once
 	if scopeValue, hasScope := request.object["scope"]; hasScope {
 		scope, scopeOK := scopeValue.(json.String)
 		if !scopeOK {
@@ -239,7 +240,7 @@ headless_handle_set_config :: proc(state: ^App_State, request: ^Headless_Request
 			)
 			return
 		}
-		if settings.save_config_to_file(state.configHome, state.config) != .None {
+		if settings.save_config_to_file(state.configHome, state.config^) != .None {
 			headless_write_error(request, "config_persist_failed", "failed to save config")
 			return
 		}
@@ -283,15 +284,15 @@ headless_handle_key :: proc(state: ^App_State, request: ^Headless_Request) {
 }
 
 headless_poll_once :: proc(state: ^App_State) {
-	_ = app_poll_agent_host(state)
-	_ = app_poll_tool_execution(state)
+	_ = app_poll_session(state)
 }
 
 headless_wait_until_idle :: proc(state: ^App_State) {
 	for spin := 0; spin < 1000; spin += 1 {
-		wasDirty := app_poll_agent_host(state)
-		wasDirty = app_poll_tool_execution(state) || wasDirty
-		if !wasDirty && !app_agent_host_stream_active(state) && !state.toolExecution.active {
+		wasDirty := app_poll_session(state)
+		if !wasDirty &&
+		   !session.session_turn_active(state.session) &&
+		   !session.session_tool_running(state.session) {
 			break
 		}
 	}
@@ -319,13 +320,13 @@ headless_write_status :: proc(kind: string, request: ^Headless_Request, state: ^
 	headless_object_set(
 		&object,
 		"streamActive",
-		json.Boolean(app_agent_host_stream_active(state)),
+		json.Boolean(session.session_turn_active(state.session)),
 		context.temp_allocator,
 	)
 	headless_object_set(
 		&object,
 		"toolActive",
-		json.Boolean(state.toolExecution.active),
+		json.Boolean(session.session_tool_running(state.session)),
 		context.temp_allocator,
 	)
 	headless_write_json_object(object)
@@ -630,9 +631,10 @@ headless_set_owned_config_string :: proc(
 
 headless_apply_config_change :: proc(state: ^App_State, persisted: bool) {
 	ai.clear_interfaces()
-	app_register_config_interfaces(state.config, false, context.allocator)
+	app_register_config_interfaces(state.config^, false, context.allocator)
 	app_rebuild_model_entries(state, context.allocator)
-	app_rebuild_code_index(state, context.allocator)
+	app_sync_session_settings(state)
+	session.session_rebuild_code_index(state.session)
 	if persisted {
 		state.status = "Config changed and saved"
 	} else {

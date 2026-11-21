@@ -1,25 +1,23 @@
 #+vet explicit-allocators
-package main
+package session
 
-import "agent"
-import "ai"
-import "builtin_tools"
-import "code_index"
+import "../agent"
+import "../ai"
+import "../builtin_tools"
+import "../code_index"
 import "core:encoding/json"
-import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:sync"
 import "core:thread"
-import "settings"
-import "tool_policy"
+import "../settings"
+import "../tool_policy"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
 SEARCH_CODE_MAX_RESULTS :: 10
-SPINNER_FRAMES :: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// What a tool call can use while it runs on the worker thread. The main thread does not change
+// What a tool call can use while it runs on the worker thread. The session does not change
 // these while the tool runs.
 Tool_Execution_Context :: struct {
 	dispatcher:      ^tool_policy.Tool_Dispatcher,
@@ -39,12 +37,12 @@ Tool_Execution_State :: struct {
 	call:           tool_policy.Tool_Call,
 	result:         string,
 	resultOwned:    bool,
-	historyIndex:   int,
 	agentID:        agent.Agent_ID,
 	agentRequestID: string,
 	active:         bool,
 	finished:       bool,
 }
+
 AI_Tool_Call_Arguments :: struct {
 	file_path:         string,
 	directory_path:    string,
@@ -64,8 +62,7 @@ AI_Tool_Call_Arguments :: struct {
 	depth:             int,
 }
 
-app_tool_definitions_for_provider :: proc(
-	state: ^App_State,
+tool_definitions_for_provider :: proc(
 	providerType: ai.Interface_Type,
 	allocator := context.allocator,
 ) -> [dynamic]ai.Tool_Definition {
@@ -75,7 +72,8 @@ app_tool_definitions_for_provider :: proc(
 	definitions := builtin_tools.builtin_ai_tool_definitions(allocator)
 	return definitions
 }
-app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
+
+tool_execution_destroy :: proc(execution: ^Tool_Execution_State) {
 	if execution.worker != nil {
 		thread.join(execution.worker)
 		thread.destroy(execution.worker)
@@ -91,46 +89,38 @@ app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
 	execution^ = {}
 }
 
-app_start_agent_tool_execution :: proc(
-	state: ^App_State,
+session_start_agent_tool_execution :: proc(
+	session: ^Session,
 	call: tool_policy.Tool_Call,
-	historyIndex: int,
 	agentID: agent.Agent_ID,
 	requestID: string,
 ) -> bool {
 	if agent.agent_id_is_none(agentID) || requestID == "" {
 		return false
 	}
-	if agent.runtime_resolve_tool(&state.agentHost.runtime, agentID, requestID, .Allowed, "") !=
-	   .None {
+	runtime := &session.host.runtime
+	if agent.runtime_resolve_tool(runtime, agentID, requestID, .Allowed, "") != .None {
 		return false
 	}
-	started := app_start_tool_execution_for_agent(state, call, historyIndex, agentID, requestID)
+	started := session_start_tool_execution_for_agent(session, call, agentID, requestID)
 	if !started {
-		_ = agent.runtime_finish_tool(
-			&state.agentHost.runtime,
-			agentID,
-			"Tool call could not start.",
-			true,
-		)
+		_ = agent.runtime_finish_tool(runtime, agentID, "Tool call could not start.", true)
 	}
 	return started
 }
 
-app_start_tool_execution_for_agent :: proc(
-	state: ^App_State,
+session_start_tool_execution_for_agent :: proc(
+	session: ^Session,
 	call: tool_policy.Tool_Call,
-	historyIndex: int,
 	agentID: agent.Agent_ID,
 	requestID: string,
 ) -> bool {
-	execution := &state.toolExecution
+	execution := &session.toolExecution
 	if execution.active || call.id == "" {
 		return false
 	}
-	execution.toolContext = app_tool_execution_context(state, call)
+	execution.toolContext = session_tool_execution_context(session, call)
 	execution.call = tool_policy.tool_call_clone(call, execution.allocator)
-	execution.historyIndex = historyIndex
 	execution.agentID = agentID
 	execution.agentRequestID = strings.clone(requestID, execution.allocator)
 	execution.active = true
@@ -138,37 +128,38 @@ app_start_tool_execution_for_agent :: proc(
 	execution.worker = thread.create(tool_execution_worker_proc)
 	execution.worker.data = rawptr(execution)
 	thread.start(execution.worker)
-	_ = app_show_agent_output(state, Agent_Notice{text = "Tool call running"})
+	session_emit_notice(session, "Tool call running")
 	return true
 }
 
-// Collects what the tool call uses on the worker thread. Runs on the main thread.
-app_tool_execution_context :: proc(
-	state: ^App_State,
+// Collects what the tool call uses on the worker thread. Runs on the thread of the session.
+session_tool_execution_context :: proc(
+	session: ^Session,
 	call: tool_policy.Tool_Call,
 ) -> Tool_Execution_Context {
 	toolContext := Tool_Execution_Context {
-		// Binds the grant pointer on this thread; the worker only reads it.
-		dispatcher     = app_dispatcher(state),
-		skills         = &state.skills,
+		dispatcher     = &session.dispatcher,
+		skills         = &session.skills,
 		embeddingError = .Invalid_Request,
 	}
 	if call.id == "search_code" {
-		if !state.codeIndexReady {
-			app_rebuild_code_index(state, state.dispatcher.allocator)
+		if !session.codeIndexReady {
+			session_rebuild_code_index(session)
 		}
-		toolContext.embeddingClient, toolContext.embeddingError = app_embedding_client(state)
+		toolContext.embeddingClient, toolContext.embeddingError = session_embedding_client(
+			session.config,
+		)
 	}
-	if state.codeIndexReady {
-		toolContext.codeIndex = &state.codeIndex
+	if session.codeIndexReady {
+		toolContext.codeIndex = &session.codeIndex
 	}
 	return toolContext
 }
 
 tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	execution := cast(^Tool_Execution_State)workerThread.data
-	output := app_execute_tool_call(execution.toolContext, execution.call)
-	outputOwned := app_tool_output_is_owned(execution.call.id)
+	output := execute_tool_call(execution.toolContext, execution.call)
+	outputOwned := tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
 		if execution.call.id == "search_code" || execution.call.id == "find_code" {
@@ -194,8 +185,8 @@ tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	}
 }
 
-app_poll_tool_execution :: proc(state: ^App_State) -> bool {
-	execution := &state.toolExecution
+session_poll_tool_execution :: proc(session: ^Session) -> bool {
+	execution := &session.toolExecution
 	if !execution.active || execution.worker == nil || !thread.is_done(execution.worker) {
 		return false
 	}
@@ -207,44 +198,41 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	outputOwned := execution.resultOwned
 	agentID := execution.agentID
 	agentRequestID := execution.agentRequestID
-	isError := app_tool_output_is_error(output)
-	if execution.historyIndex >= 0 {
-		toolStatus := Agent_Tool_Status.Completed
-		if isError {
-			toolStatus = .Failed
-		}
-		_ = app_show_agent_output(
-			state,
-			app_agent_tool_call(execution.call, toolStatus, execution.historyIndex, output),
-		)
+	isError := tool_output_is_error(output)
+	toolStatus := Tool_Call_Status.Completed
+	if isError {
+		toolStatus = .Failed
 	}
+	session_emit_tool_call_updated(session, execution.call.callID, toolStatus, output)
 	if !agent.agent_id_is_none(agentID) && agentRequestID != "" {
-		_ = agent.runtime_finish_tool(&state.agentHost.runtime, agentID, output, isError)
+		_ = agent.runtime_finish_tool(&session.host.runtime, agentID, output, isError)
 	}
-	app_destroy_tool_output_if_owned(output, outputOwned, execution.allocator)
+	destroy_tool_output_if_owned(output, outputOwned, execution.allocator)
 	tool_policy.tool_call_destroy(&execution.call, execution.allocator)
 	delete(execution.agentRequestID, execution.allocator)
 	execution.call = {}
 	execution.result = ""
 	execution.resultOwned = false
 	execution.toolContext = {}
-	execution.historyIndex = -1
 	execution.agentID = agent.Agent_ID(0)
 	execution.agentRequestID = ""
 	execution.active = false
 	execution.finished = false
 	if isError {
-		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call failed"})
+		session_emit_notice(session, "Tool call failed", .Warning)
 	} else {
-		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call completed"})
+		session_emit_notice(session, "Tool call completed")
 	}
-	if state.codeIndexRebuildPending {
-		app_rebuild_code_index(state, context.allocator)
+	if session.skillSettingsPending {
+		session_apply_skill_settings(session)
+	}
+	if session.codeIndexRebuildPending {
+		session_rebuild_code_index(session)
 	}
 	return true
 }
 
-app_tool_output_is_error :: proc(output: string) -> bool {
+tool_output_is_error :: proc(output: string) -> bool {
 	return(
 		strings.starts_with(output, "Error ") ||
 		strings.contains(output, ": Error ") ||
@@ -257,7 +245,7 @@ app_tool_output_is_error :: proc(output: string) -> bool {
 	)
 }
 
-app_tool_call_from_ai :: proc(
+tool_call_from_ai :: proc(
 	aiCall: ai.Tool_Call,
 	allocator := context.allocator,
 ) -> (
@@ -349,7 +337,7 @@ app_tool_call_from_ai :: proc(
 }
 
 // Runs a tool call on the worker thread. It uses only what toolContext gives it.
-app_execute_tool_call :: proc(
+execute_tool_call :: proc(
 	toolContext: Tool_Execution_Context,
 	call: tool_policy.Tool_Call,
 ) -> string {
@@ -379,7 +367,7 @@ app_execute_tool_call :: proc(
 		return builtin_tools.execute_builtin_tool(dispatcher, call)
 	}
 	if call.id == "find_code" {
-		results := app_find_code(
+		results := find_code(
 			dispatcher.projectRoot,
 			call.query,
 			call.maxResults,
@@ -389,9 +377,9 @@ app_execute_tool_call :: proc(
 		index := code_index.Code_Index {
 			projectRoot = dispatcher.projectRoot,
 		}
-		return app_search_code_results_json(&index, results[:], dispatcher.allocator)
+		return search_code_results_json(&index, results[:], dispatcher.allocator)
 	}
-	results, searchError := app_search_code(
+	results, searchError := search_code(
 		toolContext,
 		call.query,
 		call.maxResults,
@@ -404,11 +392,11 @@ app_execute_tool_call :: proc(
 		)
 	}
 	defer code_index.code_index_search_results_destroy(&results, dispatcher.allocator)
-	return app_search_code_results_json(toolContext.codeIndex, results[:], dispatcher.allocator)
+	return search_code_results_json(toolContext.codeIndex, results[:], dispatcher.allocator)
 }
 
 // Builds the embedding database of the code index when it has none yet.
-app_ensure_code_index :: proc(
+ensure_code_index :: proc(
 	toolContext: Tool_Execution_Context,
 	allocator := context.allocator,
 ) -> ai.AI_Error {
@@ -437,7 +425,7 @@ app_ensure_code_index :: proc(
 	return .None
 }
 
-app_search_code :: proc(
+search_code :: proc(
 	toolContext: Tool_Execution_Context,
 	query: string,
 	maximumResults: int,
@@ -447,7 +435,7 @@ app_search_code :: proc(
 	ai.AI_Error,
 ) {
 	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
-	ensureError := app_ensure_code_index(toolContext, allocator)
+	ensureError := ensure_code_index(toolContext, allocator)
 	if ensureError != .None {
 		return results, ensureError
 	}
@@ -464,7 +452,7 @@ app_search_code :: proc(
 	)
 }
 
-app_find_code :: proc(
+find_code :: proc(
 	projectRoot: string,
 	query: string,
 	maximumResults: int,
@@ -481,7 +469,7 @@ app_find_code :: proc(
 	return code_index.code_index_find_text(&index, query, maximumResults, allocator)
 }
 
-app_search_code_results_json :: proc(
+search_code_results_json :: proc(
 	codeIndex: ^code_index.Code_Index,
 	results: []code_index.Code_Search_Result,
 	allocator := context.allocator,
@@ -577,7 +565,7 @@ write_decimal :: proc(builder: ^strings.Builder, value: int) {
 	}
 }
 
-app_tool_output_is_owned :: proc(toolID: string) -> bool {
+tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
 	case "read_file",
 	     "read_skill",
@@ -595,52 +583,10 @@ app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	return false
 }
 
-app_destroy_tool_output_if_owned :: proc(output: string, owned: bool, allocator: mem.Allocator) {
+destroy_tool_output_if_owned :: proc(output: string, owned: bool, allocator: mem.Allocator) {
 	if owned {
 		delete(output, allocator)
 	}
-}
-
-app_context_usage_status_text :: proc(
-	state: ^App_State,
-	allocator := context.temp_allocator,
-) -> string {
-	if state == nil {
-		return ""
-	}
-	usage := state.agentHost.usage
-	contextWindowTokens := state.agentHost.contextWindowTokens
-	active := app_agent_host_stream_active(state)
-	if !usage.hasInputTokens {
-		if active {
-			return "ctx ..."
-		}
-		return ""
-	}
-
-	inputText := assistant_stream_compact_token_count(usage.inputTokens, allocator)
-	if contextWindowTokens <= 0 {
-		return fmt.tprintf("ctx %s", inputText)
-	}
-	contextText := assistant_stream_compact_token_count(contextWindowTokens, allocator)
-	percentage := usage.inputTokens * 100 / contextWindowTokens
-	return fmt.tprintf("ctx %s/%s %d%%", inputText, contextText, percentage)
-}
-
-assistant_stream_compact_token_count :: proc(
-	tokens: int,
-	allocator := context.temp_allocator,
-) -> string {
-	if tokens < 1000 {
-		return fmt.tprintf("%d", tokens)
-	}
-	tenths := (tokens + 50) / 100
-	whole := tenths / 10
-	decimal := tenths % 10
-	if decimal == 0 {
-		return fmt.tprintf("%dk", whole)
-	}
-	return fmt.tprintf("%d.%dk", whole, decimal)
 }
 
 assistant_stream_error_text :: proc(err: ai.AI_Error) -> string {

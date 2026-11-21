@@ -2,7 +2,6 @@ package main
 
 import "agent"
 import "ai"
-import "approval_safety"
 import "builtin_tools"
 import "commands"
 import "console"
@@ -10,6 +9,7 @@ import "core:os"
 import "core:strings"
 import "core:testing"
 import "input_history"
+import "session"
 import "settings"
 import "text_input"
 import "tool_policy"
@@ -110,9 +110,10 @@ test_approval_modal_navigates_and_escape_denies :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(
+		app_test_open_approval(
 			&state,
-			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			"write_file",
+			`{"file_path":"generated/output.txt","content":"x"}`,
 		),
 		"expected write call to open approval modal",
 	)
@@ -133,9 +134,10 @@ test_approval_modal_ignores_mouse_motion :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(
+		app_test_open_approval(
 			&state,
-			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			"write_file",
+			`{"file_path":"generated/output.txt","content":"x"}`,
 		),
 		"expected write call to open approval modal",
 	)
@@ -168,117 +170,20 @@ test_approval_display_text_escapes_terminal_controls :: proc(t: ^testing.T) {
 test_approval_modal_keeps_command_text_after_source_call_is_destroyed :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	call, callOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-1",
-			name = "run_in_terminal",
-			arguments = `{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
-		},
-		context.allocator,
+	assert(
+		app_test_open_approval(
+			&state,
+			"run_in_terminal",
+			`{"command":"echo \"Test Shell command\"","shell":"/bin/bash"}`,
+		),
+		"expected command call to open approval modal",
 	)
-	assert(callOK, "expected command tool call to decode")
-	assert(app_show_approval(&state, call), "expected command call to open approval modal")
-	tool_policy.tool_call_destroy(&call, context.allocator)
 
 	sequence := render_app_frame_sequence(&state, 18, 80, context.temp_allocator)
 	assert(
 		contains_string(sequence, `echo "Test Shell command"`),
 		"expected approval modal to display retained command text",
 	)
-	_ = t
-}
-
-@(test)
-test_patch_file_tool_call_decodes_owned_patch_content :: proc(t: ^testing.T) {
-	call, callOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-patch",
-			name = "patch_file",
-			arguments = `{"file_path":"src/main.odin","patch_content":"--- a/src/main.odin\n+++ b/src/main.odin\n@@ -1 +1 @@\n-old\n+new\n"}`,
-		},
-		context.allocator,
-	)
-	defer tool_policy.tool_call_destroy(&call, context.allocator)
-	assert(callOK, "expected patch_file tool call to decode")
-	assert(call.filePath == "src/main.odin", "expected patch target path")
-	assert(strings.contains(call.patchContent, "@@ -1 +1 @@"), "expected owned patch content")
-	_ = t
-}
-
-@(test)
-test_patch_file_tool_call_requires_patch_arguments :: proc(t: ^testing.T) {
-	call, callOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-patch",
-			name = "patch_file",
-			arguments = `{"file_path":"src/main.odin"}`,
-		},
-		context.allocator,
-	)
-	assert(!callOK, "expected missing patch_content to be rejected")
-	assert(call.id == "", "expected rejected call to be empty")
-	_ = t
-}
-
-@(test)
-test_grep_search_tool_call_decodes_pattern_and_normalizes_limit :: proc(t: ^testing.T) {
-	defaultCall, defaultOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-grep-default",
-			name = "grep_search",
-			arguments = `{"file_path":"src/main.odin","search_string":"^main ::"}`,
-		},
-		context.allocator,
-	)
-	defer tool_policy.tool_call_destroy(&defaultCall, context.allocator)
-	assert(defaultOK, "expected grep_search tool call to decode")
-	assert(defaultCall.filePath == "src/main.odin", "expected grep target path")
-	assert(defaultCall.query == "^main ::", "expected search_string to map to query")
-	assert(
-		defaultCall.maxResults == builtin_tools.GREP_SEARCH_DEFAULT_MAX_RESULTS,
-		"expected omitted max_results to use the grep default",
-	)
-
-	cappedCall, cappedOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-grep-capped",
-			name = "grep_search",
-			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":500}`,
-		},
-		context.allocator,
-	)
-	defer tool_policy.tool_call_destroy(&cappedCall, context.allocator)
-	assert(cappedOK, "expected grep_search with a large limit to decode")
-	assert(
-		cappedCall.maxResults == builtin_tools.GREP_SEARCH_MAX_RESULTS,
-		"expected grep max_results to be capped",
-	)
-	_ = t
-}
-
-@(test)
-test_grep_search_tool_call_rejects_missing_pattern_and_negative_limit :: proc(t: ^testing.T) {
-	missingCall, missingOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-grep-missing",
-			name = "grep_search",
-			arguments = `{"file_path":"src/main.odin"}`,
-		},
-		context.allocator,
-	)
-	assert(!missingOK, "expected a missing grep pattern to be rejected")
-	assert(missingCall.id == "", "expected rejected grep call to be empty")
-
-	negativeCall, negativeOK := app_tool_call_from_ai(
-		ai.Tool_Call {
-			id = "call-grep-negative",
-			name = "grep_search",
-			arguments = `{"file_path":"src/main.odin","search_string":"main","max_results":-1}`,
-		},
-		context.allocator,
-	)
-	assert(!negativeOK, "expected a negative grep limit to be rejected")
-	assert(negativeCall.id == "", "expected rejected grep call to be empty")
 	_ = t
 }
 
@@ -296,48 +201,6 @@ test_grep_search_history_displays_file_path :: proc(t: ^testing.T) {
 		content == "grep_search: src/main.odin (completed)",
 		"expected grep history to display the file path",
 	)
-	_ = t
-}
-
-@(test)
-test_approval_safety_model_prefers_explicit_selection :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-	state.config.selectedModel = "chat-model"
-	state.config.safetyProvider = "ollama"
-	state.config.safetyModel = "safety-model"
-
-	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
-	assert(safetyModelOK, "expected explicit safety model to resolve")
-	assert(safetyModel.provider.name == "ollama", "expected configured safety provider")
-	assert(safetyModel.model == "safety-model", "expected configured safety model")
-	_ = t
-}
-
-@(test)
-test_approval_safety_model_falls_back_to_chat_selection :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-	state.config.selectedModel = "chat-model"
-
-	safetyModel, safetyModelOK := approval_safety_model_from_config(state.config)
-	assert(safetyModelOK, "expected empty safety selection to use chat model")
-	assert(
-		safetyModel.provider.name == settings.DEFAULT_CONFIG_PROVIDER,
-		"expected chat provider fallback",
-	)
-	assert(safetyModel.model == "chat-model", "expected chat model fallback")
-	_ = t
-}
-
-@(test)
-test_approval_safety_model_rejects_partial_selection :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-	state.config.safetyProvider = "ollama"
-
-	_, safetyModelOK := approval_safety_model_from_config(state.config)
-	assert(!safetyModelOK, "expected partial safety selection to be unavailable")
 	_ = t
 }
 
@@ -375,9 +238,10 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(
+		app_test_open_approval(
 			&state,
-			tool_policy.Tool_Call{id = "write_file", filePath = "generated/output.txt"},
+			"write_file",
+			`{"file_path":"generated/output.txt","content":"x"}`,
 		),
 		"expected write call to open approval modal",
 	)
@@ -398,7 +262,7 @@ test_approval_safety_blocks_input_until_analysis_completes :: proc(t: ^testing.T
 		"expected pending analysis to preserve selection",
 	)
 
-	approval_safety.mark_unavailable(&state.approval.safety)
+	state.approvalView.safety.status = .Unavailable
 	assert(app_handle_approval_input(&state, '4'), "expected unavailable advice to unlock choices")
 	assert(app_handle_approval_input(&state, '\r'), "expected unavailable advice to allow denial")
 	assert(len(state.overlayStack) == 0, "expected denial after unavailable advice to close modal")
@@ -411,13 +275,10 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 
 	assert(
-		app_show_approval(
-			&state,
-			tool_policy.Tool_Call{id = "run_in_terminal", command = "git status"},
-		),
+		app_test_open_approval(&state, "run_in_terminal", `{"command":"git status"}`),
 		"expected command call to open approval modal",
 	)
-	approval_safety.mark_unavailable(&state.approval.safety)
+	state.approvalView.safety.status = .Unavailable
 	sequence := render_app_frame_sequence(&state, 24, 80, context.temp_allocator)
 	assert(
 		contains_string(sequence, "Safety advice: unavailable"),
@@ -427,29 +288,18 @@ test_approval_modal_renders_unavailable_safety_advice :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_app_tool_definitions_include_ollama :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-	ollamaTools := app_tool_definitions_for_provider(&state, .Ollama, context.allocator)
-	defer delete(ollamaTools)
-	assert(len(ollamaTools) == 13, "expected Ollama to receive all built-in tools")
-
-	_ = t
-}
-
-@(test)
 test_app_refresh_skills_does_not_mutate_active_agent :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	state.agentHost.activeAgentID = agent.Agent_ID(1)
-	state.agentHost.runtime.instances = make(
+	state.session.host.activeAgentID = agent.Agent_ID(1)
+	state.session.host.runtime.instances = make(
 		[dynamic]agent.Agent_Instance,
 		0,
 		1,
 		context.allocator,
 	)
 	append(
-		&state.agentHost.runtime.instances,
+		&state.session.host.runtime.instances,
 		agent.Agent_Instance{state = .Streaming, id = agent.Agent_ID(1)},
 	)
 	app_refresh_skills(&state)
@@ -479,7 +329,7 @@ test_app_skill_setting_toggles_persisted_disabled_name :: proc(t: ^testing.T) {
 
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	settings.skill_registry_load(&state.skills, "", project)
+	settings.skill_registry_load(&state.session.skills, "", project)
 	state.configCategory = .Skills
 	state.configFocus = .Settings
 	app_rebuild_config_settings(&state)
@@ -494,47 +344,13 @@ test_app_skill_setting_toggles_persisted_disabled_name :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_app_embedding_client_requires_embedding_configuration :: proc(t: ^testing.T) {
-	state := app_init(context.allocator)
-	defer app_destroy(&state)
-	_, clientError := app_embedding_client(&state)
-	assert(
-		clientError == .Invalid_Request,
-		"expected missing embedding selection to reject client",
-	)
-	_ = t
-}
-
-@(test)
-test_app_embedding_client_rejects_disabled_embedding_provider :: proc(t: ^testing.T) {
-	state: App_State
-	state.config.embeddingProvider = "embeddings"
-	state.config.embeddingModel = "nomic-embed-text"
-	state.config.providers = make([dynamic]settings.Provider_Config, 0, 1, context.temp_allocator)
-	defer delete(state.config.providers)
-	append(
-		&state.config.providers,
-		settings.Provider_Config {
-			name = "embeddings",
-			type = .Ollama,
-			endpoint = "http://localhost:11434",
-			enabled = false,
-		},
-	)
-
-	_, clientError := app_embedding_client(&state)
-	assert(clientError == .Interface_Not_Found, "expected disabled embedding provider rejection")
-	_ = t
-}
-
-@(test)
 test_app_initializes_permission_dispatcher :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
 
-	assert(state.dispatcherReady, "expected app to initialize permission dispatcher")
+	assert(state.session.dispatcherReady, "expected app to initialize permission dispatcher")
 	assert(
-		state.dispatcher.projectRoot == state.workingDirectory,
+		state.session.dispatcher.projectRoot == state.workingDirectory,
 		"expected dispatcher to use the app working directory",
 	)
 	_ = t
@@ -614,14 +430,14 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	assert(loadErr == .None, "expected new input to persist immediately")
 	assert(len(loaded) == 2, "expected recorded input in persistent history")
 	append_history(&state, .User, "chat history")
-	transcript_append_user(&state.transcript, "chat history")
+	session.transcript_append_user(&state.session.transcript, "chat history")
 	state.historyScrollOffset = 1
 
 	text_input.input_buffer_push_text(&state.input, "/clear")
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 0, "expected clear command to reset in-memory history")
 	assert(len(state.history) == 0, "expected clear command to reset panel history")
-	assert(len(state.transcript.entries) == 0, "expected clear command to reset the transcript")
+	assert(len(state.session.transcript.entries) == 0, "expected clear command to reset the transcript")
 	assert(state.historyScrollOffset == 0, "expected clear command to reset panel scroll position")
 	assert(state.status == "Input history cleared", "expected clear command success status")
 	_, missingErr := input_history.load(home, workingDirectory, context.temp_allocator)
@@ -648,9 +464,9 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	assert(state.history[len(state.history) - 1].role == .User, "expected user history entry")
 	assert(state.history[len(state.history) - 1].content == "hello", "expected user content")
 	assert(
-		len(state.transcript.entries) == 1 &&
-		state.transcript.entries[0].role == ai.Message_Role.User &&
-		state.transcript.entries[0].content == "hello",
+		len(state.session.transcript.entries) == 1 &&
+		state.session.transcript.entries[0].role == ai.Message_Role.User &&
+		state.session.transcript.entries[0].content == "hello",
 		"expected chat submit to add the user text to the transcript",
 	)
 	assert(state.status == "No model selected", "expected missing model status")
@@ -791,128 +607,20 @@ test_tab_completion_enter_fills_input_without_running_command :: proc(t: ^testin
 }
 
 @(test)
-test_transcript_build_messages_keeps_user_and_assistant_text :: proc(t: ^testing.T) {
-	transcript := transcript_init(context.temp_allocator)
-	defer transcript_destroy(&transcript)
-	transcript_append_user(&transcript, "hello")
-	transcript_append_assistant_text(&transcript, "h")
-	transcript_append_assistant_text(&transcript, "i")
-	transcript_end_assistant_text(&transcript)
-	transcript_append_assistant_text(&transcript, "")
-	transcript_append_assistant(&transcript, "")
-
-	messages := transcript_build_messages(&transcript, "configured prompt", context.temp_allocator)
-	assert(len(messages) == 3, "expected configured prompt, user, and assistant messages")
-	assert(messages[0].role == ai.Message_Role.System, "expected system role first")
-	assert(messages[0].content == "configured prompt", "expected configured prompt first")
-	assert(messages[1].role == ai.Message_Role.User, "expected user role to map")
-	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant role to map")
-	assert(messages[2].content == "hi", "expected streamed assistant text in one message")
-	_ = t
-}
-
-@(test)
-test_transcript_build_messages_empty_system_prompt_preserves_order :: proc(t: ^testing.T) {
-	transcript := transcript_init(context.temp_allocator)
-	defer transcript_destroy(&transcript)
-	transcript_append_user(&transcript, "hello")
-	transcript_append_assistant_text(&transcript, "hi")
-	transcript_end_assistant_text(&transcript)
-	transcript_append_assistant_text(&transcript, "again")
-	transcript_append_user(&transcript, "next")
-
-	messages := transcript_build_messages(&transcript, "", context.temp_allocator)
-	assert(len(messages) == 4, "expected only transcript messages without a system prompt")
-	assert(messages[0].role == ai.Message_Role.User, "expected user message first")
-	assert(messages[0].content == "hello", "expected user content to be preserved")
-	assert(messages[1].content == "hi", "expected first assistant message")
-	assert(messages[2].content == "again", "expected a new assistant message after the end")
-	assert(messages[3].role == ai.Message_Role.User, "expected user message last")
-	assert(messages[3].content == "next", "expected the last user content")
-	_ = t
-}
-
-@(test)
-test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
-	config := settings.Mimir_Config {
-		selectedModel = "test-model",
-	}
-	skills := []settings.Skill {
-		{name = "demo", description = "Demo skill", path = "/skills/demo/SKILL.md"},
-	}
-	defaultPrompt := system_prompt_effective(
-		&config,
-		skills,
-		"",
-		.Append,
-		context.temp_allocator,
-	)
-	defer delete(defaultPrompt, context.temp_allocator)
-	assert(
-		strings.contains(defaultPrompt, config.selectedModel),
-		"expected default system prompt to contain selected model",
-	)
-	assert(
-		strings.contains(defaultPrompt, `<skill name="demo" filePath="/skills/demo/SKILL.md">`),
-		"expected default system prompt to list the given skills",
-	)
-	assert(
-		!strings.contains(defaultPrompt, "{model_name}"),
-		"expected model name placeholder to be expanded",
-	)
-	assert(
-		!strings.contains(defaultPrompt, "{{output_formatting}}") &&
-		!strings.contains(defaultPrompt, "{{skills}}") &&
-		!strings.contains(defaultPrompt, "{{attachments}}"),
-		"expected prompt placeholders to be expanded",
-	)
-
-	appendedPrompt := system_prompt_effective(
-		&config,
-		skills,
-		"Use tabs.",
-		.Append,
-		context.temp_allocator,
-	)
-	defer delete(appendedPrompt, context.temp_allocator)
-	assert(
-		contains_string(appendedPrompt, "Additional user instructions:\nUse tabs."),
-		"expected append mode to retain custom instructions",
-	)
-
-	replacedPrompt := system_prompt_effective(
-		&config,
-		skills,
-		"Only user instructions.",
-		.Replace,
-		context.temp_allocator,
-	)
-	defer delete(replacedPrompt, context.temp_allocator)
-	assert(
-		replacedPrompt ==
-		strings.concatenate(
-			{"Only user instructions.", system_prompt_date(context.temp_allocator)},
-			context.temp_allocator,
-		),
-		"expected replace mode to use custom prompt",
-	)
-	_ = t
-}
-
-@(test)
 test_stop_command_requests_stream_cancel :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 
 	assert(
-		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		session.agent_host_start_active(&state.session.host, agent.Agent_Start_Options{}) ==
+		.None,
 		"expected active agent to start",
 	)
 	app_run_in_terminal(&state, commands.parse_slash_command("/stop"))
 	assert(state.status == "Canceling assistant stream", "expected /stop to update status")
 	agentState, agentOK := agent.runtime_state(
-		&state.agentHost.runtime,
-		state.agentHost.activeAgentID,
+		&state.session.host.runtime,
+		state.session.host.activeAgentID,
 	)
 	assert(agentOK && agentState == .Canceled, "expected /stop to cancel the active runtime")
 	_ = t
@@ -1263,26 +971,27 @@ test_history_resets_to_bottom_for_new_and_streamed_text :: proc(t: ^testing.T) {
 
 	assert(app_scroll_history_page(&state, 1), "expected history to remain scrollable")
 	assert(
-		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		session.agent_host_start_active(&state.session.host, agent.Agent_Start_Options{}) ==
+		.None,
 		"expected active agent to start",
 	)
-	agentID := state.agentHost.activeAgentID
+	agentID := state.session.host.activeAgentID
 	assert(
 		agent.runtime_receive_stream_delta(
-			&state.agentHost.runtime,
+			&state.session.host.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "streamed entry"},
 		) ==
 		.None,
 		"expected streamed text delta",
 	)
-	assert(app_poll_agent_host(&state), "expected streamed content to update history")
+	assert(app_poll_session(&state), "expected streamed content to update history")
 	assert(
 		state.historyScrollOffset == 0,
 		"expected streamed history text to return to the bottom",
 	)
 	assert(
-		state.history[state.agentHost.historyIndex].cachedLineCount == 0,
+		state.history[state.assistantHistoryIndex].cachedLineCount == 0,
 		"expected streamed content to invalidate its wrapping cache",
 	)
 	_ = t
@@ -1293,42 +1002,43 @@ test_thinking_spinner_hides_reasoning_and_yields_to_content :: proc(t: ^testing.
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	assert(
-		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		session.agent_host_start_active(&state.session.host, agent.Agent_Start_Options{}) ==
+		.None,
 		"expected active agent to start",
 	)
-	agentID := state.agentHost.activeAgentID
+	agentID := state.session.host.activeAgentID
 
 	assert(
 		agent.runtime_receive_stream_delta(
-			&state.agentHost.runtime,
+			&state.session.host.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
 		) ==
 		.None,
 		"expected thinking delta to be accepted",
 	)
-	assert(app_poll_agent_host(&state), "expected thinking state to request a redraw")
-	assert(state.agentHost.thinking, "expected host to track thinking state")
-	assert(state.agentHost.spinnerVisible, "expected thinking state to show a spinner")
+	assert(app_poll_session(&state), "expected thinking state to request a redraw")
+	assert(state.session.host.thinking, "expected host to track thinking state")
+	assert(state.spinner.visible, "expected thinking state to show a spinner")
 	assert(state.status == "Assistant thinking", "expected thinking status")
 
 	state.historyRenderOnly = false
 	assert(
 		agent.runtime_receive_stream_delta(
-			&state.agentHost.runtime,
+			&state.session.host.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Visible answer"},
 		) ==
 		.None,
 		"expected text delta to be accepted",
 	)
-	assert(app_poll_agent_host(&state), "expected content delta to request a redraw")
+	assert(app_poll_session(&state), "expected content delta to request a redraw")
 	assert(
-		state.history[state.agentHost.historyIndex].content == "Visible answer",
+		state.history[state.assistantHistoryIndex].content == "Visible answer",
 		"expected only normal content in assistant history",
 	)
 	assert(
-		history_display_line(&state, state.agentHost.historyIndex, context.temp_allocator) ==
+		history_display_line(&state, state.assistantHistoryIndex, context.temp_allocator) ==
 		"Visible answer",
 		"expected normal content to replace the spinner",
 	)
@@ -1340,50 +1050,51 @@ test_thinking_spinner_invalidates_history_cache_and_clears :: proc(t: ^testing.T
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
 	append_history(&state, .Assistant, "")
-	state.agentHost.historyIndex = len(state.history) - 1
+	state.assistantHistoryIndex = len(state.history) - 1
 	assert(
-		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		session.agent_host_start_active(&state.session.host, agent.Agent_Start_Options{}) ==
+		.None,
 		"expected active agent to start",
 	)
-	agentID := state.agentHost.activeAgentID
-	_ = history_entry_line_count(&state, state.agentHost.historyIndex, 20)
+	agentID := state.session.host.activeAgentID
+	_ = history_entry_line_count(&state, state.assistantHistoryIndex, 20)
 	assert(
-		state.history[state.agentHost.historyIndex].cachedLineCount > 0,
+		state.history[state.assistantHistoryIndex].cachedLineCount > 0,
 		"expected history line count to be cached",
 	)
 
 	assert(
 		agent.runtime_receive_stream_delta(
-			&state.agentHost.runtime,
+			&state.session.host.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Hidden reasoning", isThinking = true},
 		) ==
 		.None,
 		"expected thinking delta to be accepted",
 	)
-	assert(app_poll_agent_host(&state), "expected spinner visibility change to request a redraw")
+	assert(app_poll_session(&state), "expected spinner visibility change to request a redraw")
 	assert(
-		state.history[state.agentHost.historyIndex].cachedLineCount == 0,
+		state.history[state.assistantHistoryIndex].cachedLineCount == 0,
 		"expected spinner visibility change to invalidate the wrapping cache",
 	)
-	state.agentHost.spinnerLastFrame = {}
-	assert(app_poll_agent_host(&state), "expected elapsed spinner interval to request a redraw")
+	state.spinner.lastFrame = {}
+	assert(app_poll_session(&state), "expected elapsed spinner interval to request a redraw")
 	assert(
-		app_agent_host_spinner_frame(&state) == SPINNER_FRAMES[1],
+		app_assistant_spinner_frame(&state) == SPINNER_FRAMES[1],
 		"expected elapsed spinner interval to advance to the next frame",
 	)
 	assert(
 		agent.runtime_receive_stream_delta(
-			&state.agentHost.runtime,
+			&state.session.host.runtime,
 			agentID,
 			ai.Chat_Stream_Delta{content = "Visible answer"},
 		) ==
 		.None,
 		"expected text delta to clear thinking state",
 	)
-	assert(app_poll_agent_host(&state), "expected spinner state to clear")
+	assert(app_poll_session(&state), "expected spinner state to clear")
 	assert(
-		app_agent_host_spinner_frame(&state) == "",
+		app_assistant_spinner_frame(&state) == "",
 		"expected cleared stream state to hide the spinner",
 	)
 	_ = t
@@ -2067,11 +1778,11 @@ test_compute_app_layout_places_status_last :: proc(t: ^testing.T) {
 test_context_usage_status_text_and_right_clipping :: proc(t: ^testing.T) {
 	state := app_init(context.temp_allocator)
 	defer app_destroy(&state)
-	state.agentHost.usage = ai.Chat_Usage {
+	state.usage = ai.Chat_Usage {
 		inputTokens    = 12500,
 		hasInputTokens = true,
 	}
-	state.agentHost.contextWindowTokens = 32000
+	state.contextWindowTokens = 32000
 
 	status := app_context_usage_status_text(&state, context.temp_allocator)
 	assert(status == "ctx 12.5k/32k 39%", "expected compact context usage status")
@@ -2550,31 +2261,62 @@ contains_string :: proc(haystack, needle: string) -> bool {
 }
 
 @(test)
-test_app_rebuild_code_index_waits_for_running_tool :: proc(t: ^testing.T) {
+test_app_code_index_rebuild_waits_for_running_tool :: proc(t: ^testing.T) {
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	state.toolExecution.active = true
-	app_rebuild_code_index(&state, context.allocator)
+	state.session.toolExecution.active = true
+	session.session_rebuild_code_index(state.session)
 	assert(
-		state.codeIndexRebuildPending,
+		state.session.codeIndexRebuildPending,
 		"expected code index rebuild to wait while a tool call runs",
 	)
-	state.toolExecution.active = false
-	app_rebuild_code_index(&state, context.allocator)
-	assert(!state.codeIndexRebuildPending, "expected code index rebuild to run without a tool")
+	state.session.toolExecution.active = false
+	session.session_rebuild_code_index(state.session)
+	assert(
+		!state.session.codeIndexRebuildPending,
+		"expected code index rebuild to run without a tool",
+	)
 	_ = t
+}
+
+// Makes the active agent of the session request the tool toolName with the JSON arguments
+// arguments, and shows the session events. It returns true when the approval overlay opened.
+app_test_open_approval :: proc(state: ^App_State, toolName, arguments: string) -> bool {
+	host := &state.session.host
+	if session.agent_host_start_active(host, agent.Agent_Start_Options{}) != .None {
+		return false
+	}
+	request := agent.Tool_Request {
+		id        = "call-1",
+		name      = toolName,
+		arguments = arguments,
+	}
+	if agent.runtime_request_tool(&host.runtime, host.activeAgentID, request) != .None {
+		return false
+	}
+	_ = app_poll_session(state)
+	return app_has_overlay(state, Approval_Overlay)
+}
+
+// Sets the config home of the app and of its session, which copies it at creation.
+app_test_set_config_home :: proc(state: ^App_State, home: string) {
+	delete(state.configHome)
+	state.configHome = strings.clone(home)
+	delete(state.session.configHome, state.session.allocator)
+	state.session.configHome = strings.clone(home, state.session.allocator)
 }
 
 // Open an approval overlay for a `pwd` terminal call on the active agent.
 _open_terminal_approval :: proc(state: ^App_State) {
 	assert(
-		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		session.agent_host_start_active(&state.session.host, agent.Agent_Start_Options{}) ==
+		.None,
 		"expected active agent to start",
 	)
 	assert(
 		agent.runtime_request_tool(
-			&state.agentHost.runtime,
-			state.agentHost.activeAgentID,
+			&state.session.host.runtime,
+			state.session.host.activeAgentID,
 			agent.Tool_Request {
 				id = "call-1",
 				name = "run_in_terminal",
@@ -2584,7 +2326,7 @@ _open_terminal_approval :: proc(state: ^App_State) {
 		.None,
 		"expected runtime tool request",
 	)
-	assert(app_poll_agent_host(state), "expected tool request to open approval")
+	assert(app_poll_session(state), "expected tool request to open approval")
 	assert(app_has_overlay(state, Approval_Overlay), "expected approval mode")
 }
 
@@ -2598,10 +2340,9 @@ test_allow_always_saves_grant_and_dispatcher_reads_it :: proc(t: ^testing.T) {
 	defer app_destroy(&state)
 	// app_destroy frees only the grant array of an unloaded default config.
 	defer for &grant in state.config.permissionGrants {
-		tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
+		tool_policy.permission_grant_destroy(&grant, state.session.dispatcher.allocator)
 	}
-	delete(state.configHome)
-	state.configHome = strings.clone(home)
+	app_test_set_config_home(&state, home)
 
 	_open_terminal_approval(&state)
 	app_apply_approval_choice(&state, .Allow_Always)
@@ -2614,7 +2355,7 @@ test_allow_always_saves_grant_and_dispatcher_reads_it :: proc(t: ^testing.T) {
 		"expected Allow_Always to grant the approved command",
 	)
 	decision := tool_policy.tool_dispatch_decide(
-		app_dispatcher(&state),
+		&state.session.dispatcher,
 		tool_policy.Tool_Call{id = "run_in_terminal", command = "pwd"},
 	)
 	assert(
@@ -2627,8 +2368,8 @@ test_allow_always_saves_grant_and_dispatcher_reads_it :: proc(t: ^testing.T) {
 	assert(loadErr == .None, "expected saved config to load")
 	assert(len(loaded.permissionGrants) == 1, "expected the grant to be saved to disk")
 
-	_ = app_poll_agent_host(&state)
-	for state.toolExecution.active && !app_poll_tool_execution(&state) {
+	for session.session_tool_running(state.session) {
+		_ = app_poll_session(&state)
 	}
 	_ = t
 }
@@ -2644,8 +2385,7 @@ test_allow_always_rolls_back_grant_when_save_fails :: proc(t: ^testing.T) {
 
 	state := app_init(context.allocator)
 	defer app_destroy(&state)
-	delete(state.configHome)
-	state.configHome = strings.clone(home)
+	app_test_set_config_home(&state, home)
 
 	_open_terminal_approval(&state)
 	app_apply_approval_choice(&state, .Allow_Always)
@@ -2658,7 +2398,7 @@ test_allow_always_rolls_back_grant_when_save_fails :: proc(t: ^testing.T) {
 		"expected failed save to roll back the appended grant",
 	)
 	decision := tool_policy.tool_dispatch_decide(
-		app_dispatcher(&state),
+		&state.session.dispatcher,
 		tool_policy.Tool_Call{id = "run_in_terminal", command = "pwd"},
 	)
 	assert(

@@ -1,10 +1,7 @@
 #+vet explicit-allocators
 package main
 
-import "agent"
 import "ai"
-import "approval_safety"
-import "code_index"
 import "commands"
 import "console"
 import term_input "console/input"
@@ -16,6 +13,7 @@ import "core:strings"
 import "core:time"
 import "core:unicode/utf8"
 import "input_history"
+import "session"
 import "settings"
 import "text_input"
 import "tool_policy"
@@ -46,60 +44,6 @@ Overlay :: union {
 	Approval_Overlay,
 	widgets.Context_Menu,
 	widgets.Dropdown_List,
-}
-
-// Approval_Choice is the answer to a pending approval. It holds no UI types, so
-// it can move to the session package unchanged (ADR-0002).
-Approval_Choice :: enum int {
-	Allow_Once = 0,
-	Allow_Session,
-	Allow_Always,
-	Deny,
-}
-
-// Pending_Approval is the tool call that waits for an approval decision. It is
-// decision state only: the approval overlay keeps its view state in
-// Approval_View. historyIndex is the tool history line of the call; it goes
-// away when the session reports tool calls as events (ADR-0002).
-Pending_Approval :: struct {
-	call:           tool_policy.Tool_Call,
-	callOwned:      bool,
-	prepared:       tool_policy.Tool_Dispatch_Result,
-	preparedOwned:  bool,
-	historyIndex:   int,
-	agentID:        agent.Agent_ID,
-	agentRequestID: string,
-	safety:         approval_safety.State,
-}
-
-// Approval_View is the view state of the approval overlay.
-Approval_View :: struct {
-	choice: Approval_Choice,
-}
-
-// Approval_Request_Result tells the caller of app_request_approval what
-// happened to the call.
-Approval_Request_Result :: enum int {
-	// The call could not become a pending approval. Nothing was changed.
-	Rejected = 0,
-	// The call is pending and waits for a choice from the user.
-	Awaiting_Choice,
-	// The approval method settled the call. Nothing is pending.
-	Settled,
-}
-
-// Approval_Resolve_Result tells the caller of app_resolve_approval what
-// happened to the pending approval.
-Approval_Resolve_Result :: enum int {
-	// The call was approved or denied, and it is no longer pending.
-	Resolved = 0,
-	// The choice could not be applied (for example, a grant was not saved).
-	// The call stays pending.
-	Still_Pending,
-	// There is no pending approval.
-	No_Pending_Approval,
-	// The tool call ID does not match the pending approval.
-	Unknown_Tool_Call,
 }
 
 App_Setup_Step :: enum int {
@@ -222,24 +166,26 @@ App_State :: struct {
 	historyRenderOnly:       bool,
 	mouseSelectionPanel:     Mouse_Selection_Panel,
 	historySelection:        History_Selection,
-	config:                  settings.Mimir_Config,
+	// The config lives on the heap, so the session can keep a pointer to it while App_State
+	// moves by value.
+	config:                  ^settings.Mimir_Config,
 	configStringsOwned:      bool,
 	configHome:              string,
 	workingDirectory:        string,
 	setupStep:               App_Setup_Step,
 	setupEndpoint:           string,
 	setupAPIKey:             string,
-	dispatcher:              tool_policy.Tool_Dispatcher,
-	dispatcherReady:         bool,
-	approval:                Pending_Approval,
+	// The agent session: the agent loop, tools, approvals and transcript (ADR-0002).
+	session:                 ^session.Session,
 	approvalView:            Approval_View,
-	skills:                  settings.Skill_Registry,
-	codeIndex:               code_index.Code_Index,
-	codeIndexReady:          bool,
-	codeIndexRebuildPending: bool,
-	agentHost:               Agent_Host,
-	transcript:              Transcript,
-	toolExecution:           Tool_Execution_State,
+	// The history line that receives streamed assistant text, or -1.
+	assistantHistoryIndex:   int,
+	spinner:                 Assistant_Spinner,
+	toolHistory:             [dynamic]Tool_History_Line,
+	usage:                   ai.Chat_Usage,
+	contextWindowTokens:     int,
+	// The owned copy of a status text from a session event.
+	statusText:              string,
 	models:                  [dynamic]Model_Select_Entry,
 	modelProviderOwned:      bool,
 	modelNameOwned:          bool,
@@ -270,10 +216,8 @@ app_init_with_home :: proc(
 	state.allocator = allocator
 	state.screen = .Chat
 	state.overlayStack = make([dynamic]Overlay, 0, 4, allocator)
-	state.agentHost = agent_host_init(allocator)
-	state.transcript = transcript_init(allocator)
-	state.toolExecution.allocator = allocator
-	state.toolExecution.historyIndex = -1
+	state.assistantHistoryIndex = -1
+	state.toolHistory = make([dynamic]Tool_History_Line, 0, 16, allocator)
 	state.input = text_input.input_buffer_init(allocator)
 	state.inputHistory = make([dynamic]string, 0, 32, allocator)
 	state.inputHistoryCursor = -1
@@ -290,19 +234,14 @@ app_init_with_home :: proc(
 		state.workingDirectory = workingDirectory
 	}
 	ai.set_raw_http_log_home(state.configHome)
-	state.config = settings.default_ollama_config(allocator)
-	state.skills = settings.skill_registry_init(allocator)
+	state.config = new(settings.Mimir_Config, allocator)
+	state.config^ = settings.default_ollama_config(allocator)
 	app_bootstrap_config(&state, home, probeOllama, allocator)
-	settings.skill_registry_load(&state.skills, home, state.workingDirectory)
-	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
 	app_load_input_history(&state, allocator)
-	app_rebuild_code_index(&state, allocator)
-	// The persistent grant pointer is bound by app_dispatcher, not here: this
-	// proc returns App_State by value, so the address of state.config is not
-	// final until the caller holds the state.
-	state.dispatcher, state.dispatcherReady = tool_policy.tool_dispatcher_init(
-		state.workingDirectory,
-		nil,
+	// The session keeps the config pointer, which stays valid when App_State moves.
+	state.session, _ = session.session_create(
+		state.config,
+		session.session_options_from_config(state.config, state.workingDirectory, home),
 		allocator,
 	)
 	state.models = make([dynamic]Model_Select_Entry, 0, 16, allocator)
@@ -323,13 +262,13 @@ app_bootstrap_config :: proc(
 		switch loadErr {
 		case .None:
 			if state.configStringsOwned {
-				settings.config_destroy(&state.config)
+				settings.config_destroy(state.config)
 			} else {
 				delete(state.config.providers)
 				delete(state.config.disabledSkills)
 				delete(state.config.permissionGrants)
 			}
-			state.config = loaded
+			state.config^ = loaded
 			state.configStringsOwned = true
 			state.status = "Config loaded"
 		case .Not_Found:
@@ -350,7 +289,7 @@ app_bootstrap_config :: proc(
 
 	ai.clear_interfaces()
 	registerResult := app_register_config_interfaces(
-		state.config,
+		state.config^,
 		probeOllama && state.screen != .Setup,
 		allocator,
 	)
@@ -386,7 +325,7 @@ app_create_default_config_from_ollama :: proc(
 		}
 	}
 
-	if settings.save_config_to_file(home, state.config) == .None {
+	if settings.save_config_to_file(home, state.config^) == .None {
 		state.status = "Default Ollama config saved"
 	} else {
 		state.status = "Default Ollama config created; save failed"
@@ -494,9 +433,13 @@ app_destroy :: proc(state: ^App_State) {
 		app_destroy_overlay(overlay)
 	}
 	delete(state.overlayStack)
-	agent_host_destroy(&state.agentHost)
-	app_destroy_tool_execution(&state.toolExecution)
-	transcript_destroy(&state.transcript)
+	// The session uses the config, so it goes first.
+	session.session_destroy(state.session)
+	state.session = nil
+	app_clear_approval_view(state)
+	app_clear_tool_history(state)
+	delete(state.toolHistory)
+	delete(state.statusText, context.allocator)
 	text_input.input_buffer_destroy(&state.input)
 	delete(state.inputState.paste_buf)
 	for entry in state.inputHistory {
@@ -510,15 +453,8 @@ app_destroy :: proc(state: ^App_State) {
 		delete(entry.content, context.allocator)
 	}
 	delete(state.history)
-	app_clear_approval(state)
-	if state.dispatcherReady {
-		tool_policy.tool_dispatcher_destroy(&state.dispatcher)
-	}
-	if state.codeIndexReady {
-		code_index.code_index_destroy(&state.codeIndex, context.allocator)
-	}
 	if state.configStringsOwned {
-		settings.config_destroy(&state.config)
+		settings.config_destroy(state.config)
 	} else {
 		for &provider in state.config.providers {
 			settings.provider_config_destroy(&provider, context.allocator)
@@ -547,7 +483,6 @@ app_destroy :: proc(state: ^App_State) {
 	if state.setupAPIKey != "" {
 		delete(state.setupAPIKey, context.allocator)
 	}
-	settings.skill_registry_destroy(&state.skills)
 	if !state.configStringsOwned {
 		if state.modelProviderOwned && state.config.selectedProvider != "" {
 			delete(state.config.selectedProvider, context.allocator)
@@ -572,6 +507,8 @@ app_destroy :: proc(state: ^App_State) {
 	delete(state.configSettings)
 	widgets.text_editor_destroy(&state.configEditor)
 	delete(state.models)
+	free(state.config, state.allocator)
+	state.config = nil
 	ai.clear_interfaces()
 }
 
@@ -659,20 +596,13 @@ run_app :: proc() {
 			frameDirty = true
 			historyDirty = false
 		}
-		if app_poll_tool_execution(&state) {
-			frameDirty = true
-		}
-		if app_poll_agent_host(&state) {
+		if app_poll_session(&state) {
 			frameDirty = true
 			if state.historyRenderOnly {
 				historyDirty = true
 				state.historyRenderOnly = false
 				frameDirty = false
 			}
-		}
-		if app_poll_pending_approval(&state) {
-			app_sync_approval_overlay(&state)
-			frameDirty = true
 		}
 		if app_tick_menu_overlay(&state) {
 			frameDirty = true
@@ -726,39 +656,6 @@ append_history :: proc(state: ^App_State, role: History_Role, content: string) {
 		&state.history,
 		History_Entry{role = role, content = strings.clone(content, context.allocator)},
 	)
-	state.historyScrollOffset = 0
-	state.historySelection = {}
-}
-
-app_tool_history_content :: proc(call: tool_policy.Tool_Call, status: string) -> string {
-	return app_tool_history_line(call.id, app_tool_call_target(call), status)
-}
-
-app_append_tool_history :: proc(
-	state: ^App_State,
-	call: tool_policy.Tool_Call,
-	status: string,
-) -> int {
-	append_history(state, .Tool, app_tool_history_content(call, status))
-	return len(state.history) - 1
-}
-
-app_update_tool_history :: proc(
-	state: ^App_State,
-	historyIndex: int,
-	call: tool_policy.Tool_Call,
-	status: string,
-) {
-	if historyIndex < 0 || historyIndex >= len(state.history) {
-		return
-	}
-	entry := &state.history[historyIndex]
-	if entry.content != "" {
-		delete(entry.content, context.allocator)
-	}
-	entry.content = strings.clone(app_tool_history_content(call, status), context.allocator)
-	entry.cachedLineWidth = 0
-	entry.cachedLineCount = 0
 	state.historyScrollOffset = 0
 	state.historySelection = {}
 }
@@ -1206,7 +1103,7 @@ app_dispatch_input_event :: proc(state: ^App_State, event: term_input.Input_Even
 			return app_handle_approval_event_with_safety_ready(
 				state,
 				event,
-				pending_approval_safety_ready(&state.approval),
+				app_approval_safety_ready(state),
 			)
 		case Config_Overlay:
 			return app_handle_config_event(state, event)
@@ -1498,212 +1395,21 @@ app_handle_chat_event :: proc(state: ^App_State, event: term_input.Input_Event) 
 	return false
 }
 
-// Return the app's dispatcher bound to the shared config's persistent grants.
-// The binding stores a pointer to state.config.permissionGrants, so appends,
-// pops and array growth need no resync. It is redone here because App_State
-// can move by value (app_init returns it), which changes that address.
-app_dispatcher :: proc(state: ^App_State) -> ^tool_policy.Tool_Dispatcher {
-	state.dispatcher.persistentGrants = &state.config.permissionGrants
-	return &state.dispatcher
-}
-
-// The approval decision logic starts here. These procedures decide and settle
-// tool approvals: the approval method, the safety verdict and the grants. They
-// do not use overlays or other UI types, so they can move to the session
-// package (ADR-0002). The approval overlay section below them shows the
-// pending approval and turns keys into approval choices. app_resolve_approval
-// follows the overlay section.
-
-// app_approval_pending reports whether a tool call waits for an approval
-// decision.
-app_approval_pending :: proc(state: ^App_State) -> bool {
-	return state.approval.callOwned && state.approval.preparedOwned
-}
-
-// app_prepare_approval makes call the pending approval and starts the safety
-// classifier when the approval method uses it. It does not run the approval
-// method. It returns false and changes nothing when the dispatcher is not
-// ready, another approval is pending, or the call does not need approval.
-app_prepare_approval :: proc(
-	state: ^App_State,
-	call: tool_policy.Tool_Call,
-	agentID: agent.Agent_ID,
-	requestID: string,
-) -> bool {
-	if !state.dispatcherReady || app_approval_pending(state) {
-		return false
-	}
-
-	approvalCall := tool_policy.tool_call_clone(call, state.dispatcher.allocator)
-	prepared := tool_policy.tool_dispatch_prepare(app_dispatcher(state), approvalCall)
-	if prepared.decision != .Approval_Required || !prepared.actionOK {
-		tool_policy.tool_dispatch_result_destroy(&prepared, state.dispatcher.allocator)
-		tool_policy.tool_call_destroy(&approvalCall, state.dispatcher.allocator)
-		return false
-	}
-
-	app_clear_approval(state)
-	state.approval.call = approvalCall
-	state.approval.callOwned = true
-	state.approval.prepared = prepared
-	state.approval.preparedOwned = true
-	state.approval.historyIndex = -1
-	state.approval.agentID = agentID
-	if requestID != "" {
-		state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
-	}
-	if state.config.approvalMethod == .Approve_Safe ||
-	   (state.config.approvalMethod == .Always_Ask && prepared.action.effect == .Execute) {
-		pending_approval_start_safety(&state.approval, state.config, state.dispatcher.allocator)
-	}
-	return true
-}
-
-// app_request_approval makes an agent tool call the pending approval, records
-// its tool history line and runs the approval method. Approve_All and Deny_All
-// settle the call here. Otherwise the call waits for a choice, or, under
-// Approve_Safe, for the safety verdict (see app_poll_pending_approval).
-app_request_approval :: proc(
-	state: ^App_State,
-	call: tool_policy.Tool_Call,
-	agentID: agent.Agent_ID,
-	requestID: string,
-) -> Approval_Request_Result {
-	if !app_prepare_approval(state, call, agentID, requestID) {
-		return .Rejected
-	}
-	state.approval.historyIndex = app_show_agent_output(
-		state,
-		app_agent_tool_call(call, .Awaiting_Approval, -1),
-	)
-	_ = app_apply_approval_method(state)
-	if app_approval_pending(state) {
-		return .Awaiting_Choice
-	}
-	return .Settled
-}
-
-// app_apply_approval_method applies the configured approval method to the
-// pending approval. It returns true when the method chose for the user.
-app_apply_approval_method :: proc(state: ^App_State) -> bool {
-	if !app_approval_pending(state) {
-		return false
-	}
-	toolCallID := state.approval.agentRequestID
-	switch state.config.approvalMethod {
-	case .Always_Ask:
-		return false
-	case .Approve_All:
-		_ = app_resolve_approval(state, toolCallID, .Allow_Once)
-		return true
-	case .Deny_All:
-		_ = app_resolve_approval(state, toolCallID, .Deny)
-		return true
-	case .Approve_Safe:
-		if !app_safety_allows_automatic_approval(
-			pending_approval_safety_ready(&state.approval),
-			pending_approval_safety_unavailable(&state.approval),
-			pending_approval_safety_verdict(&state.approval),
-		) {
-			return false
-		}
-		_ = app_resolve_approval(state, toolCallID, .Allow_Once)
-		return true
-	}
-	return false
-}
-
-app_safety_allows_automatic_approval :: proc(
-	ready, unavailable: bool,
-	verdict: approval_safety.Verdict,
-) -> bool {
-	return ready && !unavailable && verdict == .Safe
-}
-
-// app_poll_pending_approval advances the safety classifier of the pending
-// approval. When the classifier finishes, it runs the approval method again,
-// so Approve_Safe approves a safe call by itself. It returns true when the
-// classifier finished.
-app_poll_pending_approval :: proc(state: ^App_State) -> bool {
-	if !app_approval_pending(state) || !pending_approval_poll_safety(&state.approval) {
-		return false
-	}
-	_ = app_apply_approval_method(state)
-	return true
-}
-
-app_clear_approval :: proc(state: ^App_State) {
-	pending_approval_destroy(&state.approval, state.dispatcher.allocator)
-}
-
-pending_approval_destroy :: proc(approval: ^Pending_Approval, allocator: mem.Allocator) {
-	app_destroy_approval_safety(&approval.safety)
-	if approval.callOwned {
-		tool_policy.tool_call_destroy(&approval.call, allocator)
-	}
-	if approval.preparedOwned {
-		tool_policy.tool_dispatch_result_destroy(&approval.prepared, allocator)
-	}
-	delete(approval.agentRequestID, allocator)
-	approval^ = {}
-}
-
-// The approval overlay section starts here. The overlay only shows and hides
-// as a result of the decision logic.
-
-// app_sync_approval_overlay shows the approval overlay while an approval waits
-// for a choice, and hides it when nothing is pending.
-app_sync_approval_overlay :: proc(state: ^App_State) {
-	if !app_approval_pending(state) {
-		app_pop_overlay_if(state, Approval_Overlay)
-		return
-	}
-	for overlay in state.overlayStack {
-		if _, isApproval := overlay.(Approval_Overlay); isApproval {
-			return
-		}
-	}
-	state.approvalView = Approval_View {
-		choice = .Allow_Once,
-	}
-	app_push_overlay(state, Approval_Overlay{})
-	state.status = "Permission approval required"
-}
-
-// app_show_approval makes call the pending approval and shows the approval
-// overlay, without an agent request and without running the approval method.
-app_show_approval :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> bool {
-	if !app_prepare_approval(state, call, agent.Agent_ID(0), "") {
-		return false
-	}
-	app_sync_approval_overlay(state)
-	return true
-}
-
-// app_apply_approval_choice applies choice to the pending approval, then shows
-// or hides the approval overlay to match. Overlay keys and the headless
-// harness use it.
-app_apply_approval_choice :: proc(state: ^App_State, choice: Approval_Choice) {
-	_ = app_resolve_approval(state, state.approval.agentRequestID, choice)
-	app_sync_approval_overlay(state)
-}
+// The approval overlay shows the pending approval of the session and turns keys
+// into approval choices. The decision logic is in the session package.
 
 app_move_approval_choice :: proc(state: ^App_State, delta: int) {
 	choice := int(state.approvalView.choice) + delta
-	if choice < int(Approval_Choice.Allow_Once) {
-		choice = int(Approval_Choice.Deny)
-	} else if choice > int(Approval_Choice.Deny) {
-		choice = int(Approval_Choice.Allow_Once)
+	if choice < int(session.Approval_Choice.Allow_Once) {
+		choice = int(session.Approval_Choice.Deny)
+	} else if choice > int(session.Approval_Choice.Deny) {
+		choice = int(session.Approval_Choice.Allow_Once)
 	}
-	state.approvalView.choice = Approval_Choice(choice)
+	state.approvalView.choice = session.Approval_Choice(choice)
 }
 
 app_handle_approval_input :: proc(state: ^App_State, b: byte) -> bool {
-	return app_handle_approval_input_with_safety_ready(
-		state,
-		b,
-		pending_approval_safety_ready(&state.approval),
-	)
+	return app_handle_approval_input_with_safety_ready(state, b, app_approval_safety_ready(state))
 }
 
 // app_handle_approval_input_with_safety_ready is a byte-based wrapper kept for
@@ -1789,106 +1495,6 @@ app_handle_approval_event_with_safety_ready :: proc(
 	case:
 	}
 	return false
-}
-
-// app_resolve_approval is part of the approval decision logic. It applies
-// choice to the pending approval with the tool call ID toolCallID.
-// Allow_Session adds a grant to the dispatcher; Allow_Always appends a grant
-// to the config and saves the config. It does not show or hide the approval
-// overlay.
-app_resolve_approval :: proc(
-	state: ^App_State,
-	toolCallID: string,
-	choice: Approval_Choice,
-) -> Approval_Resolve_Result {
-	if !app_approval_pending(state) {
-		return .No_Pending_Approval
-	}
-	if toolCallID != state.approval.agentRequestID {
-		return .Unknown_Tool_Call
-	}
-
-	if choice == .Deny {
-		output := "Permission denied."
-		if state.approval.historyIndex >= 0 {
-			app_update_tool_history(
-				state,
-				state.approval.historyIndex,
-				state.approval.call,
-				"denied",
-			)
-		}
-		if !agent.agent_id_is_none(state.approval.agentID) && state.approval.agentRequestID != "" {
-			_ = agent.runtime_resolve_tool(
-				&state.agentHost.runtime,
-				state.approval.agentID,
-				state.approval.agentRequestID,
-				.Denied,
-				output,
-			)
-		}
-		state.status = "Tool call denied"
-		app_clear_approval(state)
-		return .Resolved
-	}
-
-	if choice == .Allow_Session || choice == .Allow_Always {
-		grant, grantOK := tool_policy.tool_dispatch_grant_from_action(
-			state.approval.prepared.action,
-			state.dispatcher.allocator,
-		)
-		if !grantOK {
-			state.status = "Tool call requires one-time approval"
-			return .Still_Pending
-		}
-
-		if choice == .Allow_Session {
-			grantOK = tool_policy.tool_dispatcher_add_session_grant(&state.dispatcher, grant)
-			tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
-		} else {
-			append(&state.config.permissionGrants, grant)
-			if state.configHome != "" &&
-			   settings.save_config_to_file(state.configHome, state.config) != .None {
-				grant = pop(&state.config.permissionGrants)
-				tool_policy.permission_grant_destroy(&grant, state.dispatcher.allocator)
-				state.status = "Permission grant could not be saved"
-				return .Still_Pending
-			}
-		}
-
-		if !grantOK {
-			state.status = "Permission grant could not be added"
-			return .Still_Pending
-		}
-	}
-
-	if agent.agent_id_is_none(state.approval.agentID) || state.approval.agentRequestID == "" {
-		state.status = "Tool call is no longer active"
-		app_clear_approval(state)
-		return .Resolved
-	}
-
-	if state.approval.historyIndex < 0 {
-		state.approval.historyIndex = app_append_tool_history(
-			state,
-			state.approval.call,
-			"running",
-		)
-	} else {
-		app_update_tool_history(state, state.approval.historyIndex, state.approval.call, "running")
-	}
-	started := app_start_agent_tool_execution(
-		state,
-		state.approval.call,
-		state.approval.historyIndex,
-		state.approval.agentID,
-		state.approval.agentRequestID,
-	)
-	app_clear_approval(state)
-	if !started {
-		state.status = "Tool call could not start"
-	}
-	return .Resolved
 }
 
 app_handle_cursor_escape :: proc(state: ^App_State, input: byte, extend: bool) -> bool {
@@ -2007,12 +1613,11 @@ app_load_input_history :: proc(state: ^App_State, allocator := context.allocator
 }
 
 app_clear_input_history :: proc(state: ^App_State) {
-	if app_agent_host_stream_active(state) {
-		app_cancel_agent_host_stream(state)
+	if session.session_turn_active(state.session) {
+		app_cancel_session(state)
 	}
-	state.agentHost.historyIndex = -1
-	state.agentHost.thinking = false
-	state.agentHost.spinnerVisible = false
+	state.assistantHistoryIndex = -1
+	state.spinner = {}
 	for &entry in state.inputHistory {
 		delete(entry, state.allocator)
 		entry = ""
@@ -2024,7 +1629,8 @@ app_clear_input_history :: proc(state: ^App_State) {
 		entry = {}
 	}
 	clear(&state.history)
-	transcript_clear(&state.transcript)
+	app_clear_tool_history(state)
+	session.session_clear_transcript(state.session)
 	state.historyScrollOffset = 0
 	state.historySelection = {}
 
@@ -2301,14 +1907,23 @@ app_submit_input :: proc(state: ^App_State) {
 
 	app_record_input_history(state, text)
 
-	if app_agent_host_stream_active(state) {
+	if session.session_turn_active(state.session) {
 		state.status = "Assistant stream already active; use /stop first"
 		return
 	}
 
 	append_history(state, .User, text)
-	transcript_append_user(&state.transcript, text)
-	_ = app_start_agent_host_stream(state)
+	submitErr := session.session_submit(state.session, text)
+	if submitErr == .Busy {
+		state.status = "Assistant stream already active; use /stop first"
+	} else if submitErr == .None {
+		// Placeholder entry gives the spinner somewhere to render while the provider is
+		// processing.
+		append_history(state, .Assistant, "")
+		state.assistantHistoryIndex = len(state.history) - 1
+		state.status = "Streaming assistant response"
+	}
+	_ = app_drain_session_events(state)
 }
 
 app_run_in_terminal :: proc(state: ^App_State, command: commands.Parsed_Command) {
@@ -2323,7 +1938,7 @@ app_run_in_terminal :: proc(state: ^App_State, command: commands.Parsed_Command)
 		append_history(state, .Note, helpText)
 		state.status = "Help displayed"
 	case commands.Slash_Command.Stop:
-		app_cancel_agent_host_stream(state)
+		app_cancel_session(state)
 	case commands.Slash_Command.Clear:
 		app_clear_input_history(state)
 	case commands.Slash_Command.Unknown:
@@ -2371,7 +1986,7 @@ app_complete_setup :: proc(state: ^App_State) {
 	delete(state.config.providers)
 	delete(state.config.disabledSkills)
 	delete(state.config.permissionGrants)
-	state.config = settings.default_ollama_config(context.allocator)
+	state.config^ = settings.default_ollama_config(context.allocator)
 	state.config.providers[0].endpoint = strings.clone(state.setupEndpoint, context.allocator)
 	state.config.providers[0].endpointOwned = true
 	state.config.providers[0].apiKey = strings.clone(state.setupAPIKey, context.allocator)
@@ -2396,7 +2011,8 @@ app_complete_setup :: proc(state: ^App_State) {
 	)
 
 	state.screen = .Chat
-	if settings.save_config_to_file(state.configHome, state.config) == .None {
+	app_sync_session_settings(state)
+	if settings.save_config_to_file(state.configHome, state.config^) == .None {
 		state.status = "Setup complete; config saved"
 	} else {
 		state.status = "Setup complete; config save failed"
@@ -2404,7 +2020,7 @@ app_complete_setup :: proc(state: ^App_State) {
 }
 
 app_show_config :: proc(state: ^App_State) {
-	if app_agent_host_stream_active(state) {
+	if session.session_turn_active(state.session) {
 		state.status = "Assistant stream active; use /stop before changing config"
 		return
 	}
@@ -2544,14 +2160,14 @@ app_rebuild_config_settings :: proc(state: ^App_State) {
 		append(&state.configSettings, Config_Setting{id = .Stall_Timeout, kind = .Text})
 	case .Skills:
 		append(&state.configSettings, Config_Setting{id = .Refresh_Skills, kind = .Button})
-		for index := 0; index < settings.skill_registry_count(&state.skills); index += 1 {
+		for index := 0; index < settings.skill_registry_count(&state.session.skills); index += 1 {
 			append(
 				&state.configSettings,
 				Config_Setting{id = .Skill_Toggle, kind = .Checkbox, skillIndex = index},
 			)
 		}
 		for index := 0;
-		    index < settings.skill_registry_diagnostic_count(&state.skills);
+		    index < settings.skill_registry_diagnostic_count(&state.session.skills);
 		    index += 1 {
 			append(
 				&state.configSettings,
@@ -2701,12 +2317,11 @@ app_activate_config_setting :: proc(state: ^App_State) -> bool {
 }
 
 app_toggle_skill :: proc(state: ^App_State, index: int) {
-	skill, ok := settings.skill_registry_skill_at(&state.skills, index)
+	skill, ok := settings.skill_registry_skill_at(&state.session.skills, index)
 	if !ok {
 		return
 	}
-	enabled := !settings.skill_is_enabled(skill)
-	settings.skill_set_enabled(skill, enabled)
+	enabled := !app_skill_enabled(state, skill)
 	if enabled {
 		for disabledSkillIndex := 0;
 		    disabledSkillIndex < len(state.config.disabledSkills);
@@ -2723,16 +2338,28 @@ app_toggle_skill :: proc(state: ^App_State, index: int) {
 			strings.clone(settings.skill_name(skill), context.allocator),
 		)
 	}
+	// A running tool can read the skill registry, so the session applies the change when the
+	// tool call ends. The config screen shows the config value at once.
+	session.session_apply_skill_settings(state.session)
 	app_apply_config_change(state, "Skill setting saved")
 }
 
+// Reports whether skill is enabled in the config.
+app_skill_enabled :: proc(state: ^App_State, skill: ^settings.Skill) -> bool {
+	name := settings.skill_name(skill)
+	for disabledName in state.config.disabledSkills {
+		if disabledName == name {
+			return false
+		}
+	}
+	return true
+}
+
 app_refresh_skills :: proc(state: ^App_State) {
-	if app_agent_host_stream_active(state) {
+	if session.session_reload_skills(state.session) == .Busy {
 		state.status = "Stop the active agent before refreshing skills"
 		return
 	}
-	settings.skill_registry_load(&state.skills, state.configHome, state.workingDirectory)
-	settings.skill_registry_apply_disabled(&state.skills, state.config.disabledSkills[:])
 	app_rebuild_config_settings(state)
 	state.status = "Skills refreshed"
 }
@@ -2879,7 +2506,7 @@ app_begin_config_edit :: proc(state: ^App_State, setting: Config_Setting) {
 	case .Provider_Context_Window:
 		value = fmt.tprintf(
 			"%d",
-			settings.config_context_window_tokens(&state.config, provider.name, provider.model),
+			settings.config_context_window_tokens(state.config, provider.name, provider.model),
 		)
 	case:
 		return
@@ -3042,7 +2669,7 @@ app_commit_config_edit :: proc(state: ^App_State) {
 		provider := state.config.providers[setting.providerIndex]
 		if provider.model == "" ||
 		   !settings.config_set_context_window_tokens(
-				   &state.config,
+				   state.config,
 				   provider.name,
 				   provider.model,
 				   tokens,
@@ -3158,7 +2785,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 			if contextWindowErr == .None && contextWindowTokens > 0 {
 				contextWindowsChanged =
 					settings.config_update_context_window_tokens(
-						&state.config,
+						state.config,
 						provider.name,
 						model.name,
 						contextWindowTokens,
@@ -3171,7 +2798,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 			if model.contextWindowTokens > 0 {
 				contextWindowsChanged =
 					settings.config_update_context_window_tokens(
-						&state.config,
+						state.config,
 						provider.name,
 						model.name,
 						model.contextWindowTokens,
@@ -3203,7 +2830,7 @@ app_refresh_config_models :: proc(state: ^App_State, providerIndex: int) {
 	app_rebuild_config_settings(state)
 	if contextWindowsChanged &&
 	   state.configHome != "" &&
-	   settings.save_config_to_file(state.configHome, state.config) != .None {
+	   settings.save_config_to_file(state.configHome, state.config^) != .None {
 		state.status = "Provider models refreshed; context window save failed"
 		return
 	}
@@ -3335,62 +2962,25 @@ app_apply_config_change :: proc(state: ^App_State, successStatus: string) {
 		ai.add_interface(provider.name, provider.type, provider.endpoint)
 	}
 	app_rebuild_model_entries(state, context.allocator)
+	app_sync_session_settings(state)
 	if state.configHome != "" &&
-	   settings.save_config_to_file(state.configHome, state.config) != .None {
+	   settings.save_config_to_file(state.configHome, state.config^) != .None {
 		state.status = "Config changed; save failed"
 		return
 	}
-	app_rebuild_code_index(state, context.allocator)
+	session.session_rebuild_code_index(state.session)
 	state.status = successStatus
 }
 
-app_rebuild_code_index :: proc(state: ^App_State, allocator := context.allocator) {
-	// A running tool call can use the code index, so rebuild it after the tool call ends.
-	if state.toolExecution.active {
-		state.codeIndexRebuildPending = true
-		return
-	}
-	state.codeIndexRebuildPending = false
-	if state.codeIndexReady {
-		code_index.code_index_destroy(&state.codeIndex, allocator)
-		state.codeIndexReady = false
-	}
-	if state.configHome == "" ||
-	   state.workingDirectory == "" ||
-	   state.config.embeddingProvider == "" ||
-	   state.config.embeddingModel == "" {
-		return
-	}
-
-	cacheDir := input_history.cache_directory(state.configHome, allocator)
-	defer delete(cacheDir, allocator)
-	index, initError := code_index.code_index_init(
-		state.workingDirectory,
-		cacheDir,
-		state.config.embeddingProvider,
-		state.config.embeddingModel,
-		allocator,
+// Gives the session the model and the approval method of the config. The config screen and
+// the headless harness change them in the config.
+app_sync_session_settings :: proc(state: ^App_State) {
+	session.session_set_model(
+		state.session,
+		state.config.selectedProvider,
+		state.config.selectedModel,
 	)
-	if initError != .None {
-		return
-	}
-	state.codeIndex = index
-	state.codeIndexReady = true
-	_ = code_index.code_index_load(&state.codeIndex, allocator)
-}
-
-app_embedding_client :: proc(state: ^App_State) -> (ai.Client, ai.AI_Error) {
-	if state == nil || state.config.embeddingProvider == "" || state.config.embeddingModel == "" {
-		return ai.Client{}, .Invalid_Request
-	}
-	provider, providerOK := app_find_provider(state.config, state.config.embeddingProvider)
-	if !providerOK || !provider.enabled {
-		return ai.Client{}, .Interface_Not_Found
-	}
-	if provider.type != .Ollama && provider.type != .OpenAI {
-		return ai.Client{}, .Unsupported_Interface
-	}
-	return ai.new_client(provider.name, provider.apiKey)
+	session.session_set_approval_method(state.session, state.config.approvalMethod)
 }
 
 app_clear_model_entries :: proc(state: ^App_State) {
@@ -3461,21 +3051,6 @@ app_append_model_entry :: proc(
 			supportsEmbeddings = supportsEmbeddings,
 		},
 	)
-}
-
-app_find_provider :: proc(
-	config: settings.Mimir_Config,
-	name: string,
-) -> (
-	settings.Provider_Config,
-	bool,
-) {
-	for provider in config.providers {
-		if provider.name == name {
-			return provider, true
-		}
-	}
-	return settings.Provider_Config{}, false
 }
 
 app_model_list_text :: proc(models: []string, allocator := context.allocator) -> string {
