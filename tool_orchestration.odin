@@ -19,11 +19,23 @@ SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
 SEARCH_CODE_MAX_RESULTS :: 10
 SPINNER_FRAMES :: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// What a tool call can use while it runs on the worker thread. The main thread does not change
+// these while the tool runs.
+Tool_Execution_Context :: struct {
+	dispatcher:      ^tool_policy.Tool_Dispatcher,
+	skills:          ^settings.Skill_Registry,
+	// nil when no code index is configured.
+	codeIndex:       ^code_index.Code_Index,
+	// The embedding client that search_code uses, or the error from creating it.
+	embeddingClient: ai.Client,
+	embeddingError:  ai.AI_Error,
+}
+
 Tool_Execution_State :: struct {
 	mutex:          sync.Mutex,
 	allocator:      mem.Allocator,
 	worker:         ^thread.Thread,
-	app:            ^App_State,
+	toolContext:    Tool_Execution_Context,
 	call:           tool_policy.Tool_Call,
 	result:         string,
 	resultOwned:    bool,
@@ -79,39 +91,6 @@ app_destroy_tool_execution :: proc(execution: ^Tool_Execution_State) {
 	execution^ = {}
 }
 
-app_build_ai_messages :: proc(
-	history: []History_Entry,
-	systemPrompt: string,
-	allocator := context.allocator,
-) -> [dynamic]ai.Message {
-	messages := make([dynamic]ai.Message, 0, len(history) + 1, allocator)
-	if systemPrompt != "" {
-		append(
-			&messages,
-			ai.Message{role = .System, content = strings.clone(systemPrompt, allocator)},
-		)
-	}
-	for entry in history {
-		if entry.content == "" {
-			continue
-		}
-		if entry.role == .System {
-			continue
-		}
-
-		role, ok := app_ai_role_from_history_role(entry.role)
-		if !ok {
-			continue
-		}
-
-		append(
-			&messages,
-			ai.Message{role = role, content = strings.clone(entry.content, allocator)},
-		)
-	}
-	return messages
-}
-
 app_start_agent_tool_execution :: proc(
 	state: ^App_State,
 	call: tool_policy.Tool_Call,
@@ -149,7 +128,7 @@ app_start_tool_execution_for_agent :: proc(
 	if execution.active || call.id == "" {
 		return false
 	}
-	execution.app = state
+	execution.toolContext = app_tool_execution_context(state, call)
 	execution.call = tool_policy.tool_call_clone(call, execution.allocator)
 	execution.historyIndex = historyIndex
 	execution.agentID = agentID
@@ -159,18 +138,40 @@ app_start_tool_execution_for_agent :: proc(
 	execution.worker = thread.create(tool_execution_worker_proc)
 	execution.worker.data = rawptr(execution)
 	thread.start(execution.worker)
-	state.status = "Tool call running"
+	_ = app_show_agent_output(state, Agent_Notice{text = "Tool call running"})
 	return true
+}
+
+// Collects what the tool call uses on the worker thread. Runs on the main thread.
+app_tool_execution_context :: proc(
+	state: ^App_State,
+	call: tool_policy.Tool_Call,
+) -> Tool_Execution_Context {
+	toolContext := Tool_Execution_Context {
+		dispatcher     = &state.dispatcher,
+		skills         = &state.skills,
+		embeddingError = .Invalid_Request,
+	}
+	if call.id == "search_code" {
+		if !state.codeIndexReady {
+			app_rebuild_code_index(state, state.dispatcher.allocator)
+		}
+		toolContext.embeddingClient, toolContext.embeddingError = app_embedding_client(state)
+	}
+	if state.codeIndexReady {
+		toolContext.codeIndex = &state.codeIndex
+	}
+	return toolContext
 }
 
 tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	execution := cast(^Tool_Execution_State)workerThread.data
-	output := app_execute_tool_call(execution.app, execution.call)
+	output := app_execute_tool_call(execution.toolContext, execution.call)
 	outputOwned := app_tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
 		if execution.call.id == "search_code" || execution.call.id == "find_code" {
-			delete(output, execution.app.dispatcher.allocator)
+			delete(output, execution.toolContext.dispatcher.allocator)
 		} else {
 			delete(output, context.allocator)
 		}
@@ -206,10 +207,15 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	agentID := execution.agentID
 	agentRequestID := execution.agentRequestID
 	isError := app_tool_output_is_error(output)
-	if isError {
-		app_update_tool_history(state, execution.historyIndex, execution.call, "failed")
-	} else {
-		app_update_tool_history(state, execution.historyIndex, execution.call, "completed")
+	if execution.historyIndex >= 0 {
+		toolStatus := Agent_Tool_Status.Completed
+		if isError {
+			toolStatus = .Failed
+		}
+		_ = app_show_agent_output(
+			state,
+			app_agent_tool_call(execution.call, toolStatus, execution.historyIndex, output),
+		)
 	}
 	if !agent.agent_id_is_none(agentID) && agentRequestID != "" {
 		_ = agent.runtime_finish_tool(&state.agentHost.runtime, agentID, output, isError)
@@ -220,16 +226,19 @@ app_poll_tool_execution :: proc(state: ^App_State) -> bool {
 	execution.call = {}
 	execution.result = ""
 	execution.resultOwned = false
-	execution.app = nil
+	execution.toolContext = {}
 	execution.historyIndex = -1
 	execution.agentID = agent.Agent_ID(0)
 	execution.agentRequestID = ""
 	execution.active = false
 	execution.finished = false
 	if isError {
-		state.status = "Tool call failed"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call failed"})
 	} else {
-		state.status = "Tool call completed"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call completed"})
+	}
+	if state.codeIndexRebuildPending {
+		app_rebuild_code_index(state, context.allocator)
 	}
 	return true
 }
@@ -338,56 +347,137 @@ app_tool_call_from_ai :: proc(
 	return call, true
 }
 
-app_execute_tool_call :: proc(state: ^App_State, call: tool_policy.Tool_Call) -> string {
+// Runs a tool call on the worker thread. It uses only what toolContext gives it.
+app_execute_tool_call :: proc(
+	toolContext: Tool_Execution_Context,
+	call: tool_policy.Tool_Call,
+) -> string {
+	dispatcher := toolContext.dispatcher
 	if call.id == builtin_tools.TOOL_READ_SKILL {
 		if call.content != "" {
 			result, ok := settings.skill_registry_read_resource(
-				&state.skills,
+				toolContext.skills,
 				call.query,
 				call.content,
 			)
 			if !ok {
 				return strings.concatenate(
 					{"Error reading skill resource: ", result},
-					state.dispatcher.allocator,
+					dispatcher.allocator,
 				)
 			}
 			return result
 		}
-		result, ok := settings.skill_registry_read(&state.skills, call.query)
+		result, ok := settings.skill_registry_read(toolContext.skills, call.query)
 		if !ok {
-			return strings.concatenate(
-				{"Error reading skill: ", result},
-				state.dispatcher.allocator,
-			)
+			return strings.concatenate({"Error reading skill: ", result}, dispatcher.allocator)
 		}
 		return result
 	}
 	if call.id != "search_code" && call.id != "find_code" {
-		return builtin_tools.execute_builtin_tool(&state.dispatcher, call)
+		return builtin_tools.execute_builtin_tool(dispatcher, call)
 	}
 	if call.id == "find_code" {
-		results := app_find_code(state, call.query, call.maxResults, state.dispatcher.allocator)
-		defer code_index.code_index_search_results_destroy(&results, state.dispatcher.allocator)
+		results := app_find_code(
+			dispatcher.projectRoot,
+			call.query,
+			call.maxResults,
+			dispatcher.allocator,
+		)
+		defer code_index.code_index_search_results_destroy(&results, dispatcher.allocator)
 		index := code_index.Code_Index {
-			projectRoot = state.dispatcher.projectRoot,
+			projectRoot = dispatcher.projectRoot,
 		}
-		return app_search_code_results_json(&index, results[:], state.dispatcher.allocator)
+		return app_search_code_results_json(&index, results[:], dispatcher.allocator)
 	}
 	results, searchError := app_search_code(
-		state,
+		toolContext,
 		call.query,
 		call.maxResults,
-		state.dispatcher.allocator,
+		dispatcher.allocator,
 	)
 	if searchError != .None {
 		return strings.concatenate(
 			{"search_code: ", assistant_stream_error_text(searchError)},
-			state.dispatcher.allocator,
+			dispatcher.allocator,
 		)
 	}
-	defer code_index.code_index_search_results_destroy(&results, state.dispatcher.allocator)
-	return app_search_code_results_json(&state.codeIndex, results[:], state.dispatcher.allocator)
+	defer code_index.code_index_search_results_destroy(&results, dispatcher.allocator)
+	return app_search_code_results_json(toolContext.codeIndex, results[:], dispatcher.allocator)
+}
+
+// Builds the embedding database of the code index when it has none yet.
+app_ensure_code_index :: proc(
+	toolContext: Tool_Execution_Context,
+	allocator := context.allocator,
+) -> ai.AI_Error {
+	if toolContext.codeIndex == nil {
+		return .Invalid_Request
+	}
+	if toolContext.codeIndex.databaseInitialized {
+		return .None
+	}
+	if toolContext.embeddingError != .None {
+		return toolContext.embeddingError
+	}
+	rebuildError := code_index.code_index_rebuild(
+		toolContext.codeIndex,
+		toolContext.embeddingClient,
+		code_index.CODE_INDEX_DEFAULT_CHUNK_LINES,
+		code_index.CODE_INDEX_DEFAULT_CHUNK_OVERLAP_LINES,
+		allocator,
+	)
+	if rebuildError != .None {
+		return rebuildError
+	}
+	if code_index.code_index_save(toolContext.codeIndex) != .None {
+		return .Provider_Error
+	}
+	return .None
+}
+
+app_search_code :: proc(
+	toolContext: Tool_Execution_Context,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> (
+	[dynamic]code_index.Code_Search_Result,
+	ai.AI_Error,
+) {
+	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
+	ensureError := app_ensure_code_index(toolContext, allocator)
+	if ensureError != .None {
+		return results, ensureError
+	}
+	if toolContext.embeddingError != .None {
+		return results, toolContext.embeddingError
+	}
+	delete(results)
+	return code_index.code_index_search_text(
+		toolContext.codeIndex,
+		toolContext.embeddingClient,
+		query,
+		maximumResults,
+		allocator,
+	)
+}
+
+app_find_code :: proc(
+	projectRoot: string,
+	query: string,
+	maximumResults: int,
+	allocator := context.allocator,
+) -> [dynamic]code_index.Code_Search_Result {
+	results := make([dynamic]code_index.Code_Search_Result, 0, 0, allocator)
+	if projectRoot == "" {
+		return results
+	}
+	delete(results)
+	index := code_index.Code_Index {
+		projectRoot = projectRoot,
+	}
+	return code_index.code_index_find_text(&index, query, maximumResults, allocator)
 }
 
 app_search_code_results_json :: proc(
@@ -486,23 +576,6 @@ write_decimal :: proc(builder: ^strings.Builder, value: int) {
 	}
 }
 
-app_ai_role_from_history_role :: proc(role: History_Role) -> (ai.Message_Role, bool) {
-	switch role {
-	case .System:
-		return .System, true
-	case .User:
-		return .User, true
-	case .Assistant:
-		return .Assistant, true
-	case .Tool:
-		return .User, false
-	case .Subagent:
-		return .User, false
-	case .Note:
-		return .User, false
-	}
-	return .User, false
-}
 app_tool_output_is_owned :: proc(toolID: string) -> bool {
 	switch toolID {
 	case "read_file",

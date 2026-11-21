@@ -3,7 +3,6 @@ package main
 import "agent"
 import "ai"
 import "core:encoding/json"
-import "core:fmt"
 import "core:strings"
 import "settings"
 import "tool_policy"
@@ -106,16 +105,16 @@ app_cancel_agent_host_stream :: proc(state: ^App_State) {
 	activeID := state.agentHost.activeAgentID
 	if agent.agent_id_is_none(activeID) ||
 	   agent.runtime_cancel(&state.agentHost.runtime, activeID) != .None {
-		state.status = "No assistant stream to cancel"
+		_ = app_show_agent_output(state, Agent_Notice{text = "No assistant stream to cancel"})
 		return
 	}
-	state.status = "Canceling assistant stream"
+	_ = app_show_agent_output(state, Agent_Notice{text = "Canceling assistant stream"})
 }
 
 app_poll_agent_host :: proc(state: ^App_State) -> bool {
 	dirty, pollErr := agent_host_poll_active(&state.agentHost)
 	if pollErr != .None {
-		state.status = "Agent runtime polling failed"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Agent runtime polling failed"})
 		return dirty
 	}
 	activeID := state.agentHost.activeAgentID
@@ -177,25 +176,20 @@ app_finish_subagent :: proc(
 	if isError && result == "" {
 		result = "Subagent did not complete."
 	}
-	if isError {
-		append_history(
-			state,
-			.Subagent,
-			fmt.tprintf("Subagent failed (%s): %s", frame.task, result),
-		)
-	} else {
-		append_history(
-			state,
-			.Subagent,
-			fmt.tprintf("Subagent completed (%s): %s", frame.task, result),
-		)
-	}
+	_ = app_show_agent_output(
+		state,
+		Agent_Subagent_Finished {
+			parentToolCallID = frame.requestID,
+			task = frame.task,
+			result = result,
+			failed = isError,
+		},
+	)
 	_ = agent.runtime_finish_tool(&state.agentHost.runtime, frame.agentID, result, isError)
 	delete(frame.requestID, state.agentHost.runtime.allocator)
 	delete(frame.task, state.agentHost.runtime.allocator)
 	state.agentHost.activeAgentID = frame.agentID
 	state.agentHost.historyIndex = frame.historyIndex
-	state.status = "Subagent finished"
 	return true
 }
 
@@ -231,41 +225,25 @@ app_agent_host_spinner_frame :: proc(state: ^App_State) -> string {
 	frames := SPINNER_FRAMES
 	return frames[host.spinnerFrameIndex]
 }
+// Applies one runtime event: updates the agent host and the transcript, and shows the output.
 app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bool {
 	inSubagent := len(state.agentHost.agentStack) > 0
 	switch event.type {
 	case .Text_Delta:
-		role := History_Role.Assistant
-		if inSubagent {
-			role = .Subagent
+		if !inSubagent {
+			transcript_append_assistant_text(&state.transcript, event.content)
 		}
-		if state.agentHost.historyIndex < 0 || state.agentHost.historyIndex >= len(state.history) {
-			append_history(state, role, event.content)
-			state.agentHost.historyIndex = len(state.history) - 1
-		} else {
-			entry := &state.history[state.agentHost.historyIndex]
-			updated := strings.concatenate({entry.content, event.content}, context.allocator)
-			delete(entry.content)
-			entry.content = updated
-			entry.cachedLineWidth = 0
-			entry.cachedLineCount = 0
-		}
-		state.historyRenderOnly = true
+		_ = app_show_agent_output(
+			state,
+			Agent_Message_Delta{text = event.content, inSubagent = inSubagent},
+		)
 		return true
 	case .Thinking_Changed:
 		state.agentHost.thinking = event.thinking
-		if state.agentHost.thinking {
-			if state.agentHost.historyIndex < 0 ||
-			   state.agentHost.historyIndex >= len(state.history) {
-				role := History_Role.Assistant
-				if inSubagent {
-					role = .Subagent
-				}
-				append_history(state, role, "")
-				state.agentHost.historyIndex = len(state.history) - 1
-			}
-			state.status = "Assistant thinking"
-		}
+		_ = app_show_agent_output(
+			state,
+			Agent_Thinking_Changed{thinking = event.thinking, inSubagent = inSubagent},
+		)
 		return true
 	case .Usage_Updated:
 		if event.usage.hasInputTokens {
@@ -278,23 +256,27 @@ app_apply_agent_event :: proc(state: ^App_State, event: agent.Agent_Event) -> bo
 		}
 		return true
 	case .Tool_Requested:
+		transcript_end_assistant_text(&state.transcript)
 		state.agentHost.historyIndex = -1
 		return app_dispatch_agent_tool_request(state, event)
 	case .Completed:
-		state.status = "Assistant response complete"
-		state.agentHost.historyIndex = -1
+		transcript_end_assistant_text(&state.transcript)
+		_ = app_show_agent_output(state, Agent_Stream_Ended{reason = .Completed})
 		return true
 	case .Failed:
-		append_history(state, .Assistant, event.content)
-		state.status = "Assistant stream failed"
-		state.agentHost.historyIndex = -1
+		// The error text is part of the transcript, as an assistant message.
+		transcript_append_assistant(&state.transcript, event.content)
+		_ = app_show_agent_output(
+			state,
+			Agent_Stream_Ended{reason = .Failed, errorText = event.content},
+		)
 		return true
 	case .Canceled:
-		state.status = "Assistant stream canceled"
-		state.agentHost.historyIndex = -1
+		transcript_end_assistant_text(&state.transcript)
+		_ = app_show_agent_output(state, Agent_Stream_Ended{reason = .Canceled})
 		return true
 	case .Child_Completed:
-		append_history(state, .Tool, event.content)
+		_ = app_show_agent_output(state, Agent_Child_Completed{text = event.content})
 		return true
 	case .None, .Tool_Resolved:
 		return false
@@ -316,71 +298,88 @@ app_dispatch_agent_tool_request :: proc(state: ^App_State, event: agent.Agent_Ev
 		if toolID == "" {
 			toolID = "unknown"
 		}
-		app_append_tool_history(state, tool_policy.Tool_Call{id = toolID}, "failed")
+		output := "Tool call arguments are invalid."
+		_ = app_show_agent_output(
+			state,
+			Agent_Tool_Call {
+				toolCallID = event.toolRequest.id,
+				toolID = toolID,
+				status = .Failed,
+				output = output,
+				historyIndex = -1,
+			},
+		)
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
 			event.requestID,
 			.Denied,
-			"Tool call arguments are invalid.",
+			output,
 		)
-		state.status = "Tool call rejected"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call rejected"})
 		return true
 	}
 	defer tool_policy.tool_call_destroy(&call, state.dispatcher.allocator)
 
 	decision := tool_policy.tool_dispatch_decide(&state.dispatcher, call)
 	if decision == .Denied {
-		app_append_tool_history(state, call, "denied")
+		output := "Permission denied."
+		_ = app_show_agent_output(state, app_agent_tool_call(call, .Denied, -1, output))
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
 			event.requestID,
 			.Denied,
-			"Permission denied.",
+			output,
 		)
-		state.status = "Tool call denied"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call denied"})
 		return true
 	}
 	if decision == .Approval_Required {
 		if !app_show_agent_approval(state, call, event.agentID, event.requestID) {
-			app_append_tool_history(state, call, "denied")
+			output := "Tool call requires approval."
+			_ = app_show_agent_output(state, app_agent_tool_call(call, .Denied, -1, output))
 			_ = agent.runtime_resolve_tool(
 				&state.agentHost.runtime,
 				event.agentID,
 				event.requestID,
 				.Denied,
-				"Tool call requires approval.",
+				output,
 			)
-			state.status = "Tool call rejected"
+			_ = app_show_agent_output(state, Agent_Notice{text = "Tool call rejected"})
 		}
 		return true
 	}
-	historyIndex := app_append_tool_history(state, call, "running")
+	historyIndex := app_show_agent_output(state, app_agent_tool_call(call, .Running, -1))
 	if call.id == "run_subagent" {
 		if !app_start_subagent(state, call, historyIndex, event.agentID, event.requestID) {
-			app_update_tool_history(state, historyIndex, call, "failed")
+			output := "Subagent could not start."
+			_ = app_show_agent_output(
+				state,
+				app_agent_tool_call(call, .Failed, historyIndex, output),
+			)
 			_ = agent.runtime_resolve_tool(
 				&state.agentHost.runtime,
 				event.agentID,
 				event.requestID,
 				.Denied,
-				"Subagent could not start.",
+				output,
 			)
-			state.status = "Subagent could not start"
+			_ = app_show_agent_output(state, Agent_Notice{text = "Subagent could not start"})
 		}
 		return true
 	}
 	if !app_start_agent_tool_execution(state, call, historyIndex, event.agentID, event.requestID) {
-		app_update_tool_history(state, historyIndex, call, "failed")
+		output := "Tool call could not start."
+		_ = app_show_agent_output(state, app_agent_tool_call(call, .Failed, historyIndex, output))
 		_ = agent.runtime_resolve_tool(
 			&state.agentHost.runtime,
 			event.agentID,
 			event.requestID,
 			.Denied,
-			"Tool call could not start.",
+			output,
 		)
-		state.status = "Tool call could not start"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Tool call could not start"})
 	}
 	return true
 }
@@ -396,7 +395,10 @@ app_show_agent_approval :: proc(
 	}
 	state.approval.agentID = agentID
 	state.approval.agentRequestID = strings.clone(requestID, state.dispatcher.allocator)
-	state.approval.historyIndex = app_append_tool_history(state, call, "awaiting approval")
+	state.approval.historyIndex = app_show_agent_output(
+		state,
+		app_agent_tool_call(call, .Awaiting_Approval, -1),
+	)
 	_ = app_apply_approval_method(state)
 	return true
 }
@@ -550,21 +552,23 @@ app_start_subagent :: proc(
 	state.agentHost.subagentSpawnCount += 1
 	state.agentHost.activeAgentID = childID
 	state.agentHost.historyIndex = -1
-	app_update_tool_history(state, historyIndex, call, "delegated")
-	append_history(state, .Subagent, fmt.tprintf("Subagent started: %s", call.task))
-	state.status = "Subagent running"
+	_ = app_show_agent_output(state, app_agent_tool_call(call, .Delegated, historyIndex))
+	_ = app_show_agent_output(
+		state,
+		Agent_Subagent_Started{parentToolCallID = requestID, task = call.task},
+	)
 	return true
 }
 
 app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	providerName := state.config.selectedProvider
 	if providerName == "" {
-		state.status = "No provider selected"
+		_ = app_show_agent_output(state, Agent_Notice{text = "No provider selected"})
 		return false
 	}
 	provider, providerOK := app_find_provider(state.config, providerName)
 	if !providerOK || !provider.enabled {
-		state.status = "Selected provider is unavailable"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Selected provider is unavailable"})
 		return false
 	}
 	model := state.config.selectedModel
@@ -572,26 +576,34 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 		model = provider.model
 	}
 	if model == "" {
-		state.status = "No model selected"
+		_ = app_show_agent_output(state, Agent_Notice{text = "No model selected"})
 		return false
 	}
 	client, clientErr := ai.new_client(provider.name, provider.apiKey)
 	if clientErr != .None {
-		state.status = assistant_stream_error_text(clientErr)
+		_ = app_show_agent_output(
+			state,
+			Agent_Notice{text = assistant_stream_error_text(clientErr)},
+		)
 		return false
 	}
 
 	systemPrompt := system_prompt_effective(
-		state^,
+		&state.config,
+		state.skills.skills[:],
 		state.config.systemPrompt,
 		state.config.systemPromptMode,
 		context.temp_allocator,
 	)
 	defer delete(systemPrompt, context.temp_allocator)
-	messages := app_build_ai_messages(state.history[:], systemPrompt, context.temp_allocator)
+	messages := transcript_build_messages(
+		&state.transcript,
+		systemPrompt,
+		context.temp_allocator,
+	)
 	defer agent_host_messages_destroy(&messages, context.temp_allocator)
 	if len(messages) == 0 {
-		state.status = "No chat messages to send"
+		_ = app_show_agent_output(state, Agent_Notice{text = "No chat messages to send"})
 		return false
 	}
 	options := agent.Agent_Start_Options {
@@ -603,7 +615,7 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	state.agentHost.maxSubagents = state.config.maxSubagentsPerSession
 	startErr := agent_host_start_active(&state.agentHost, options)
 	if startErr != .None {
-		state.status = "Agent runtime is already active"
+		_ = app_show_agent_output(state, Agent_Notice{text = "Agent runtime is already active"})
 		return false
 	}
 	activeID := state.agentHost.activeAgentID
@@ -619,7 +631,10 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	)
 	if agent.runtime_set_conversation(&state.agentHost.runtime, activeID, messages[:]) != .None {
 		_ = agent.runtime_cancel(&state.agentHost.runtime, activeID)
-		state.status = "Agent runtime could not prepare its conversation"
+		_ = app_show_agent_output(
+			state,
+			Agent_Notice{text = "Agent runtime could not prepare its conversation"},
+		)
 		return false
 	}
 	tools := app_tool_definitions_for_provider(state, provider.type, context.temp_allocator)
@@ -640,13 +655,13 @@ app_start_agent_host_stream :: proc(state: ^App_State) -> bool {
 	)
 	if streamErr != .None {
 		_ = agent.runtime_cancel(&state.agentHost.runtime, activeID)
-		state.status = "Agent runtime could not start its stream"
+		_ = app_show_agent_output(
+			state,
+			Agent_Notice{text = "Agent runtime could not start its stream"},
+		)
 		return false
 	}
-	// Placeholder entry gives the spinner somewhere to render while the provider is processing.
-	append_history(state, .Assistant, "")
-	state.agentHost.historyIndex = len(state.history) - 1
-	state.status = "Streaming assistant response"
+	_ = app_show_agent_output(state, Agent_Stream_Started{})
 	return true
 }
 

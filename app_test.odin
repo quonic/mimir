@@ -611,12 +611,14 @@ test_app_loads_and_clears_persistent_input_history :: proc(t: ^testing.T) {
 	assert(loadErr == .None, "expected new input to persist immediately")
 	assert(len(loaded) == 2, "expected recorded input in persistent history")
 	append_history(&state, .User, "chat history")
+	transcript_append_user(&state.transcript, "chat history")
 	state.historyScrollOffset = 1
 
 	text_input.input_buffer_push_text(&state.input, "/clear")
 	app_submit_input(&state)
 	assert(len(state.inputHistory) == 0, "expected clear command to reset in-memory history")
 	assert(len(state.history) == 0, "expected clear command to reset panel history")
+	assert(len(state.transcript.entries) == 0, "expected clear command to reset the transcript")
 	assert(state.historyScrollOffset == 0, "expected clear command to reset panel scroll position")
 	assert(state.status == "Input history cleared", "expected clear command success status")
 	_, missingErr := input_history.load(home, workingDirectory, context.temp_allocator)
@@ -642,6 +644,12 @@ test_app_submit_handles_commands_and_chat :: proc(t: ^testing.T) {
 	assert(len(state.history) == 2, "expected chat submit to append only the user entry")
 	assert(state.history[len(state.history) - 1].role == .User, "expected user history entry")
 	assert(state.history[len(state.history) - 1].content == "hello", "expected user content")
+	assert(
+		len(state.transcript.entries) == 1 &&
+		state.transcript.entries[0].role == ai.Message_Role.User &&
+		state.transcript.entries[0].content == "hello",
+		"expected chat submit to add the user text to the transcript",
+	)
 	assert(state.status == "No model selected", "expected missing model status")
 
 	text_input.input_buffer_push_text(&state.input, "/exit")
@@ -780,55 +788,70 @@ test_tab_completion_enter_fills_input_without_running_command :: proc(t: ^testin
 }
 
 @(test)
-test_app_build_ai_messages_filters_history :: proc(t: ^testing.T) {
-	history := []History_Entry {
-		{role = .System, content = "system"},
-		{role = .User, content = "hello"},
-		{role = .Assistant, content = "hi"},
-		{role = .Tool, content = "tool output"},
-		{role = .Note, content = "note text"},
-		{role = .Assistant, content = ""},
-	}
+test_transcript_build_messages_keeps_user_and_assistant_text :: proc(t: ^testing.T) {
+	transcript := transcript_init(context.temp_allocator)
+	defer transcript_destroy(&transcript)
+	transcript_append_user(&transcript, "hello")
+	transcript_append_assistant_text(&transcript, "h")
+	transcript_append_assistant_text(&transcript, "i")
+	transcript_end_assistant_text(&transcript)
+	transcript_append_assistant_text(&transcript, "")
+	transcript_append_assistant(&transcript, "")
 
-	messages := app_build_ai_messages(history, "configured prompt", context.temp_allocator)
+	messages := transcript_build_messages(&transcript, "configured prompt", context.temp_allocator)
 	assert(len(messages) == 3, "expected configured prompt, user, and assistant messages")
-	assert(messages[0].role == ai.Message_Role.System, "expected system role to map")
+	assert(messages[0].role == ai.Message_Role.System, "expected system role first")
 	assert(messages[0].content == "configured prompt", "expected configured prompt first")
 	assert(messages[1].role == ai.Message_Role.User, "expected user role to map")
 	assert(messages[2].role == ai.Message_Role.Assistant, "expected assistant role to map")
-	assert(messages[2].content == "hi", "expected assistant content to be preserved")
+	assert(messages[2].content == "hi", "expected streamed assistant text in one message")
 	_ = t
 }
 
 @(test)
-test_app_build_ai_messages_empty_system_prompt_preserves_history_order :: proc(t: ^testing.T) {
-	history := []History_Entry {
-		{role = .System, content = "system"},
-		{role = .User, content = "hello"},
-		{role = .Assistant, content = "hi"},
-		{role = .Tool, content = "tool output"},
-		{role = .Note, content = "note text"},
-		{role = .Assistant, content = ""},
-	}
+test_transcript_build_messages_empty_system_prompt_preserves_order :: proc(t: ^testing.T) {
+	transcript := transcript_init(context.temp_allocator)
+	defer transcript_destroy(&transcript)
+	transcript_append_user(&transcript, "hello")
+	transcript_append_assistant_text(&transcript, "hi")
+	transcript_end_assistant_text(&transcript)
+	transcript_append_assistant_text(&transcript, "again")
+	transcript_append_user(&transcript, "next")
 
-	messages := app_build_ai_messages(history, "", context.temp_allocator)
-	assert(len(messages) == 2, "expected only non-system mapped history messages")
+	messages := transcript_build_messages(&transcript, "", context.temp_allocator)
+	assert(len(messages) == 4, "expected only transcript messages without a system prompt")
 	assert(messages[0].role == ai.Message_Role.User, "expected user message first")
 	assert(messages[0].content == "hello", "expected user content to be preserved")
-	assert(messages[1].role == ai.Message_Role.Assistant, "expected assistant message second")
-	assert(messages[1].content == "hi", "expected assistant content to be preserved")
+	assert(messages[1].content == "hi", "expected first assistant message")
+	assert(messages[2].content == "again", "expected a new assistant message after the end")
+	assert(messages[3].role == ai.Message_Role.User, "expected user message last")
+	assert(messages[3].content == "next", "expected the last user content")
 	_ = t
 }
 
 @(test)
 test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) {
-	state := app_init(context.temp_allocator)
-	defer app_destroy(&state)
-	defaultPrompt := system_prompt_effective(state, "", .Append, context.temp_allocator)
+	config := settings.Mimir_Config {
+		selectedModel = "test-model",
+	}
+	skills := []settings.Skill {
+		{name = "demo", description = "Demo skill", path = "/skills/demo/SKILL.md"},
+	}
+	defaultPrompt := system_prompt_effective(
+		&config,
+		skills,
+		"",
+		.Append,
+		context.temp_allocator,
+	)
 	defer delete(defaultPrompt, context.temp_allocator)
 	assert(
-		strings.contains(defaultPrompt, state.config.selectedModel),
+		strings.contains(defaultPrompt, config.selectedModel),
 		"expected default system prompt to contain selected model",
+	)
+	assert(
+		strings.contains(defaultPrompt, `<skill name="demo" filePath="/skills/demo/SKILL.md">`),
+		"expected default system prompt to list the given skills",
 	)
 	assert(
 		!strings.contains(defaultPrompt, "{model_name}"),
@@ -841,7 +864,13 @@ test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) 
 		"expected prompt placeholders to be expanded",
 	)
 
-	appendedPrompt := system_prompt_effective(state, "Use tabs.", .Append, context.temp_allocator)
+	appendedPrompt := system_prompt_effective(
+		&config,
+		skills,
+		"Use tabs.",
+		.Append,
+		context.temp_allocator,
+	)
 	defer delete(appendedPrompt, context.temp_allocator)
 	assert(
 		contains_string(appendedPrompt, "Additional user instructions:\nUse tabs."),
@@ -849,7 +878,8 @@ test_system_prompt_effective_respects_customization_mode :: proc(t: ^testing.T) 
 	)
 
 	replacedPrompt := system_prompt_effective(
-		state,
+		&config,
+		skills,
 		"Only user instructions.",
 		.Replace,
 		context.temp_allocator,
@@ -2514,4 +2544,20 @@ contains_string :: proc(haystack, needle: string) -> bool {
 		}
 	}
 	return false
+}
+
+@(test)
+test_app_rebuild_code_index_waits_for_running_tool :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	state.toolExecution.active = true
+	app_rebuild_code_index(&state, context.allocator)
+	assert(
+		state.codeIndexRebuildPending,
+		"expected code index rebuild to wait while a tool call runs",
+	)
+	state.toolExecution.active = false
+	app_rebuild_code_index(&state, context.allocator)
+	assert(!state.codeIndexRebuildPending, "expected code index rebuild to run without a tool")
+	_ = t
 }

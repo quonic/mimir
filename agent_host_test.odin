@@ -548,6 +548,100 @@ test_agent_continuation_text_starts_after_tool_history :: proc(t: ^testing.T) {
 		state.history[len(state.history) - 3].content == "I will check the repository.",
 		"expected pre-tool text to remain unchanged",
 	)
+	assert(
+		len(state.transcript.entries) == 2,
+		"expected only the two assistant text segments in the transcript",
+	)
+	assert(
+		state.transcript.entries[0].role == ai.Message_Role.Assistant &&
+		state.transcript.entries[0].content == "I will check the repository.",
+		"expected pre-tool text as the first transcript message",
+	)
+	assert(
+		state.transcript.entries[1].content == "Repository status is clean.",
+		"expected continuation text as a separate transcript message",
+	)
+	_ = t
+}
+
+@(test)
+test_agent_host_keeps_subagent_text_out_of_transcript :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	assert(
+		agent_host_start_active(&state.agentHost, agent.Agent_Start_Options{}) == .None,
+		"expected active agent to start",
+	)
+	append(
+		&state.agentHost.agentStack,
+		Agent_Stack_Frame {
+			agentID = state.agentHost.activeAgentID,
+			historyIndex = -1,
+			requestID = strings.clone("call-1", state.agentHost.runtime.allocator),
+			task = strings.clone("delegate", state.agentHost.runtime.allocator),
+		},
+	)
+	event := agent.Agent_Event {
+		type    = .Text_Delta,
+		content = "child text",
+	}
+	assert(app_apply_agent_event(&state, event), "expected subagent text projection")
+	assert(
+		state.history[len(state.history) - 1].role == .Subagent,
+		"expected subagent text in a subagent history entry",
+	)
+	assert(len(state.transcript.entries) == 0, "expected subagent text outside the transcript")
+	_ = t
+}
+
+@(test)
+test_agent_host_failed_stream_text_joins_transcript :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	event := agent.Agent_Event {
+		type    = .Failed,
+		content = "Provider network error",
+	}
+	assert(app_apply_agent_event(&state, event), "expected failed stream projection")
+	assert(state.status == "Assistant stream failed", "expected failed stream status")
+	assert(
+		len(state.transcript.entries) == 1 &&
+		state.transcript.entries[0].role == ai.Message_Role.Assistant &&
+		state.transcript.entries[0].content == "Provider network error",
+		"expected failed stream text as an assistant transcript message, as history sends it",
+	)
+	_ = t
+}
+
+@(test)
+test_agent_output_formats_tool_call_lines :: proc(t: ^testing.T) {
+	state := app_init(context.allocator)
+	defer app_destroy(&state)
+	call := tool_policy.Tool_Call {
+		callID   = "call-1",
+		id       = "read_file",
+		filePath = "notes.md",
+	}
+	historyIndex := app_show_agent_output(&state, app_agent_tool_call(call, .Running, -1))
+	assert(historyIndex == len(state.history) - 1, "expected a new tool history line")
+	assert(
+		state.history[historyIndex].content == "read_file: notes.md (running)",
+		"expected running tool line",
+	)
+	updatedIndex := app_show_agent_output(
+		&state,
+		app_agent_tool_call(call, .Completed, historyIndex, "file text"),
+	)
+	assert(updatedIndex == historyIndex, "expected the same tool history line")
+	assert(
+		state.history[historyIndex].content == "read_file: notes.md (completed)",
+		"expected completed tool line",
+	)
+	assert(
+		app_show_agent_output(&state, Agent_Notice{text = "Tool call completed"}) == -1,
+		"expected no history line for a notice",
+	)
+	assert(state.status == "Tool call completed", "expected notice in the status text")
 	_ = t
 }
 
