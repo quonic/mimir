@@ -839,6 +839,10 @@ test_session_event_destroy_frees_every_event_type :: proc(t: ^testing.T) {
 		Tool_Call_Updated {
 			toolCallID = strings.clone("call", allocator),
 			output = strings.clone("output", allocator),
+			diff = file_diff_copy(
+				File_Diff{path = "/project/a.txt", oldText = "old", newText = "new"},
+				allocator,
+			),
 		},
 		Approval_Requested {
 			toolCallID = strings.clone("call", allocator),
@@ -1041,5 +1045,80 @@ test_session_cancel_during_a_subagent_cancels_only_the_subagent :: proc(t: ^test
 	ended := test_wait_for_turn_end(&test)
 	assert(ended.reason == .Completed, "expected the parent to complete the turn")
 	assert(test_streamed_text(&test, false) == "parent done", "expected the parent text")
+	_ = t
+}
+
+// Returns the last Tool_Call_Updated event of toolCallID.
+test_last_tool_update :: proc(test: ^Test_Session, toolCallID: string) -> ^Tool_Call_Updated {
+	for index := len(test.events) - 1; index >= 0; index -= 1 {
+		if update, ok := &test.events[index].(Tool_Call_Updated); ok &&
+		   update.toolCallID == toolCallID {
+			return update
+		}
+	}
+	return nil
+}
+
+@(test)
+test_session_write_file_update_carries_a_new_file_diff :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Approve_All)
+	defer test_session_destroy(&test)
+	test_queue_tool_turn(
+		&test,
+		"write_file",
+		`{"file_path":"notes.md","content":"hello\n","overwrite":"false"}`,
+	)
+	test_queue_tool_turn(
+		&test,
+		"write_file",
+		`{"file_path":"notes.md","content":"again\n","overwrite":"false"}`,
+	)
+	fake_provider_add_response(&test.provider, false, fake_provider_text_line("ok", true))
+
+	assert(session_submit(test.session, "write") == .None, "expected the turn to start")
+	_ = test_wait_for_turn_end(&test)
+	update := test_last_tool_update(&test, FIRST_TOOL_CALL_ID)
+	assert(update != nil && update.status == .Completed, "expected the write to complete")
+	expectedPath := strings.concatenate({test.projectRoot, "/notes.md"}, context.temp_allocator)
+	assert(
+		update.diff.path == expectedPath,
+		fmt.tprintf("expected the absolute path %q, got %q", expectedPath, update.diff.path),
+	)
+	assert(update.diff.newFile && update.diff.oldText == "", "expected a new file")
+	assert(update.diff.newText == "hello\n", "expected the whole new text")
+
+	// The second write fails because the file exists, so it has no diff.
+	failed := test_last_tool_update(&test, "ollama-0-2")
+	assert(failed != nil && failed.status == .Failed, "expected the second write to fail")
+	assert(failed.diff.path == "", "expected no diff for a failed write")
+	_ = t
+}
+
+@(test)
+test_session_patch_file_update_carries_old_and_new_text :: proc(t: ^testing.T) {
+	test: Test_Session
+	test_session_init(&test, .Approve_All)
+	defer test_session_destroy(&test)
+	path := strings.concatenate({test.projectRoot, "/main.txt"}, context.temp_allocator)
+	assert(os.write_entire_file(path, "one\ntwo\n") == nil, "expected the test file")
+	test_queue_tool_turn(
+		&test,
+		"patch_file",
+		`{"file_path":"main.txt","patch_content":"--- a/main.txt\n+++ b/main.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n"}`,
+	)
+	fake_provider_add_response(&test.provider, false, fake_provider_text_line("ok", true))
+
+	assert(session_submit(test.session, "patch") == .None, "expected the turn to start")
+	_ = test_wait_for_turn_end(&test)
+	update := test_last_tool_update(&test, FIRST_TOOL_CALL_ID)
+	assert(
+		update != nil && update.status == .Completed,
+		fmt.tprintf("expected the patch to complete, got %v", update^),
+	)
+	assert(update.diff.path == path, "expected the absolute path")
+	assert(!update.diff.newFile, "expected an existing file")
+	assert(update.diff.oldText == "one\ntwo\n", "expected the whole old text")
+	assert(update.diff.newText == "one\nthree\n", "expected the whole new text")
 	_ = t
 }

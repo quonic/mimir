@@ -7,13 +7,17 @@ import "../builtin_tools"
 import "../code_index"
 import "core:encoding/json"
 import "core:mem"
+import "core:os"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:unicode/utf8"
 import "../settings"
 import "../tool_policy"
 
 MAX_RETAINED_TOOL_OUTPUT_BYTES :: 64 * 1024
+// A file diff is left out when the old or the new text is larger than this.
+MAX_FILE_DIFF_BYTES :: 1024 * 1024
 SEARCH_CODE_DEFAULT_MAX_RESULTS :: 5
 SEARCH_CODE_MAX_RESULTS :: 10
 
@@ -39,6 +43,8 @@ Tool_Execution_State :: struct {
 	resultOwned:    bool,
 	agentID:        agent.Agent_ID,
 	agentRequestID: string,
+	// The file change of the call, for the tools that change one file. Owned by allocator.
+	diff:           File_Diff,
 	active:         bool,
 	finished:       bool,
 }
@@ -86,6 +92,7 @@ tool_execution_destroy :: proc(execution: ^Tool_Execution_State) {
 		delete(execution.result, execution.allocator)
 	}
 	delete(execution.agentRequestID, execution.allocator)
+	file_diff_destroy(&execution.diff, execution.allocator)
 	execution^ = {}
 }
 
@@ -158,7 +165,22 @@ session_tool_execution_context :: proc(
 
 tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	execution := cast(^Tool_Execution_State)workerThread.data
+	diffPath, diffOldText, diffNewFile, diffOK := file_diff_begin(
+		execution.toolContext,
+		execution.call,
+		execution.allocator,
+	)
 	output := execute_tool_call(execution.toolContext, execution.call)
+	diff: File_Diff
+	if diffOK {
+		diff = file_diff_end(
+			diffPath,
+			diffOldText,
+			diffNewFile,
+			!tool_output_is_error(output),
+			execution.allocator,
+		)
+	}
 	outputOwned := tool_output_is_owned(execution.call.id)
 	if outputOwned {
 		ownedOutput := strings.clone(output, execution.allocator)
@@ -181,6 +203,7 @@ tool_execution_worker_proc :: proc(workerThread: ^thread.Thread) {
 	if sync.mutex_guard(&execution.mutex) {
 		execution.result = output
 		execution.resultOwned = outputOwned
+		execution.diff = diff
 		execution.finished = true
 	}
 }
@@ -203,7 +226,14 @@ session_poll_tool_execution :: proc(session: ^Session) -> bool {
 	if isError {
 		toolStatus = .Failed
 	}
-	session_emit_tool_call_updated(session, execution.call.callID, toolStatus, output)
+	session_emit_tool_call_updated(
+		session,
+		execution.call.callID,
+		toolStatus,
+		output,
+		execution.diff,
+	)
+	file_diff_destroy(&execution.diff, execution.allocator)
 	if !agent.agent_id_is_none(agentID) && agentRequestID != "" {
 		_ = agent.runtime_finish_tool(&session.host.runtime, agentID, output, isError)
 	}
@@ -230,6 +260,95 @@ session_poll_tool_execution :: proc(session: ^Session) -> bool {
 		session_rebuild_code_index(session)
 	}
 	return true
+}
+
+// Reports whether the tool changes one file, so its update can carry a File_Diff.
+tool_changes_one_file :: proc(toolID: string) -> bool {
+	switch toolID {
+	case builtin_tools.TOOL_WRITE_FILE,
+	     builtin_tools.TOOL_PATCH_FILE,
+	     builtin_tools.TOOL_REPLACE_STRING_IN_FILE:
+		return true
+	}
+	return false
+}
+
+// Reads the file of a call that changes one file, before the call runs. It returns false when
+// the call changes no file, the path is outside the project, or the file is too large or not
+// UTF-8 text. Runs on the tool worker.
+file_diff_begin :: proc(
+	toolContext: Tool_Execution_Context,
+	call: tool_policy.Tool_Call,
+	allocator: mem.Allocator,
+) -> (
+	path: string,
+	oldText: string,
+	newFile: bool,
+	ok: bool,
+) {
+	if !tool_changes_one_file(call.id) || toolContext.dispatcher == nil {
+		return
+	}
+	resolved, resolvedOK := tool_policy.permission_resolve_project_path(
+		toolContext.dispatcher.projectRoot,
+		call.filePath,
+		allocator,
+	)
+	if !resolvedOK {
+		return
+	}
+	if !os.exists(resolved) {
+		return resolved, "", true, true
+	}
+	text, textOK := file_diff_read_text(resolved, allocator)
+	if !textOK {
+		delete(resolved, allocator)
+		return
+	}
+	return resolved, text, false, true
+}
+
+// Builds the File_Diff of a call from file_diff_begin, after the call ran. It takes ownership
+// of path and oldText. When the call failed or the new text cannot be read, it frees them and
+// returns an empty diff.
+file_diff_end :: proc(
+	path, oldText: string,
+	newFile, succeeded: bool,
+	allocator: mem.Allocator,
+) -> File_Diff {
+	newText, newTextOK := "", false
+	if succeeded {
+		newText, newTextOK = file_diff_read_text(path, allocator)
+	}
+	if !newTextOK {
+		delete(path, allocator)
+		delete(oldText, allocator)
+		return File_Diff{}
+	}
+	return File_Diff{path = path, newFile = newFile, oldText = oldText, newText = newText}
+}
+
+// Reads a file as text for a File_Diff. It fails for a file larger than MAX_FILE_DIFF_BYTES or
+// one that is not UTF-8.
+file_diff_read_text :: proc(path: string, allocator: mem.Allocator) -> (string, bool) {
+	info, statErr := os.stat(path, allocator)
+	if statErr != nil {
+		return "", false
+	}
+	size := info.size
+	os.file_info_delete(info, allocator)
+	if size > MAX_FILE_DIFF_BYTES {
+		return "", false
+	}
+	data, readErr := os.read_entire_file_from_path(path, allocator)
+	if readErr != nil {
+		return "", false
+	}
+	if len(data) > MAX_FILE_DIFF_BYTES || !utf8.valid_string(string(data)) {
+		delete(data, allocator)
+		return "", false
+	}
+	return string(data), true
 }
 
 tool_output_is_error :: proc(output: string) -> bool {

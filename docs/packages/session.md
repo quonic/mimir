@@ -79,7 +79,7 @@ model keep the model's ID.
 | `Thinking_Changed` | Thinking flag, subagent depth. |
 | `Usage_Updated` | Usage (`inputTokens` is the current context usage) and the context window size (0 when unknown). A turn starts with empty usage. |
 | `Tool_Call_Started` | Tool call ID, tool ID, target, raw arguments. A `Tool_Call_Updated` with the first status follows. |
-| `Tool_Call_Updated` | Tool call ID, status (`Awaiting_Approval`, `Running`, `Completed`, `Failed`, `Denied`), output. |
+| `Tool_Call_Updated` | Tool call ID, status (`Awaiting_Approval`, `Running`, `Completed`, `Failed`, `Denied`), output, and a file diff. |
 | `Approval_Requested` | Tool call ID, permission action, safety state. It comes after `Tool_Call_Started` of the same call. |
 | `Approval_Safety_Updated` | Tool call ID, safety state. |
 | `Approval_Resolved` | Tool call ID, choice. |
@@ -87,6 +87,12 @@ model keep the model's ID.
 | `Subagent_Finished` | Parent tool call ID, task, result, failed flag, stream error text. |
 | `Turn_Ended` | Reason (`Completed`, `Canceled`, `Failed`), error text. |
 | `Notice` | Severity, text. |
+
+The file diff of `Tool_Call_Updated` is set on the `Completed` update of
+`write_file`, `patch_file` and `replace_string_in_file`: the absolute path, the
+whole text before the call (`newFile` is true when the file did not exist), and
+the whole text after it. It is empty (`diff.path == ""`) on other updates, for
+failed calls, and for files larger than 1 MiB or not UTF-8.
 
 The safety state has a status: `Not_Checked` (the approval method does not use
 the classifier), `Checking` (an `Approval_Safety_Updated` follows),
