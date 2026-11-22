@@ -10,6 +10,7 @@ import "core:strconv"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:time"
 
 // Fake_Provider is a provider for tests: an HTTP server on the loopback interface that answers
 // Ollama chat requests with canned responses. Tests of the session and of front ends use it to
@@ -33,6 +34,8 @@ Fake_Response :: struct {
 	// Keep the connection open after the body until the client closes it, so the stream only
 	// ends when the client cancels it.
 	holdOpen: bool,
+	// Wait this long before answering, for example to keep the safety classifier running.
+	delay:    time.Duration,
 }
 
 FAKE_PROVIDER_MODEL :: "fake-model"
@@ -139,6 +142,19 @@ fake_provider_add_response :: proc(provider: ^Fake_Provider, holdOpen: bool, lin
 	}
 }
 
+// Queues a response like fake_provider_add_response that is sent only after delay. The provider
+// answers one request at a time, so later requests wait too.
+fake_provider_add_delayed_response :: proc(
+	provider: ^Fake_Provider,
+	delay: time.Duration,
+	lines: ..string,
+) {
+	fake_provider_add_response(provider, false, ..lines)
+	if sync.mutex_guard(&provider.mutex) {
+		provider.responses[len(provider.responses) - 1].delay = delay
+	}
+}
+
 // Returns the number of chat requests that the provider received.
 fake_provider_request_count :: proc(provider: ^Fake_Provider) -> int {
 	sync.mutex_lock(&provider.mutex)
@@ -227,6 +243,9 @@ fake_provider_answer :: proc(provider: ^Fake_Provider, client: net.TCP_Socket) {
 	}
 	defer if responseOwned {
 		delete(response.body, provider.allocator)
+	}
+	if response.delay > 0 {
+		time.sleep(response.delay)
 	}
 	head := "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n"
 	_, _ = net.send_tcp(client, transmute([]byte)head)

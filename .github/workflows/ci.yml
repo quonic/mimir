@@ -48,6 +48,7 @@ jobs:
           # Run every package's tests, collecting all failures instead of stopping at the first one.
           declare -a packages=(
             "."
+            "acp"
             "agent"
             "ai"
             "approval_safety"
