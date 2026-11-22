@@ -1080,7 +1080,7 @@ test_session_write_file_update_carries_a_new_file_diff :: proc(t: ^testing.T) {
 	_ = test_wait_for_turn_end(&test)
 	update := test_last_tool_update(&test, FIRST_TOOL_CALL_ID)
 	assert(update != nil && update.status == .Completed, "expected the write to complete")
-	expectedPath := strings.concatenate({test.projectRoot, "/notes.md"}, context.temp_allocator)
+	expectedPath, _ := os.join_path({test.projectRoot, "notes.md"}, context.temp_allocator)
 	assert(
 		update.diff.path == expectedPath,
 		fmt.tprintf("expected the absolute path %q, got %q", expectedPath, update.diff.path),
@@ -1100,7 +1100,7 @@ test_session_patch_file_update_carries_old_and_new_text :: proc(t: ^testing.T) {
 	test: Test_Session
 	test_session_init(&test, .Approve_All)
 	defer test_session_destroy(&test)
-	path := strings.concatenate({test.projectRoot, "/main.txt"}, context.temp_allocator)
+	path, _ := os.join_path({test.projectRoot, "main.txt"}, context.temp_allocator)
 	assert(os.write_entire_file(path, "one\ntwo\n") == nil, "expected the test file")
 	test_queue_tool_turn(
 		&test,

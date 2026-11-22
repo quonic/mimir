@@ -1005,7 +1005,7 @@ test_acp_write_file_sends_a_diff :: proc(t: ^testing.T) {
 	toolCall, _ := test_find_update(&test, "tool_call")
 	kind, _ := json_get_string(toolCall, "kind")
 	assert(kind == "edit", "expected the edit kind")
-	path := strings.concatenate({root, "/notes.md"}, context.temp_allocator)
+	path, _ := os.join_path({root, "notes.md"}, context.temp_allocator)
 	locations, _ := json_get_array(toolCall, "locations")
 	assert(len(locations) == 1, "expected one location")
 	location, _ := locations[0].(json.Object)
