@@ -1,6 +1,7 @@
 package session
 
 import "../ai"
+import "../builtin_tools"
 import "../settings"
 import "base:runtime"
 import "core:fmt"
@@ -173,7 +174,7 @@ fake_provider_text_line :: proc(
 	strings.write_string(&builder, `{"model":"`)
 	strings.write_string(&builder, FAKE_PROVIDER_MODEL)
 	strings.write_string(&builder, `","message":{"role":"assistant","content":`)
-	write_tool_json_string(&builder, text)
+	builtin_tools.write_json_string(&builder, text)
 	strings.write_string(&builder, `},"done":`)
 	if done {
 		strings.write_string(&builder, `true,"prompt_eval_count":12,"eval_count":3}`)
@@ -198,7 +199,7 @@ fake_provider_tool_call_line :: proc(
 		&builder,
 		`","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":`,
 	)
-	write_tool_json_string(&builder, toolName)
+	builtin_tools.write_json_string(&builder, toolName)
 	strings.write_string(&builder, `,"arguments":`)
 	strings.write_string(&builder, argumentsJSON)
 	strings.write_string(&builder, `}}]},"done":false}`)
