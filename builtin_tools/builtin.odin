@@ -8,6 +8,7 @@ import "core:os"
 import "core:strconv"
 import "core:strings"
 import "core:text/regex"
+import "core:unicode/utf8"
 
 // Tool IDs for builtins (excludes search_code and find_code which are app-provided)
 TOOL_READ_FILE :: "read_file"
@@ -574,7 +575,72 @@ run_in_terminal :: proc(
 			string(stderr),
 		)
 	}
-	return fmt.aprintf(`{"stdout": "%s", "stderr": "%s"}`, string(stdout), string(stderr))
+	return terminal_result_json(string(stdout), string(stderr), context.allocator)
+}
+
+// Returns the run_in_terminal result as a JSON object with the stdout and stderr text. The
+// result is built with a builder, not fmt: fmt treats '{' in a format string as a directive.
+terminal_result_json :: proc(stdout, stderr: string, allocator := context.allocator) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, 0, len(stdout) + len(stderr) + 32, allocator)
+	strings.write_string(&builder, `{"stdout": `)
+	write_json_string(&builder, stdout)
+	strings.write_string(&builder, `, "stderr": `)
+	write_json_string(&builder, stderr)
+	strings.write_byte(&builder, '}')
+	return strings.to_string(builder)
+}
+
+// ============================================================
+// JSON Text
+// ============================================================
+
+// Writes text as a JSON string literal, with the quotes. It escapes quotes, backslashes and
+// control characters. Bytes that are not valid UTF-8, as command output can contain, become
+// U+FFFD, so the result is always valid JSON.
+write_json_string :: proc(builder: ^strings.Builder, text: string) {
+	hex := "0123456789abcdef"
+	strings.write_byte(builder, '"')
+	for index := 0; index < len(text); {
+		b := text[index]
+		if b >= utf8.RUNE_SELF {
+			r, width := utf8.decode_rune_in_string(text[index:])
+			if r == utf8.RUNE_ERROR && width <= 1 {
+				strings.write_string(builder, "\\ufffd")
+				index += 1
+				continue
+			}
+			strings.write_string(builder, text[index:index + width])
+			index += width
+			continue
+		}
+		switch b {
+		case '"':
+			strings.write_string(builder, "\\\"")
+		case '\\':
+			strings.write_string(builder, "\\\\")
+		case '\b':
+			strings.write_string(builder, "\\b")
+		case '\f':
+			strings.write_string(builder, "\\f")
+		case '\n':
+			strings.write_string(builder, "\\n")
+		case '\r':
+			strings.write_string(builder, "\\r")
+		case '\t':
+			strings.write_string(builder, "\\t")
+		case:
+			if b < 0x20 || b == 0x7f {
+				strings.write_string(builder, "\\u00")
+				strings.write_byte(builder, hex[b >> 4])
+				strings.write_byte(builder, hex[b & 0x0f])
+			} else {
+				strings.write_byte(builder, b)
+			}
+		}
+		index += 1
+	}
+	strings.write_byte(builder, '"')
 }
 
 // ============================================================

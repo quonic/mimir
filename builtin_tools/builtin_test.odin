@@ -1,5 +1,7 @@
 package builtin_tools
 
+import "core:encoding/json"
+import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
@@ -244,5 +246,75 @@ test_write_file_reports_an_existing_file_in_its_result :: proc(t: ^testing.T) {
 		result == "File already exists. Use overwrite option to replace it.",
 		"expected the existing file to be reported in the result",
 	)
+	_ = t
+}
+
+// Parses a run_in_terminal result and returns its stdout and stderr fields.
+parse_terminal_result :: proc(result: string) -> (stdout, stderr: string, ok: bool) {
+	value, parseErr := json.parse_string(result, allocator = context.temp_allocator)
+	if parseErr != nil {
+		return "", "", false
+	}
+	object := value.(json.Object) or_return
+	stdoutValue := object["stdout"].(json.String) or_return
+	stderrValue := object["stderr"].(json.String) or_return
+	return stdoutValue, stderrValue, true
+}
+
+@(test)
+test_terminal_result_json_escapes_output :: proc(t: ^testing.T) {
+	stdout := "say \"hi\"\npath C:\\tmp\ttab\r\x01bell\x7f héllo ✓"
+	stderr := "warning: {braces} and %s"
+	result := terminal_result_json(stdout, stderr)
+	defer delete(result)
+
+	assert(
+		strings.has_prefix(result, `{"stdout": "`),
+		fmt.tprintf("expected a JSON object, got %q", result),
+	)
+	parsedStdout, parsedStderr, ok := parse_terminal_result(result)
+	assert(ok, fmt.tprintf("expected the result to parse as JSON, got %q", result))
+	assert(
+		parsedStdout == stdout,
+		fmt.tprintf("expected stdout %q after a round trip, got %q", stdout, parsedStdout),
+	)
+	assert(
+		parsedStderr == stderr,
+		fmt.tprintf("expected stderr %q after a round trip, got %q", stderr, parsedStderr),
+	)
+	_ = t
+}
+
+@(test)
+test_terminal_result_json_replaces_invalid_utf8 :: proc(t: ^testing.T) {
+	result := terminal_result_json("ok \xff\xfe end", "")
+	defer delete(result)
+
+	parsedStdout, _, ok := parse_terminal_result(result)
+	assert(ok, fmt.tprintf("expected the result to parse as JSON, got %q", result))
+	assert(
+		parsedStdout == "ok \uFFFD\uFFFD end",
+		fmt.tprintf("expected invalid bytes to become U+FFFD, got %q", parsedStdout),
+	)
+	_ = t
+}
+
+@(test)
+test_run_in_terminal_returns_valid_json :: proc(t: ^testing.T) {
+	when ODIN_OS == .Windows {
+		// The Windows shell invocation is tracked separately; this test covers POSIX shells.
+		return
+	}
+	result := run_in_terminal(`printf 'say "hi"\nback\\slash {x}\n'`)
+	defer delete(result)
+
+	parsedStdout, parsedStderr, ok := parse_terminal_result(result)
+	assert(ok, fmt.tprintf("expected the result to parse as JSON, got %q", result))
+	expected := "say \"hi\"\nback\\slash {x}\n"
+	assert(
+		parsedStdout == expected,
+		fmt.tprintf("expected stdout %q, got %q", expected, parsedStdout),
+	)
+	assert(parsedStderr == "", fmt.tprintf("expected empty stderr, got %q", parsedStderr))
 	_ = t
 }
