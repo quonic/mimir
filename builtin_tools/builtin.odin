@@ -455,9 +455,21 @@ get_file_info :: proc(file_path: string) -> string {
 // Shell Operations
 // ============================================================
 
+// Windows PowerShell ships with every supported Windows version. It is used instead of cmd.exe
+// because it splits its command line by the same rules that os.process_exec uses to quote
+// arguments; cmd.exe does not, so quotes in a command would reach it as \".
+WINDOWS_POWERSHELL_PATH :: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+
+// The shell that run_in_terminal uses, as told to the model in the tool description.
+when ODIN_OS == .Windows {
+	TERMINAL_SHELL_NAME :: "Windows PowerShell"
+} else {
+	TERMINAL_SHELL_NAME :: "bash"
+}
+
 get_default_shell :: proc() -> string {
 	if ODIN_OS == .Windows {
-		return `C:\Windows\System32\cmd.exe`
+		return WINDOWS_POWERSHELL_PATH
 	} else if ODIN_OS == .Linux ||
 	   ODIN_OS == .Darwin ||
 	   ODIN_OS == .FreeBSD ||
@@ -476,8 +488,8 @@ list_available_shells :: proc() -> string {
 		if os.exists(`C:\Windows\System32\cmd.exe`) {
 			append(&shells, `C:\Windows\System32\cmd.exe`)
 		}
-		if os.exists(`C:\Windows\System32\powershell.exe`) {
-			append(&shells, `C:\Windows\System32\powershell.exe`)
+		if os.exists(WINDOWS_POWERSHELL_PATH) {
+			append(&shells, WINDOWS_POWERSHELL_PATH)
 		}
 		if os.exists(`C:\Program Files\PowerShell\7\pwsh.exe`) {
 			append(&shells, `C:\Program Files\PowerShell\7\pwsh.exe`)
@@ -528,7 +540,7 @@ run_in_terminal :: proc(
 	}
 
 	proc_desc := os.Process_Desc {
-		command = {shell, "-c", command},
+		command = terminal_shell_arguments(shell, command, context.temp_allocator),
 	}
 	workingDirectoryOwned := false
 	if working_directory == "" {
@@ -576,6 +588,34 @@ run_in_terminal :: proc(
 		)
 	}
 	return terminal_result_json(string(stdout), string(stderr), context.allocator)
+}
+
+// Returns the arguments that run command in shell. bash takes the command after -c. Windows
+// PowerShell takes it after -Command, without a profile or prompts. It first sets the console
+// output encoding to UTF-8: Windows PowerShell otherwise writes non-ASCII output in the OEM
+// code page.
+terminal_shell_arguments :: proc(
+	shell, command: string,
+	allocator := context.allocator,
+) -> []string {
+	when ODIN_OS == .Windows {
+		arguments := make([]string, 5, allocator)
+		arguments[0] = shell
+		arguments[1] = "-NoProfile"
+		arguments[2] = "-NonInteractive"
+		arguments[3] = "-Command"
+		arguments[4] = strings.concatenate(
+			{"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ", command},
+			allocator,
+		)
+		return arguments
+	} else {
+		arguments := make([]string, 3, allocator)
+		arguments[0] = shell
+		arguments[1] = "-c"
+		arguments[2] = command
+		return arguments
+	}
 }
 
 // Returns the run_in_terminal result as a JSON object with the stdout and stderr text. The
@@ -696,7 +736,9 @@ builtin_ai_tool_definitions :: proc(
 		&definitions,
 		ai.Tool_Definition {
 			name = TOOL_IN_TERMINAL,
-			description = "Run a shell command in the active project",
+			description = "Run a shell command in the active project. Commands run in " +
+			TERMINAL_SHELL_NAME +
+			".",
 			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`,
 		},
 	)
