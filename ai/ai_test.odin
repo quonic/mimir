@@ -332,6 +332,40 @@ test_parse_openai_models_response_uses_models_dev_metadata :: proc(t: ^testing.T
 	_ = t
 }
 
+// models.dev reports embedding models (e.g. Qwen3-Embedding-8B) with a "text" output modality,
+// so a metadata match must not suppress the embedding name check.
+@(test)
+test_parse_openai_models_response_embedding_name_with_text_metadata :: proc(t: ^testing.T) {
+	metadata := make(map[string]Models_Dev_Model_Metadata, 1, context.allocator)
+	defer models_dev_metadata_map_destroy(&metadata, context.allocator)
+	modelKey := strings.clone("qwen3-embedding-8b", context.allocator)
+	textOutput := make([dynamic]string, 0, 1, context.allocator)
+	append_elem(&textOutput, strings.clone("text", context.allocator))
+	metadata[modelKey] = Models_Dev_Model_Metadata {
+		id = strings.clone("qwen3-embedding-8b", context.allocator),
+		toolCall = false,
+		modalities = Models_Dev_Modalities{output = textOutput},
+	}
+
+	models, modelErr := parse_openai_models_response_with_metadata(
+		`{"data":[{"id":"llamacpp/qwen3-embedding-8b"}]}`,
+		metadata,
+		context.allocator,
+	)
+	defer models_destroy(&models, context.allocator)
+	assert(modelErr == .None, "expected OpenAI models response with metadata to parse")
+	assert(len(models) == 1, "expected one OpenAI model")
+	assert(
+		model_supports_embeddings(models[0]),
+		"expected embedding-named model with text metadata to support embeddings",
+	)
+	assert(
+		!model_supports_chat(models[0]),
+		"expected embedding-named model with text metadata to not support chat",
+	)
+	_ = t
+}
+
 @(test)
 test_openai_endpoint_target_and_sse_stream :: proc(t: ^testing.T) {
 	root := transport.url_parse("https://example.test")

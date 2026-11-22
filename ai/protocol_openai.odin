@@ -306,10 +306,12 @@ parse_openai_models_response_with_metadata :: proc(
 		if metadataFound {
 			defer models_dev_model_metadata_destroy(&metadataEntry, allocator)
 		}
-		isEmbedding :=
-			metadataFound && models_dev_model_has_output_modality(metadataEntry, "embedding")
-		if !metadataFound {
-			isEmbedding = model_name_indicates_embedding(model.id)
+		// models.dev lists embedding models with a "text" output modality, so a metadata
+		// match alone cannot rule one out. The name check applies whether or not metadata
+		// is found, and an "embedding" output modality also marks a model as embedding.
+		isEmbedding := model_name_indicates_embedding(model.id)
+		if metadataFound && models_dev_model_has_output_modality(metadataEntry, "embedding") {
+			isEmbedding = true
 		}
 		if isEmbedding {
 			append(&entry.capabilities, strings.clone("embedding", allocator))
