@@ -234,6 +234,27 @@ and starts with the configured command.
 Mimir rejects malformed grants, paths outside the project root, and path
 traversal when it loads the configuration.
 
+## ACP Mode
+
+`mimir --acp` runs Mimir as an Agent Client Protocol agent for editors (see
+[Using Mimir From an Editor](acp.md)). It has no config keys of its own. ACP
+sessions use the same keys as the terminal UI: the selected provider and model,
+`approvalMethod`, `safetyProvider` and `safetyModel`, `toolContinuations`, the
+subagent limits, the timeouts, `systemPrompt` and `systemPromptMode`,
+`contextWindows`, `disabledSkills` and `permissionGrants`.
+
+- ACP mode reads the config file once, at startup. Restart the agent from the
+  editor after you change it.
+- `approvalMethod` is applied before the client is asked. Under `approveAll`
+  or `denyAll` the client never sees a permission request, and under
+  `approveSafe` a `SAFE` verdict runs the call without asking.
+- An *Always allow* choice in the client appends a grant to
+  `permissionGrants` and saves the config file, as the terminal approval
+  dialog does.
+- ACP mode does not run the first-run setup. If the config file is missing,
+  it uses the default Ollama config; if it is invalid, `mimir --acp` exits with
+  status 1.
+
 ## Diagnostics
 
 Raw LLM HTTP response output from the latest chat request is written to:

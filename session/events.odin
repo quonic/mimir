@@ -55,6 +55,19 @@ Tool_Call_Updated :: struct {
 	toolCallID: string,
 	status:     Tool_Call_Status,
 	output:     string,
+	// The file change of a completed write_file, patch_file or replace_string_in_file call.
+	// diff.path is "" when the update has no diff.
+	diff:       File_Diff,
+}
+
+// The change of one file by a tool call: the whole text before and after the change.
+File_Diff :: struct {
+	// The absolute path of the file.
+	path:    string,
+	// True when the file did not exist before the call. oldText is then "".
+	newFile: bool,
+	oldText: string,
+	newText: string,
 }
 
 Approval_Safety_Status :: enum int {
@@ -170,6 +183,7 @@ session_event_destroy :: proc(event: ^Session_Event, allocator := context.alloca
 	case Tool_Call_Updated:
 		delete(value.toolCallID, allocator)
 		delete(value.output, allocator)
+		file_diff_destroy(&value.diff, allocator)
 	case Approval_Requested:
 		delete(value.toolCallID, allocator)
 		permission_action_copy_destroy(&value.action, allocator)
@@ -266,6 +280,7 @@ session_emit_tool_call_updated :: proc(
 	toolCallID: string,
 	status: Tool_Call_Status,
 	output := "",
+	diff := File_Diff{},
 ) {
 	allocator := session.allocator
 	session_emit(
@@ -274,8 +289,29 @@ session_emit_tool_call_updated :: proc(
 			toolCallID = strings.clone(toolCallID, allocator),
 			status = status,
 			output = strings.clone(output, allocator),
+			diff = file_diff_copy(diff, allocator),
 		},
 	)
+}
+
+// Copies every string of diff. A diff without a path copies as an empty diff.
+file_diff_copy :: proc(diff: File_Diff, allocator := context.allocator) -> File_Diff {
+	if diff.path == "" {
+		return File_Diff{}
+	}
+	return File_Diff {
+		path = strings.clone(diff.path, allocator),
+		newFile = diff.newFile,
+		oldText = strings.clone(diff.oldText, allocator),
+		newText = strings.clone(diff.newText, allocator),
+	}
+}
+
+file_diff_destroy :: proc(diff: ^File_Diff, allocator := context.allocator) {
+	delete(diff.path, allocator)
+	delete(diff.oldText, allocator)
+	delete(diff.newText, allocator)
+	diff^ = {}
 }
 
 session_events_destroy :: proc(events: ^[dynamic]Session_Event, allocator: mem.Allocator) {

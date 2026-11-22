@@ -27,6 +27,8 @@ Pending_Approval :: struct {
 	prepared:        tool_policy.Tool_Dispatch_Result,
 	preparedOwned:   bool,
 	agentID:         agent.Agent_ID,
+	// The tool request ID of the agent runtime: the model's ID. The session's tool call ID is
+	// call.callID.
 	agentRequestID:  string,
 	// True when the approval method uses the safety classifier for this call.
 	safetyRequested: bool,
@@ -137,7 +139,7 @@ session_request_approval :: proc(
 	session_emit(
 		session,
 		Approval_Requested {
-			toolCallID = strings.clone(session.approval.agentRequestID, allocator),
+			toolCallID = strings.clone(session.approval.call.callID, allocator),
 			action = permission_action_copy(session.approval.prepared.action, allocator),
 			safety = pending_approval_safety(&session.approval, allocator),
 		},
@@ -186,7 +188,7 @@ session_poll_pending_approval :: proc(session: ^Session) -> bool {
 	session_emit(
 		session,
 		Approval_Safety_Updated {
-			toolCallID = strings.clone(approval.agentRequestID, allocator),
+			toolCallID = strings.clone(approval.call.callID, allocator),
 			safety = pending_approval_safety(approval, allocator),
 		},
 	)
@@ -203,7 +205,7 @@ session_apply_approval_choice :: proc(
 	if !pending_approval_active(&session.approval) {
 		return .No_Pending_Approval
 	}
-	if toolCallID != session.approval.agentRequestID {
+	if toolCallID != session.approval.call.callID {
 		return .Unknown_Tool_Call
 	}
 	return session_settle_approval(session, choice, true)
@@ -286,7 +288,7 @@ session_finish_approval :: proc(session: ^Session, choice: Approval_Choice, anno
 		session_emit(
 			session,
 			Approval_Resolved {
-				toolCallID = strings.clone(session.approval.agentRequestID, session.allocator),
+				toolCallID = strings.clone(session.approval.call.callID, session.allocator),
 				choice = choice,
 			},
 		)

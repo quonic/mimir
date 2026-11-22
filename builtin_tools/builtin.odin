@@ -103,7 +103,6 @@ grep_search :: proc(file_path, search_string: string, max_results: int) -> strin
 write_file :: proc(file_path: string, content: string, overwrite: string) -> string {
 	if overwrite == "false" {
 		if _, err := os.stat(file_path, context.allocator); err == nil {
-			fmt.println("File already exists. Use overwrite option to replace it.")
 			return strings.clone(
 				"File already exists. Use overwrite option to replace it.",
 				context.allocator,
@@ -506,7 +505,9 @@ list_available_shells :: proc() -> string {
 				}
 			}
 		} else {
-			fmt.println("list_available_shells_tool: Error reading /etc/shells:", err)
+			// Tool output goes to the model. Nothing is printed: in ACP mode stdout carries only
+			// protocol messages.
+			return fmt.aprintf("list_available_shells_tool: Error reading /etc/shells: %v", err)
 		}
 	} else {
 		return fmt.aprintf("list_available_shells_tool: Unsupported OS: %s", ODIN_OS)

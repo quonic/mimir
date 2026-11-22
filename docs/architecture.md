@@ -35,10 +35,22 @@ tool dispatcher and its grants, the skills, the code index, the tool worker,
 the pending approval and the transcript. The terminal UI (`App_State`) holds
 one session. Its main loop calls `session_poll`, then drains the session
 events into history lines, status text and the approval overlay
-(`session_view.odin`). The session never calls front-end code, so a later
-ACP front end can drive the same sessions. See
+(`session_view.odin`). The session never calls front-end code, so the ACP
+front end drives the same sessions. See
 [ADR 0002](adr/0002-split-agent-session-from-front-ends.md) and the
 [session package](packages/session.md).
+
+## ACP Front End
+
+`mimir --acp` (package `acp`) runs Mimir as an Agent Client Protocol agent over
+stdio. A reader thread splits stdin into lines and queues them. The main loop
+handles the queued messages, polls every session and turns its events into
+ACP messages, then writes them to stdout. Stdout carries only protocol
+messages: at startup `os.stdout` is pointed at stderr, so a stray print cannot
+corrupt the stream. A `Connection` maps ACP session IDs to sessions; each
+session has its own project root. See
+[ADR 0003](adr/0003-acp-front-end.md) and
+[Using Mimir From an Editor](acp.md).
 
 ## Chat Streaming and Cancellation
 

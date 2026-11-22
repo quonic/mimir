@@ -22,7 +22,7 @@ Assistant_Spinner :: struct {
 	lastFrame:  time.Tick,
 }
 
-// The history line of a tool call, found by the tool call ID of the model.
+// The history line of a tool call, found by the tool call ID of the session.
 Tool_History_Line :: struct {
 	toolCallID:   string,
 	historyIndex: int,
@@ -192,8 +192,8 @@ app_show_message_delta :: proc(state: ^App_State, delta: session.Message_Delta) 
 	state.historyRenderOnly = true
 }
 
-// Returns the newest history line of the tool call toolCallID. Tool call IDs can repeat in
-// one conversation, so the newest line wins.
+// Returns the newest history line of the tool call toolCallID. The session makes tool call IDs
+// unique; if one still repeats, the newest line wins.
 app_find_tool_history_line :: proc(state: ^App_State, toolCallID: string) -> ^Tool_History_Line {
 	for index := len(state.toolHistory) - 1; index >= 0; index -= 1 {
 		if state.toolHistory[index].toolCallID == toolCallID {

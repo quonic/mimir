@@ -20,9 +20,10 @@ Agent_Host :: struct {
 }
 
 Agent_Stack_Frame :: struct {
-	agentID:   agent.Agent_ID,
-	requestID: string,
-	task:      string,
+	agentID:    agent.Agent_ID,
+	// The session's tool call ID of the run_subagent call.
+	toolCallID: string,
+	task:       string,
 	// The stream error of the child agent, when its stream failed.
 	errorText: string,
 }
@@ -45,7 +46,7 @@ agent_host_destroy :: proc(host: ^Agent_Host) {
 }
 
 agent_stack_frame_destroy :: proc(frame: ^Agent_Stack_Frame, allocator := context.allocator) {
-	delete(frame.requestID, allocator)
+	delete(frame.toolCallID, allocator)
 	delete(frame.task, allocator)
 	delete(frame.errorText, allocator)
 	frame^ = {}
@@ -140,7 +141,7 @@ session_finish_subagent :: proc(
 	session_emit(
 		session,
 		Subagent_Finished {
-			parentToolCallID = strings.clone(frame.requestID, allocator),
+			parentToolCallID = strings.clone(frame.toolCallID, allocator),
 			task = strings.clone(frame.task, allocator),
 			result = strings.clone(result, allocator),
 			failed = isError,
@@ -165,7 +166,7 @@ session_apply_agent_event :: proc(session: ^Session, event: agent.Agent_Event) -
 		}
 		parentToolCallID := ""
 		if subagentDepth > 0 {
-			parentToolCallID = host.agentStack[subagentDepth - 1].requestID
+			parentToolCallID = host.agentStack[subagentDepth - 1].toolCallID
 		}
 		session_emit(
 			session,
@@ -251,9 +252,11 @@ session_emit_usage :: proc(session: ^Session) {
 session_dispatch_agent_tool_request :: proc(session: ^Session, event: agent.Agent_Event) -> bool {
 	host := &session.host
 	toolRequest := event.toolRequest
+	// The runtime keeps the model's ID (event.requestID). Events use the session's ID.
+	toolCallID := session_unique_tool_call_id(session, toolRequest.id)
 	call, callOK := tool_call_from_ai(
 		ai.Tool_Call {
-			id = toolRequest.id,
+			id = toolCallID,
 			name = toolRequest.name,
 			arguments = toolRequest.arguments,
 		},
@@ -265,8 +268,8 @@ session_dispatch_agent_tool_request :: proc(session: ^Session, event: agent.Agen
 			toolID = "unknown"
 		}
 		output := "Tool call arguments are invalid."
-		session_emit_tool_call_started(session, toolRequest.id, toolID, "", toolRequest.arguments)
-		session_emit_tool_call_updated(session, toolRequest.id, .Failed, output)
+		session_emit_tool_call_started(session, toolCallID, toolID, "", toolRequest.arguments)
+		session_emit_tool_call_updated(session, toolCallID, .Failed, output)
 		_ = agent.runtime_resolve_tool(
 			&host.runtime,
 			event.agentID,
@@ -496,7 +499,7 @@ session_start_subagent :: proc(
 		&host.agentStack,
 		Agent_Stack_Frame {
 			agentID = parentID,
-			requestID = strings.clone(requestID, host.runtime.allocator),
+			toolCallID = strings.clone(call.callID, host.runtime.allocator),
 			task = strings.clone(call.task, host.runtime.allocator),
 		},
 	)
@@ -505,7 +508,7 @@ session_start_subagent :: proc(
 	session_emit(
 		session,
 		Subagent_Started {
-			parentToolCallID = strings.clone(requestID, session.allocator),
+			parentToolCallID = strings.clone(call.callID, session.allocator),
 			task = strings.clone(call.task, session.allocator),
 		},
 	)

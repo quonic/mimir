@@ -225,3 +225,24 @@ test_list_available_shells_returns_nonempty :: proc(t: ^testing.T) {
 	defer delete(result, context.allocator)
 	assert(len(result) > 0, "expected at least one shell to be listed")
 }
+
+@(test)
+test_write_file_reports_an_existing_file_in_its_result :: proc(t: ^testing.T) {
+	directory, directoryErr := os.make_directory_temp("", "builtin-test-*", context.allocator)
+	assert(directoryErr == nil, "expected a temporary directory")
+	defer {
+		_ = os.remove_all(directory)
+		delete(directory)
+	}
+	path := strings.concatenate({directory, "/exists.txt"}, context.temp_allocator)
+	assert(os.write_entire_file(path, "old") == nil, "expected the test file")
+
+	// The message is only the tool result. Nothing is printed to stdout.
+	result := write_file(path, "new", "false")
+	defer delete(result)
+	assert(
+		result == "File already exists. Use overwrite option to replace it.",
+		"expected the existing file to be reported in the result",
+	)
+	_ = t
+}

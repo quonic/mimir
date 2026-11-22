@@ -6,6 +6,7 @@ import "../code_index"
 import "../input_history"
 import "../settings"
 import "../tool_policy"
+import "core:fmt"
 import "core:mem"
 import "core:strings"
 
@@ -39,6 +40,9 @@ Session :: struct {
 	approval:                Pending_Approval,
 	transcript:              Transcript,
 	events:                  [dynamic]Session_Event,
+	// Every tool call ID that the session gave out. Models can repeat their IDs (Ollama numbers
+	// the calls of each response from ollama-0), so the session makes them unique.
+	toolCallIDs:             map[string]struct{},
 }
 
 Session_Options :: struct {
@@ -117,6 +121,7 @@ session_create :: proc(
 	session.model = strings.clone(options.model, allocator)
 	session.approvalMethod = options.approvalMethod
 	session.events = make([dynamic]Session_Event, 0, 16, allocator)
+	session.toolCallIDs = make(map[string]struct{}, allocator)
 	session.host = agent_host_init(allocator)
 	session.transcript = transcript_init(allocator)
 	session.toolExecution.allocator = allocator
@@ -147,6 +152,10 @@ session_destroy :: proc(session: ^Session) {
 	agent_host_destroy(&session.host)
 	transcript_destroy(&session.transcript)
 	session_events_destroy(&session.events, allocator)
+	for toolCallID in session.toolCallIDs {
+		delete(toolCallID, allocator)
+	}
+	delete(session.toolCallIDs)
 	if session.dispatcherReady {
 		tool_policy.tool_dispatcher_destroy(&session.dispatcher)
 	}
@@ -185,7 +194,7 @@ session_cancel :: proc(session: ^Session) -> Session_Error {
 		return .Invalid_Argument
 	}
 	if pending_approval_active(&session.approval) {
-		_ = session_apply_approval_choice(session, session.approval.agentRequestID, .Deny)
+		_ = session_apply_approval_choice(session, session.approval.call.callID, .Deny)
 	}
 	activeID := session.host.activeAgentID
 	if agent.agent_id_is_none(activeID) ||
@@ -194,6 +203,36 @@ session_cancel :: proc(session: ^Session) -> Session_Error {
 		return .Not_Active
 	}
 	session_emit_notice(session, "Canceling assistant stream")
+	return .None
+}
+
+// Cancels the whole turn: the main agent and every subagent that runs for it. A pending
+// approval is denied first. The turn then ends with Turn_Ended and the reason Canceled, after a
+// failed Subagent_Finished for each running subagent. session_cancel (the terminal /stop)
+// cancels only the active subagent, and the parent agent goes on.
+session_cancel_turn :: proc(session: ^Session) -> Session_Error {
+	if session == nil {
+		return .Invalid_Argument
+	}
+	host := &session.host
+	// The bottom of the subagent stack is the main agent. Canceling it cancels its children.
+	mainID := host.activeAgentID
+	if len(host.agentStack) > 0 {
+		mainID = host.agentStack[0].agentID
+	}
+	mainState, mainOK := agent.runtime_state(&host.runtime, mainID)
+	if agent.agent_id_is_none(mainID) || !mainOK || agent.agent_state_is_terminal(mainState) {
+		session_emit_notice(session, "No assistant stream to cancel", .Warning)
+		return .Not_Active
+	}
+	if pending_approval_active(&session.approval) {
+		_ = session_apply_approval_choice(session, session.approval.call.callID, .Deny)
+	}
+	if agent.runtime_cancel(&host.runtime, mainID) != .None {
+		session_emit_notice(session, "No assistant stream to cancel", .Warning)
+		return .Not_Active
+	}
+	session_emit_notice(session, "Canceling assistant turn")
 	return .None
 }
 
@@ -222,6 +261,25 @@ session_poll :: proc(session: ^Session) -> bool {
 	changed = session_poll_agent_host(session) || changed
 	changed = session_poll_pending_approval(session) || changed
 	return changed || len(session.events) != eventCount
+}
+
+// Returns a tool call ID for the model's tool call ID modelID that no earlier tool call of the
+// session has: modelID itself when it is new, or else modelID with "-2", "-3" and so on. The
+// session owns the returned string.
+session_unique_tool_call_id :: proc(session: ^Session, modelID: string) -> string {
+	base := modelID
+	if base == "" {
+		base = "call"
+	}
+	candidate := base
+	suffix := 2
+	for (candidate in session.toolCallIDs) {
+		candidate = fmt.tprintf("%s-%d", base, suffix)
+		suffix += 1
+	}
+	owned := strings.clone(candidate, session.allocator)
+	session.toolCallIDs[owned] = {}
+	return owned
 }
 
 // Reports whether a turn is active: the active agent has not ended.
