@@ -301,20 +301,67 @@ test_terminal_result_json_replaces_invalid_utf8 :: proc(t: ^testing.T) {
 
 @(test)
 test_run_in_terminal_returns_valid_json :: proc(t: ^testing.T) {
+	// The command runs in the platform shell, so it must produce output only that shell can: a
+	// shell that ignored its arguments would not print the marker. Quotes, a backslash, braces
+	// and non-ASCII text check the argument quoting and the output encoding.
 	when ODIN_OS == .Windows {
-		// The Windows shell invocation is tracked separately; this test covers POSIX shells.
-		return
+		command := `Write-Output 'mimir-marker say "hi"'; Write-Output 'back\slash {x} héllo'`
+	} else {
+		command := `printf 'mimir-marker say "hi"\nback\\slash {x} héllo\n'`
 	}
-	result := run_in_terminal(`printf 'say "hi"\nback\\slash {x}\n'`)
+	result := run_in_terminal(command)
 	defer delete(result)
 
 	parsedStdout, parsedStderr, ok := parse_terminal_result(result)
 	assert(ok, fmt.tprintf("expected the result to parse as JSON, got %q", result))
-	expected := "say \"hi\"\nback\\slash {x}\n"
-	assert(
-		parsedStdout == expected,
-		fmt.tprintf("expected stdout %q, got %q", expected, parsedStdout),
-	)
+	stdout, _ := strings.replace_all(parsedStdout, "\r\n", "\n", context.temp_allocator)
+	expected := "mimir-marker say \"hi\"\nback\\slash {x} héllo\n"
+	assert(stdout == expected, fmt.tprintf("expected stdout %q, got %q", expected, stdout))
 	assert(parsedStderr == "", fmt.tprintf("expected empty stderr, got %q", parsedStderr))
+	_ = t
+}
+
+@(test)
+test_windows_command_line_quotes_arguments :: proc(t: ^testing.T) {
+	cases := [?]struct {
+		arguments: []string,
+		expected:  string,
+	} {
+		{[]string{`C:\shell.exe`, "-Command", "pwd"}, `C:\shell.exe -Command pwd`},
+		{[]string{"a b", ""}, `"a b" ""`},
+		{[]string{`say "hi"`}, `"say \"hi\""`},
+		{[]string{`back\slash x`}, `"back\slash x"`},
+		{[]string{`end\ x\`}, `"end\ x\\"`},
+		{[]string{`a\" b`}, `"a\\\" b"`},
+		{[]string{"x;y"}, `"x;y"`},
+	}
+	for testCase in cases {
+		actual := windows_command_line(testCase.arguments, context.temp_allocator)
+		assert(
+			actual == testCase.expected,
+			fmt.tprintf("expected command line %q, got %q", testCase.expected, actual),
+		)
+	}
+	_ = t
+}
+
+@(test)
+test_run_in_terminal_tool_names_the_shell :: proc(t: ^testing.T) {
+	definitions := builtin_ai_tool_definitions(context.temp_allocator)
+	defer delete(definitions)
+	description := ""
+	for definition in definitions {
+		if definition.name == TOOL_IN_TERMINAL {
+			description = definition.description
+		}
+	}
+	assert(
+		strings.contains(description, TERMINAL_SHELL_NAME),
+		fmt.tprintf(
+			"expected the description to name %q, got %q",
+			TERMINAL_SHELL_NAME,
+			description,
+		),
+	)
 	_ = t
 }

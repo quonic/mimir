@@ -206,6 +206,10 @@ Skills refreshed
 - Windows, in Windows Terminal. Plain `cmd.exe` (conhost) is best-effort and
   may not support mouse tracking on older Windows builds.
 
+Commands that the assistant runs go to `/bin/bash -c` on Linux and macOS, and to
+Windows PowerShell (`powershell.exe -NoProfile -NonInteractive -Command`) on
+Windows. The tool description tells the model which shell it is using.
+
 macOS is untested and may never be officially supported, as I do not have access to that platform. You are more than welcome to try building and running Mimir there, but I cannot guarantee that it will work. Feel free to open issues or PRs if you find problems or have suggestions for improvements.
 
 ## Quick Start

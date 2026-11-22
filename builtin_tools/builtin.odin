@@ -455,9 +455,21 @@ get_file_info :: proc(file_path: string) -> string {
 // Shell Operations
 // ============================================================
 
+// Windows PowerShell ships with every supported Windows version. It is used instead of cmd.exe
+// because it splits its command line by the same rules that windows_command_line uses to quote
+// arguments; cmd.exe does not, so quotes in a command would reach it as \".
+WINDOWS_POWERSHELL_PATH :: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+
+// The shell that run_in_terminal uses, as told to the model in the tool description.
+when ODIN_OS == .Windows {
+	TERMINAL_SHELL_NAME :: "Windows PowerShell"
+} else {
+	TERMINAL_SHELL_NAME :: "bash"
+}
+
 get_default_shell :: proc() -> string {
 	if ODIN_OS == .Windows {
-		return `C:\Windows\System32\cmd.exe`
+		return WINDOWS_POWERSHELL_PATH
 	} else if ODIN_OS == .Linux ||
 	   ODIN_OS == .Darwin ||
 	   ODIN_OS == .FreeBSD ||
@@ -476,8 +488,8 @@ list_available_shells :: proc() -> string {
 		if os.exists(`C:\Windows\System32\cmd.exe`) {
 			append(&shells, `C:\Windows\System32\cmd.exe`)
 		}
-		if os.exists(`C:\Windows\System32\powershell.exe`) {
-			append(&shells, `C:\Windows\System32\powershell.exe`)
+		if os.exists(WINDOWS_POWERSHELL_PATH) {
+			append(&shells, WINDOWS_POWERSHELL_PATH)
 		}
 		if os.exists(`C:\Program Files\PowerShell\7\pwsh.exe`) {
 			append(&shells, `C:\Program Files\PowerShell\7\pwsh.exe`)
@@ -528,7 +540,7 @@ run_in_terminal :: proc(
 	}
 
 	proc_desc := os.Process_Desc {
-		command = {shell, "-c", command},
+		command = terminal_shell_arguments(shell, command, context.temp_allocator),
 	}
 	workingDirectoryOwned := false
 	if working_directory == "" {
@@ -562,20 +574,93 @@ run_in_terminal :: proc(
 		delete(proc_desc.env, context.allocator)
 	}
 
-	state, stdout, stderr, err := os.process_exec(proc_desc, context.allocator)
+	exitCode, stdout, stderr, err := terminal_process_exec(proc_desc, context.allocator)
 	defer delete(stdout, context.allocator)
 	defer delete(stderr, context.allocator)
 	if err != nil {
 		return fmt.aprintf("run_in_terminal_tool: Error executing command `%s`: %s", command, err)
 	}
-	if state.exit_code != 0 {
+	if exitCode != 0 {
 		return fmt.aprintf(
 			"run_in_terminal_tool: Command exited with code %d. Stderr: %s",
-			state.exit_code,
+			exitCode,
 			string(stderr),
 		)
 	}
 	return terminal_result_json(string(stdout), string(stderr), context.allocator)
+}
+
+// Returns the arguments that run command in shell. bash takes the command after -c. Windows
+// PowerShell takes it after -Command, without a profile or prompts. It first sets the console
+// output encoding to UTF-8: Windows PowerShell otherwise writes non-ASCII output in the OEM
+// code page.
+terminal_shell_arguments :: proc(
+	shell, command: string,
+	allocator := context.allocator,
+) -> []string {
+	when ODIN_OS == .Windows {
+		arguments := make([]string, 5, allocator)
+		arguments[0] = shell
+		arguments[1] = "-NoProfile"
+		arguments[2] = "-NonInteractive"
+		arguments[3] = "-Command"
+		arguments[4] = strings.concatenate(
+			{"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ", command},
+			allocator,
+		)
+		return arguments
+	} else {
+		arguments := make([]string, 3, allocator)
+		arguments[0] = shell
+		arguments[1] = "-c"
+		arguments[2] = command
+		return arguments
+	}
+}
+
+// Returns the Windows command line for arguments. An argument with a space, a quote or a
+// character that cmd.exe or PowerShell treats specially is quoted, by the rules that the C
+// runtime and CommandLineToArgvW use to split a command line: backslashes are doubled only
+// before a quote or the closing quote. These are the rules of os.process_exec.
+windows_command_line :: proc(arguments: []string, allocator := context.allocator) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	for argument, index in arguments {
+		if index > 0 {
+			strings.write_byte(&builder, ' ')
+		}
+		if argument != "" && !strings.contains_any(argument, "()[]{}^=;!'+,`~\" \t") {
+			strings.write_string(&builder, argument)
+			continue
+		}
+		strings.write_byte(&builder, '"')
+		backslashes := 0
+		for character in transmute([]byte)argument {
+			switch character {
+			case '\\':
+				backslashes += 1
+				continue
+			case '"':
+				// Each backslash before a quote is doubled, and the quote is escaped.
+				write_repeated_byte(&builder, '\\', 2 * backslashes + 1)
+			case:
+				write_repeated_byte(&builder, '\\', backslashes)
+			}
+			backslashes = 0
+			strings.write_byte(&builder, character)
+		}
+		// Backslashes before the closing quote are doubled.
+		write_repeated_byte(&builder, '\\', 2 * backslashes)
+		strings.write_byte(&builder, '"')
+	}
+	return strings.to_string(builder)
+}
+
+@(private = "file")
+write_repeated_byte :: proc(builder: ^strings.Builder, character: byte, count: int) {
+	for _ in 0 ..< count {
+		strings.write_byte(builder, character)
+	}
 }
 
 // Returns the run_in_terminal result as a JSON object with the stdout and stderr text. The
@@ -696,7 +781,9 @@ builtin_ai_tool_definitions :: proc(
 		&definitions,
 		ai.Tool_Definition {
 			name = TOOL_IN_TERMINAL,
-			description = "Run a shell command in the active project",
+			description = "Run a shell command in the active project. Commands run in " +
+			TERMINAL_SHELL_NAME +
+			".",
 			parametersJSON = `{"type":"object","properties":{"command":{"type":"string"},"working_directory":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`,
 		},
 	)
