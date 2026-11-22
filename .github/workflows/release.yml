@@ -74,7 +74,7 @@ jobs:
         run: mkdir dist
 
       - name: Build
-        run: odin build . -out:dist/mimir${{ runner.os == 'Windows' && '.exe' || '' }} -o:speed
+        run: odin build . -out:dist/mimir${{ runner.os == 'Windows' && '.exe' || '' }} -o:speed -define:MIMIR_VERSION=${{ needs.guard.outputs.version }}
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
