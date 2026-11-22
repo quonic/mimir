@@ -394,11 +394,16 @@ test_content_text :: proc(object: json.Object) -> string {
 	return strings.to_string(builder)
 }
 
-// Returns the stdout field of a run_in_terminal result, or text itself when it is not a
-// terminal result (for example an error message). The result is JSON, so a Windows path in it
-// has escaped backslashes; the decoded field has the path as the command printed it.
+// Returns the stdout field of the run_in_terminal result in text, or text itself when it has
+// no terminal result (for example an error message). The tool call content can hold other
+// blocks, such as the safety text, before the result. The result is JSON, so a Windows path in
+// it has escaped backslashes; the decoded field has the path as the command printed it.
 test_terminal_stdout :: proc(text: string) -> string {
-	value, parseErr := json.parse_string(text, allocator = context.temp_allocator)
+	start := strings.index(text, `{"stdout"`)
+	if start == -1 {
+		return text
+	}
+	value, parseErr := json.parse_string(text[start:], allocator = context.temp_allocator)
 	if parseErr != nil {
 		return text
 	}
