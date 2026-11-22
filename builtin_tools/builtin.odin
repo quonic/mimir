@@ -456,7 +456,7 @@ get_file_info :: proc(file_path: string) -> string {
 // ============================================================
 
 // Windows PowerShell ships with every supported Windows version. It is used instead of cmd.exe
-// because it splits its command line by the same rules that os.process_exec uses to quote
+// because it splits its command line by the same rules that windows_command_line uses to quote
 // arguments; cmd.exe does not, so quotes in a command would reach it as \".
 WINDOWS_POWERSHELL_PATH :: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
 
@@ -574,16 +574,16 @@ run_in_terminal :: proc(
 		delete(proc_desc.env, context.allocator)
 	}
 
-	state, stdout, stderr, err := os.process_exec(proc_desc, context.allocator)
+	exitCode, stdout, stderr, err := terminal_process_exec(proc_desc, context.allocator)
 	defer delete(stdout, context.allocator)
 	defer delete(stderr, context.allocator)
 	if err != nil {
 		return fmt.aprintf("run_in_terminal_tool: Error executing command `%s`: %s", command, err)
 	}
-	if state.exit_code != 0 {
+	if exitCode != 0 {
 		return fmt.aprintf(
 			"run_in_terminal_tool: Command exited with code %d. Stderr: %s",
-			state.exit_code,
+			exitCode,
 			string(stderr),
 		)
 	}
@@ -615,6 +615,51 @@ terminal_shell_arguments :: proc(
 		arguments[1] = "-c"
 		arguments[2] = command
 		return arguments
+	}
+}
+
+// Returns the Windows command line for arguments. An argument with a space, a quote or a
+// character that cmd.exe or PowerShell treats specially is quoted, by the rules that the C
+// runtime and CommandLineToArgvW use to split a command line: backslashes are doubled only
+// before a quote or the closing quote. These are the rules of os.process_exec.
+windows_command_line :: proc(arguments: []string, allocator := context.allocator) -> string {
+	builder: strings.Builder
+	strings.builder_init(&builder, allocator)
+	for argument, index in arguments {
+		if index > 0 {
+			strings.write_byte(&builder, ' ')
+		}
+		if argument != "" && !strings.contains_any(argument, "()[]{}^=;!'+,`~\" \t") {
+			strings.write_string(&builder, argument)
+			continue
+		}
+		strings.write_byte(&builder, '"')
+		backslashes := 0
+		for character in transmute([]byte)argument {
+			switch character {
+			case '\\':
+				backslashes += 1
+				continue
+			case '"':
+				// Each backslash before a quote is doubled, and the quote is escaped.
+				write_repeated_byte(&builder, '\\', 2 * backslashes + 1)
+			case:
+				write_repeated_byte(&builder, '\\', backslashes)
+			}
+			backslashes = 0
+			strings.write_byte(&builder, character)
+		}
+		// Backslashes before the closing quote are doubled.
+		write_repeated_byte(&builder, '\\', 2 * backslashes)
+		strings.write_byte(&builder, '"')
+	}
+	return strings.to_string(builder)
+}
+
+@(private = "file")
+write_repeated_byte :: proc(builder: ^strings.Builder, character: byte, count: int) {
+	for _ in 0 ..< count {
+		strings.write_byte(builder, character)
 	}
 }
 

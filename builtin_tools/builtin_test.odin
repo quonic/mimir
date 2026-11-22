@@ -322,6 +322,30 @@ test_run_in_terminal_returns_valid_json :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_windows_command_line_quotes_arguments :: proc(t: ^testing.T) {
+	cases := [?]struct {
+		arguments: []string,
+		expected:  string,
+	} {
+		{[]string{`C:\shell.exe`, "-Command", "pwd"}, `C:\shell.exe -Command pwd`},
+		{[]string{"a b", ""}, `"a b" ""`},
+		{[]string{`say "hi"`}, `"say \"hi\""`},
+		{[]string{`back\slash x`}, `"back\slash x"`},
+		{[]string{`end\ x\`}, `"end\ x\\"`},
+		{[]string{`a\" b`}, `"a\\\" b"`},
+		{[]string{"x;y"}, `"x;y"`},
+	}
+	for testCase in cases {
+		actual := windows_command_line(testCase.arguments, context.temp_allocator)
+		assert(
+			actual == testCase.expected,
+			fmt.tprintf("expected command line %q, got %q", testCase.expected, actual),
+		)
+	}
+	_ = t
+}
+
+@(test)
 test_run_in_terminal_tool_names_the_shell :: proc(t: ^testing.T) {
 	definitions := builtin_ai_tool_definitions(context.temp_allocator)
 	defer delete(definitions)

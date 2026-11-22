@@ -6,6 +6,7 @@ import "../tool_policy"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:sync"
 import "core:testing"
@@ -392,6 +393,13 @@ test_content_text :: proc(object: json.Object) -> string {
 		strings.write_string(&builder, text)
 	}
 	return strings.to_string(builder)
+}
+
+// Returns the folder name of a test root. Each root has a unique name. A pwd check compares the
+// name, not the path: on Windows the temporary directory can be a short 8.3 path, and the shell
+// prints the long path.
+test_root_name :: proc(root: string) -> string {
+	return filepath.base(root)
 }
 
 // Returns the stdout field of the run_in_terminal result in text, or text itself when it has
@@ -845,7 +853,7 @@ test_acp_permission_allow_once_runs_the_tool :: proc(t: ^testing.T) {
 	}
 	assert(completed != nil && completedIndex < responseIndex, "expected the tool to complete")
 	output := test_content_text(completed)
-	root := test.directories[len(test.directories) - 1]
+	root := test_root_name(test.directories[len(test.directories) - 1])
 	assert(
 		strings.contains(test_terminal_stdout(output), root),
 		fmt.tprintf("expected pwd to run in the session cwd %q, got %q", root, output),
@@ -959,7 +967,7 @@ test_acp_two_sessions_keep_their_cwd_and_session_grants :: proc(t: ^testing.T) {
 		}
 	}
 	assert(
-		strings.contains(test_terminal_stdout(output), firstRoot),
+		strings.contains(test_terminal_stdout(output), test_root_name(firstRoot)),
 		fmt.tprintf("expected pwd in the first root %q, got %q", firstRoot, output),
 	)
 
@@ -985,10 +993,13 @@ test_acp_two_sessions_keep_their_cwd_and_session_grants :: proc(t: ^testing.T) {
 	}
 	secondStdout := test_terminal_stdout(secondOutput)
 	assert(
-		strings.contains(secondStdout, secondRoot),
+		strings.contains(secondStdout, test_root_name(secondRoot)),
 		fmt.tprintf("expected pwd in the second root %q, got %q", secondRoot, secondOutput),
 	)
-	assert(!strings.contains(secondStdout, firstRoot), "expected separate project roots")
+	assert(
+		!strings.contains(secondStdout, test_root_name(firstRoot)),
+		"expected separate project roots",
+	)
 	_ = t
 }
 
