@@ -394,6 +394,25 @@ test_content_text :: proc(object: json.Object) -> string {
 	return strings.to_string(builder)
 }
 
+// Returns the stdout field of a run_in_terminal result, or text itself when it is not a
+// terminal result (for example an error message). The result is JSON, so a Windows path in it
+// has escaped backslashes; the decoded field has the path as the command printed it.
+test_terminal_stdout :: proc(text: string) -> string {
+	value, parseErr := json.parse_string(text, allocator = context.temp_allocator)
+	if parseErr != nil {
+		return text
+	}
+	object, objectOK := value.(json.Object)
+	if !objectOK {
+		return text
+	}
+	stdout, stdoutOK := object["stdout"].(json.String)
+	if !stdoutOK {
+		return text
+	}
+	return stdout
+}
+
 test_queue_tool_turn :: proc(test: ^Test_ACP, toolName, argumentsJSON: string) {
 	session.fake_provider_add_response(
 		&test.provider,
@@ -822,7 +841,10 @@ test_acp_permission_allow_once_runs_the_tool :: proc(t: ^testing.T) {
 	assert(completed != nil && completedIndex < responseIndex, "expected the tool to complete")
 	output := test_content_text(completed)
 	root := test.directories[len(test.directories) - 1]
-	assert(strings.contains(output, root), "expected pwd to run in the session cwd")
+	assert(
+		strings.contains(test_terminal_stdout(output), root),
+		fmt.tprintf("expected pwd to run in the session cwd %q, got %q", root, output),
+	)
 	assert(len(test.config.permissionGrants) == 0, "expected no grant for allow-once")
 	_ = t
 }
@@ -931,7 +953,10 @@ test_acp_two_sessions_keep_their_cwd_and_session_grants :: proc(t: ^testing.T) {
 			index = updateIndex
 		}
 	}
-	assert(strings.contains(output, firstRoot), "expected pwd in the first root")
+	assert(
+		strings.contains(test_terminal_stdout(output), firstRoot),
+		fmt.tprintf("expected pwd in the first root %q, got %q", firstRoot, output),
+	)
 
 	secondID, secondRequest := test_request_pwd_permission(&test, second)
 	params, _ := json_get_object(secondRequest, "params")
@@ -953,8 +978,12 @@ test_acp_two_sessions_keep_their_cwd_and_session_grants :: proc(t: ^testing.T) {
 			}
 		}
 	}
-	assert(strings.contains(secondOutput, secondRoot), "expected pwd in the second root")
-	assert(!strings.contains(secondOutput, firstRoot), "expected separate project roots")
+	secondStdout := test_terminal_stdout(secondOutput)
+	assert(
+		strings.contains(secondStdout, secondRoot),
+		fmt.tprintf("expected pwd in the second root %q, got %q", secondRoot, secondOutput),
+	)
+	assert(!strings.contains(secondStdout, firstRoot), "expected separate project roots")
 	_ = t
 }
 
