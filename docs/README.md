@@ -1,6 +1,7 @@
 # Mimir Documentation
 
 - [Configuration](configuration.md): Set up providers, configure Mimir, and view diagnostics.
+- [Using Mimir From an Editor](acp.md): Run `mimir --acp` as an Agent Client Protocol agent.
 - [Architecture](architecture.md): Learn how the terminal application works.
 - [Releases](releases.md): Cut a tagged release and verify a downloaded build.
 - [Session Package](packages/session.md): Run the agent loop of one conversation and pull its events.

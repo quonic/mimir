@@ -11,8 +11,9 @@ search the codebase. Tool calls are subject to project-root boundaries and
 configurable permission approval, with optional safety analysis for risky
 actions.
 
-Mimir also supports delegated subagents for self-contained tasks and a headless
-JSONL interface for automation and integration with other tools.
+Mimir also supports delegated subagents for self-contained tasks, an Agent
+Client Protocol mode for editors (`mimir --acp`), and a headless JSONL interface
+for automation and integration with other tools.
 
 The project started as a way to learn how agent systems work while building a
 usable coding assistant in Odin that works with local Ollama models.
@@ -225,6 +226,17 @@ On first startup, Mimir detects the local Ollama endpoint at
 `http://localhost:11434` and creates a default configuration when it is available.
 For other providers and configuration details, see the
 [configuration documentation](docs/configuration.md).
+
+## Command-Line Flags
+
+| Flag | Purpose |
+| --- | --- |
+| (none) | Start the terminal UI in the current directory. |
+| `--acp` | Run as an [Agent Client Protocol](docs/acp.md) agent over stdin and stdout, for editors. |
+| `--headless-json` | Run the internal [headless JSONL test harness](docs/headless-jsonl.md). |
+
+`--acp` and `--headless-json` cannot be used together; Mimir then exits with
+status 2.
 
 ## Text Selection
 
